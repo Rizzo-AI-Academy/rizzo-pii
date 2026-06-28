@@ -1,0 +1,48 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Rizzo PII",
+  "version": "1.0.0",
+  "identifier": "com.rizzoai.pii-anonymizer",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "splash",
+        "title": "Rizzo PII",
+        "width": 460,
+        "height": 400,
+        "resizable": false,
+        "center": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "Rizzo AI",
+    "copyright": "© Rizzo AI",
+    "category": "Productivity",
+    "shortDescription": "Rizzo PII — anonimizzazione in locale",
+    "longDescription": "Rizzo PII: anonimizza documenti legali in locale (modello rizzo-pii) prima di inviarli a un LLM. Ogni dato sensibile diventa un placeholder reversibile. Nessun dato lascia il computer. GDPR compliant.",
+    "resources": ["backend/**/*"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["Italian"]
+      }
+    }
+  }
+}

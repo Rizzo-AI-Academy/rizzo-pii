@@ -1,0 +1,44 @@
+# ============================================================================
+# Ambiente di build RIPRODUCIBILE per i bundle Linux (.deb/.AppImage) di Rizzo PII.
+# L'immagine contiene SOLO la toolchain (apt + Rust + Node + venv CPU con torch/
+# transformers/pyinstaller). Sorgenti e modello NON sono nell'immagine: si montano
+# a runtime (-v), così l'immagine resta riutilizzabile e l'output finisce sull'host.
+#
+#   docker build -t rizzo-pii-builder -f Dockerfile.linux .
+#   docker run --rm -e VENV=/opt/venv -v "$PWD":/work -w /work rizzo-pii-builder
+#   # artefatti -> tauri/src-tauri/target/release/bundle/{deb,appimage}/
+# ============================================================================
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 1) dipendenze di sistema (Tauri v2 Linux + build PyInstaller)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential curl wget file git ca-certificates \
+      python3 python3-venv python3-pip \
+      libssl-dev libxdo-dev patchelf \
+      libwebkit2gtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# 2) Node.js 20
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+ && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
+
+# 3) Rust (toolchain stabile, profilo minimo)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# 4) venv CPU con le dipendenze Python "cotte" (come docs/BUILD.md) -> build veloce
+RUN python3 -m venv /opt/venv \
+ && /opt/venv/bin/pip install --upgrade pip \
+ && /opt/venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu torch \
+ && /opt/venv/bin/pip install "transformers==4.57.3" tokenizers safetensors flask pymupdf pyinstaller
+ENV VENV=/opt/venv
+
+# libpython condivisa: PyInstaller ne ha bisogno per impacchettare il backend
+# (cerca libpython3.10.so.1.0). Layer a parte per non invalidare la cache di torch sopra.
+RUN apt-get update && apt-get install -y --no-install-recommends libpython3.10 \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
+# i sorgenti + il modello (models/rizzo-pii-0.3B-v1.2.0) sono montati su /work a runtime
+CMD ["bash", "build_linux.sh"]

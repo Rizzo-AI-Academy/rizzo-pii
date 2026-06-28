@@ -1,0 +1,12 @@
+{
+  "name": "anonimizzatore-pii",
+  "version": "1.0.0",
+  "description": "App desktop per l'anonimizzazione PII in locale (rizzo-pii)",
+  "private": true,
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

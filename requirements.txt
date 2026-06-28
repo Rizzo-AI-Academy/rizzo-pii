@@ -1,0 +1,33 @@
+# rizzo-pii — Python dependencies
+# Tested with Python 3.11+ on Windows. All scripts force UTF-8 and resolve paths from __file__.
+#
+# ──────────────────────────────────────────────────────────────────────────────
+# IMPORTANT — PyTorch must match your GPU.
+#   • CPU-only (inference / the desktop app): the default `pip install torch` is fine.
+#   • NVIDIA Blackwell (RTX 50xx, sm_120) for TRAINING: you MUST install the cu128 build,
+#     the cpu/cu121 wheels do not support sm_120:
+#        pip install torch --index-url https://download.pytorch.org/whl/cu128
+#   • Do NOT install torchvision/torchaudio — not used here, and old versions break
+#     the transformers import ("operator torchvision::nms does not exist").
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Core ML
+torch>=2.11
+transformers>=4.57
+accelerate>=1.14
+numpy
+pandas
+
+# Data sources (Hugging Face datasets are pulled with `hf download`)
+huggingface_hub
+
+# Experiment tracking (optional; auto-disabled if WANDB_API_KEY is absent) + secrets loader
+wandb
+python-dotenv
+
+# Local anonymization app (Flask UI + PDF parsing)
+flask
+pymupdf
+
+# Loss / metric plots produced by the training script
+matplotlib

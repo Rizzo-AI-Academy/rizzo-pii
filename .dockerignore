@@ -1,0 +1,3 @@
+# Dockerfile.linux non fa COPY (sorgenti+modello si montano con -v a runtime):
+# contesto di build VUOTO -> `docker build` istantaneo, niente upload di GB al daemon.
+*

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rizzo PII</title>
+<style>
+  html,body{height:100%;margin:0}
+  body{background:#f4f6fb;color:#1c2330;
+       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       user-select:none;-webkit-user-select:none;overflow:hidden}
+  .wrap{height:100%;display:flex;flex-direction:column;align-items:center;
+        justify-content:space-between;padding:26px 28px 18px;box-sizing:border-box}
+
+  /* badge UE in alto */
+  .eu{display:inline-flex;align-items:center;gap:9px;background:#fff;border:1px solid #e6e9f0;
+      border-radius:999px;padding:6px 14px 6px 8px;box-shadow:0 1px 2px rgba(20,28,46,.06)}
+  .eu svg{display:block;border-radius:3px}
+  .eu b{font-size:12.5px;font-weight:700;letter-spacing:.01em}
+  .eu b span{color:#1d8a4e}
+
+  /* blocco centrale */
+  .center{display:flex;flex-direction:column;align-items:center;gap:14px;margin-top:4px}
+  .center img{width:122px;height:122px;object-fit:contain;
+              filter:drop-shadow(0 6px 14px rgba(20,28,46,.18));
+              animation:bob 2.4s ease-in-out infinite}
+  @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+  h1{font-size:22px;margin:0;font-weight:800;letter-spacing:-.02em}
+
+  .bar{width:210px;height:6px;border-radius:999px;background:#e6e9f0;overflow:hidden;position:relative}
+  .bar i{position:absolute;left:-40%;width:40%;height:100%;border-radius:999px;
+         background:linear-gradient(90deg,#c1121f,#7d0a12);animation:slide 1.2s ease-in-out infinite}
+  @keyframes slide{0%{left:-40%}100%{left:100%}}
+  .note{font-size:12.5px;color:#6b7383;text-align:center;max-width:280px;line-height:1.55;margin:0}
+
+  /* footer: versione + crediti */
+  .foot{display:flex;flex-direction:column;align-items:center;gap:5px;text-align:center}
+  .foot .ver{font-size:11.5px;font-weight:700;color:#9aa2b1;letter-spacing:.02em}
+  .foot .by{font-size:11.5px;color:#6b7383;line-height:1.5}
+  .foot .by b{font-weight:700;color:#1c2330}
+  .foot .url{font-size:11.5px;font-weight:600;color:#c1121f}
+</style>
+</head>
+<body>
+  <div class="wrap">
+
+    <!-- badge Unione Europea -->
+    <div class="eu">
+      <svg width="30" height="20" viewBox="0 0 60 40" xmlns="http://www.w3.org/2000/svg">
+        <rect width="60" height="40" fill="#003399"/>
+        <g fill="#FFCC00" font-family="serif" font-size="7" text-anchor="middle">
+          <text x="30" y="9.5">★</text><text x="36.5" y="11.2">★</text>
+          <text x="41.3" y="16">★</text><text x="43" y="22.5">★</text>
+          <text x="41.3" y="29">★</text><text x="36.5" y="33.8">★</text>
+          <text x="30" y="35.5">★</text><text x="23.5" y="33.8">★</text>
+          <text x="18.7" y="29">★</text><text x="17" y="22.5">★</text>
+          <text x="18.7" y="16">★</text><text x="23.5" y="11.2">★</text>
+        </g>
+      </svg>
+      <b>Modello locale · <span>GDPR compliant</span></b>
+    </div>
+
+    <!-- mascotte + titolo + caricamento -->
+    <div class="center">
+      <img id="mascot" src="mascot.png" alt="Rizzo PII">
+      <h1>Rizzo PII</h1>
+      <div class="bar"><i></i></div>
+      <p class="note">Avvio del modello in corso…<br>il primo avvio può richiedere qualche secondo.</p>
+    </div>
+
+    <!-- versione -->
+    <div class="foot">
+      <div class="ver" id="ver">v1.0.0</div>
+    </div>
+
+  </div>
+
+<script>
+  // Dopo 30s di caricamento alterna la mascotte: riccio ↔ riccio col cappello UE.
+  (function(){
+    var el = document.getElementById('mascot');
+    var imgs = ['mascot.png', 'mascot_eu.png'];
+    var i = 0;
+    // pre-carica la variante col cappello per evitare flicker allo switch
+    var pre = new Image(); pre.src = imgs[1];
+    setInterval(function(){ i = (i + 1) % 2; el.src = imgs[i]; }, 30000);
+  })();
+</script>
+</body>
+</html>
