@@ -26,10 +26,11 @@
 
 <p>
 <a href="https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/latest"><img src="https://img.shields.io/badge/⬇%20Download%20for-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows" /></a>
+<a href="https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/latest"><img src="https://img.shields.io/badge/⬇%20Download%20for-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" /></a>
 <a href="https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/latest"><img src="https://img.shields.io/badge/⬇%20Download%20for-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Download for Linux" /></a>
 </p>
 
-<sub>🪟 **Windows installer** & 🐧 **Linux AppImage** available now · 🍎 macOS build coming soon</sub>
+<sub>🪟 **Windows installer** · 🍎 **macOS** (Apple Silicon) · 🐧 **Linux AppImage** — all available now</sub>
 
 </div>
 
@@ -286,14 +287,15 @@ overlap for long PDFs, and a colored per-tag UI.
 | Windows (installer) / Linux / macOS | PyTorch `cu128` for Blackwell |
 | Fully offline; no API key | ~745k rows, regenerable from scripts |
 
-The desktop app **Rizzo PII** (Tauri / WebView2) launches the Python/Flask backend as a bundled CPU
-"sidecar" plus a per-user Windows installer; a CPU-only PyTorch build keeps it fully **offline**.
+The desktop app **Rizzo PII** (Tauri) launches the Python/Flask backend as a bundled CPU
+"sidecar"; a CPU-only PyTorch build keeps it fully **offline** on Windows (WebView2), macOS and Linux.
 Packaging instructions in **[docs/BUILD.md](docs/BUILD.md)**.
 
 > **⬇️ Download.** Grab the ready-to-use build from the
 > **[Releases page](https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/latest)** — no Python or
-> setup required: a **Windows installer** (double-click) and a **Linux AppImage** (`chmod +x` then
-> run) are available now. **macOS build coming soon.**
+> setup required: a **Windows installer** (double-click), a **macOS `.dmg`** (Apple Silicon /
+> arm64 — unsigned, so right-click → Open on first launch), and a **Linux AppImage** (`chmod +x`
+> then run) are all available now.
 
 ---
 
@@ -304,8 +306,9 @@ Packaging instructions in **[docs/BUILD.md](docs/BUILD.md)**.
 > `hf download` commands in CLAUDE.md). All scripts force UTF-8 and resolve their paths from
 > `__file__`, so they run from any working directory.
 
-> 💡 Just want to **use** the app? You don't need any of this — download the
-> [Windows installer](https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/latest). The steps
+> 💡 Just want to **use** the app? You don't need any of this — download the ready-to-use build
+> (Windows / macOS / Linux) from the
+> [Releases page](https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/latest). The steps
 > below are for developers who want to regenerate the data and retrain the model.
 
 ### 0) Install
