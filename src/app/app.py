@@ -16,7 +16,7 @@ Il modello e' affiancato da una rete REGEX + CHECKSUM (EMAIL, TELEFONO, IBAN, CF
 carta di credito, importi, targhe). Le entita' validate matematicamente (IBAN/CF/PIVA/
 carta) hanno priorita' sul modello in caso di sovrapposizione.
 
-Avvio:  python app.py   ->   http://127.0.0.1:5000
+Avvio:  python app.py   ->   http://127.0.0.1:5005
 """
 
 import os
@@ -1014,4 +1014,4 @@ try{const m=localStorage.getItem('pii_map');if(m){MAP=JSON.parse(m);
 """
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, threaded=True)
+    app.run(host="127.0.0.1", port=int(os.environ.get("PII_PORT", "5005")), threaded=True)

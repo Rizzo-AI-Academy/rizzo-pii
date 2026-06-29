@@ -185,7 +185,7 @@ python src/training/train_pii.py --type full --version 1.2.0  # oppure versione 
 
 # inferenza / app
 python src/training/test_pii.py "Mi chiamo Mario Rossi, IBAN ..."
-python src/app/app.py            # http://127.0.0.1:5000
+python src/app/app.py            # http://127.0.0.1:5005
 
 # ispezione read-only
 python src/inspect/inspect_ai4privacy.py

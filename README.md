@@ -347,7 +347,7 @@ python src/training/train_pii.py --type full --version 1.2.0   # or an explicit 
 
 ```powershell
 python src/training/test_pii.py "Mi chiamo Mario Rossi, IBAN IT60X0542811101000000123456"
-python src/app/app.py            # http://127.0.0.1:5000  (paste text or upload a PDF)
+python src/app/app.py            # http://127.0.0.1:5005  (paste text or upload a PDF)
 ```
 
 The web app assigns every PII a **reversible ID** (`[FULLNAME_1]`, `[IBAN_1]`…) plus a local

@@ -5,11 +5,12 @@ apre il browser. Chiudere questa finestra termina l'applicazione.
 """
 
 import multiprocessing
+import os
 import threading
 import time
 import webbrowser
 
-PORT = 5000
+PORT = int(os.environ.get("PII_PORT", "5005"))
 URL = f"http://127.0.0.1:{PORT}/"
 
 

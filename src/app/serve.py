@@ -10,14 +10,14 @@ In modalita' windowed sys.stdout/sys.stderr sono None: li reindirizziamo su un f
 log PRIMA di importare 'app' (che al caricamento stampa e carica il modello), cosi'
 nessun print() fa crashare il processo e i problemi restano diagnosticabili.
 
-Porta: 5000 (override con la variabile d'ambiente PII_PORT).
+Porta: 5005 (5000 e' occupata da AirPlay Receiver su macOS; override con PII_PORT).
 Log:   %LOCALAPPDATA%\\rizzo-pii\\backend.log
 """
 
 import os
 import sys
 
-PORT = int(os.environ.get("PII_PORT", "5000"))
+PORT = int(os.environ.get("PII_PORT", "5005"))
 
 # --- log su file (windowed mode -> niente console) ------------------------- #
 _logdir = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "rizzo-pii")

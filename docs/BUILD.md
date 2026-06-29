@@ -16,7 +16,8 @@ Esistono due modi di impacchettare, entrambi CPU/offline:
 Il motore dell'app è **Python + PyTorch + il modello mmBERT**: non gira dentro Rust/WebView.
 Per questo, sia con Tauri sia col build legacy, il backend è il **server Flask** (`src/app/app.py`)
 impacchettato con PyInstaller. Con Tauri la finestra nativa lo lancia come **processo figlio
-(sidecar)**, attende che risponda su `127.0.0.1:5000`, poi mostra l'UI; alla chiusura lo termina.
+(sidecar)**, attende che risponda su `127.0.0.1:5005`, poi mostra l'UI; alla chiusura lo termina.
+La porta è la **5005** (non la 5000, occupata di default da AirPlay Receiver su macOS); override con `PII_PORT`.
 
 ---
 
@@ -122,7 +123,7 @@ build_env\Scripts\python.exe -m pip install "transformers==4.57.3" tokenizers sa
 build_env\Scripts\pyinstaller.exe build.spec --noconfirm
 ```
 Output: `dist\AnonimizzatorePII\AnonimizzatorePII.exe` (cartella autocontenuta, include il modello).
-Avviabile direttamente con doppio clic — apre il browser su http://127.0.0.1:5000/.
+Avviabile direttamente con doppio clic — apre il browser su http://127.0.0.1:5005/.
 
 ### 3. Installer (opzionale, per distribuirlo)
 Installa Inno Setup (https://jrsoftware.org/isdl.php), poi:

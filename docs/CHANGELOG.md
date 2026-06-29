@@ -5,6 +5,17 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-06-29 — Fix porta backend: 5000 → 5005 (conflitto AirPlay su macOS)
+
+Su macOS la porta **5000** è occupata di default da **AirPlay Receiver**. Effetto sull'app Tauri:
+`backend_ready()` vedeva la 5000 già in ascolto (AirPlay), **non avviava il backend reale** e apriva
+la WebView sul server sbagliato → **schermata bianca**. Il backend predefinito è spostato alla **5005**
+e Tauri passa la porta al sidecar via env **`PII_PORT`** (Rust e Flask non possono più divergere).
+File: `tauri/src-tauri/src/lib.rs`, `src/app/serve.py`, `src/app/app.py`, `src/app/desktop_app.py`.
+Override con la variabile `PII_PORT`.
+
+---
+
 ## 2026-06-28 — App di anonimizzazione: revisione completa + app desktop Tauri
 
 Riscrittura dell'app locale (`src/app/`) e nuovo packaging desktop. Nessun impatto su training.
@@ -31,7 +42,7 @@ serviti da `/assets/` con fallback emoji. Asset in `src/app/assets/`.
 **5. App desktop Tauri** (`tauri/`). Architettura **sidecar**: il backend Python/Flask
 (`serve.py`, headless) è impacchettato con PyInstaller (`build_sidecar.spec`, CPU, ~1,8 GB col
 modello) in `tauri/src-tauri/backend/`; la finestra nativa **Rizzo PII** (WebView2) lo lancia come
-processo figlio, attende il server su `127.0.0.1:5000`, mostra l'UI e lo termina alla chiusura.
+processo figlio, attende il server su `127.0.0.1:5005`, mostra l'UI e lo termina alla chiusura.
 Splash con badge **UE / GDPR compliant**, **versione** (iniettata da Rust dalla config) e crediti
 nell'app (Simone Rizzo · Rizzo AI Academy). `npx tauri build` → **installer NSIS per-utente**
 (`Rizzo PII_1.0.0_x64-setup.exe`, ~1,3 GB, non firmato → avviso SmartScreen atteso).
