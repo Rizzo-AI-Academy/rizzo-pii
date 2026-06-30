@@ -66,18 +66,33 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
 - `inspect_ai4privacy.py` (conteggi lingue/tag), `inspect_lengths.py` (lunghezze), `inspect_no_iban.py`.
 
 **App di anonimizzazione locale — `src/app/` (+ packaging in `docs/BUILD.md`):**
+- `server_config.py` — **configurazione host/porta** condivisa tra tutti gli entry point e con Tauri.
+  Catena di precedenza: **CLI `--host`/`--port` > env `PII_HOST`/`PII_PORT` > `config.json` > default
+  `127.0.0.1:5005`**. Il config.json è in `%LOCALAPPDATA%\rizzo-pii\` (Windows) /
+  `~/.local/share/rizzo-pii/` (Linux) / `~/Library/Application Support/rizzo-pii/` (macOS), lo
+  stesso file letto/scritto da Tauri (lib.rs). Include `port_available()` (pre-bind check) e il
+  codice di uscita `EXIT_PORT_CONFLICT = 76`: i 3 entry point escono con 76 se la porta è occupata
+  **prima di caricare il modello** (evita secondi sprecati). Tauri riconosce il codice 76 e mostra
+  il form di configurazione nello splash screen.
 - `app.py` — server Flask + **UI**: testo o PDF, chunking con overlap, offset globali + dedup.
   Anonimizzazione **reversibile** (ogni PII → `[FULLNAME_1]`/`[IBAN_1]`… + dizionario locale; tab
   "Ripristina"). Affianca al modello una **rete regex/checksum** (EMAIL/TELEFONO/IBAN/CF/PIVA/carta/
   importo/targa; IBAN/CF/PIVA/carta validati con checksum, che ha priorità sul modello). `APP_VERSION`.
+  Endpoint `GET/POST /config` e `GET /port-check` per la configurazione host/porta dall'UI (⚙️
+  gear icon nell'header); `--host`/`--port` come argomenti CLI.
 - `serve.py` — entry **headless** (solo Flask, niente browser): è il backend dell'app Tauri; log su
-  `%LOCALAPPDATA%\rizzo-pii\backend.log`. `desktop_app.py` — entry PyInstaller legacy (apre il browser).
+  `%LOCALAPPDATA%\rizzo-pii\backend.log`. Pre-check porta + `sys.exit(76)` se occupata.
+  `desktop_app.py` — entry PyInstaller legacy (apre il browser); stesso pre-check.
   `assets/` — mascotte (il riccio) + icone. `smoke_app.py`, `make_test_pdf.py`.
 
 **App desktop Tauri — `tauri/`:** finestra nativa **Rizzo PII** (WebView2) che lancia il backend
-`serve.py` impacchettato come **sidecar** (`build_sidecar.spec` → `tauri/src-tauri/backend/`), attende
-il server e mostra l'UI; splash con badge UE/GDPR + versione. `npx tauri build` → installer NSIS
-per-utente. Dettagli e comandi in `docs/BUILD.md`.
+`serve.py` impacchettato come **sidecar** (`build_sidecar.spec` → `tauri/src-tauri/backend/`).
+All'avvio legge `config.json` (host/porta), passa i valori al sidecar via env `PII_HOST`/`PII_PORT`,
+attende il server sulla porta configurata e mostra l'UI. Se il sidecar esce con codice **76** (porta
+occupata), lo splash mostra un form di configurazione (host + porta) con "Salva e riprova": Tauri
+scrive `config.json`, rilancia il sidecar e riprova. Splash con badge UE/GDPR + versione. `npx tauri build`
+→ installer NSIS per-utente. Dettagli e comandi in `docs/BUILD.md`. Comandi Tauri esposti allo splash:
+`save_config(host, port)` e `retry_backend`.
 
 **Config:** `.env` (segreti W&B, **gitignorato**), `.gitignore`, `build.spec`/`build_sidecar.spec`/
 `installer.iss` + `tauri/` (packaging).

@@ -39,6 +39,25 @@
   .foot .by{font-size:11.5px;color:#6b7383;line-height:1.5}
   .foot .by b{font-weight:700;color:#1c2330}
   .foot .url{font-size:11.5px;font-weight:600;color:#c1121f}
+
+  /* form di configurazione host/porta */
+  .cfg-form{display:none;flex-direction:column;align-items:center;gap:14px;
+            background:#fff;border:1px solid #e6e9f0;border-radius:14px;
+            padding:22px 28px;box-shadow:0 2px 8px rgba(20,28,46,.08);
+            max-width:320px;width:100%;box-sizing:border-box}
+  .cfg-form .cfg-err{font-size:12.5px;color:#c1121f;text-align:center;
+                     line-height:1.5;margin:0;font-weight:600}
+  .cfg-form label{font-size:12.5px;font-weight:600;color:#1c2330;width:100%;
+                  display:flex;flex-direction:column;gap:4px}
+  .cfg-form input{width:100%;box-sizing:border-box;padding:7px 10px;
+                  border:1px solid #d0d4dd;border-radius:8px;font-size:13px;
+                  font-family:inherit;outline:none;transition:border .15s}
+  .cfg-form input:focus{border-color:#c1121f}
+  .cfg-form button{width:100%;padding:9px 0;border:none;border-radius:8px;
+                   background:linear-gradient(135deg,#c1121f,#7d0a12);color:#fff;
+                   font-size:13.5px;font-weight:700;cursor:pointer;letter-spacing:.01em;
+                   transition:opacity .15s}
+  .cfg-form button:hover{opacity:.88}
 </style>
 </head>
 <body>
@@ -61,11 +80,23 @@
     </div>
 
     <!-- mascotte + titolo + caricamento -->
-    <div class="center">
+    <div class="center" id="loadingBlock">
       <img id="mascot" src="mascot.png" alt="Rizzo PII">
       <h1>Rizzo PII</h1>
       <div class="bar"><i></i></div>
       <p class="note">Avvio del modello in corso…<br>il primo avvio può richiedere qualche secondo.</p>
+    </div>
+
+    <!-- form configurazione host/porta (nascosto di default) -->
+    <div class="cfg-form" id="configForm">
+      <p class="cfg-err" id="cfgErr"></p>
+      <label>Host
+        <input type="text" id="cfgHost" value="127.0.0.1" spellcheck="false" autocomplete="off">
+      </label>
+      <label>Porta
+        <input type="number" id="cfgPort" value="5005" min="1024" max="65535">
+      </label>
+      <button type="button" id="cfgSave">Salva e riprova</button>
     </div>
 
     <!-- versione -->
@@ -85,6 +116,56 @@
     var pre = new Image(); pre.src = imgs[1];
     setInterval(function(){ i = (i + 1) % 2; el.src = imgs[i]; }, 30000);
   })();
+
+  // -----------------------------------------------------------------------
+  // Funzioni per il form di configurazione (chiamate dal backend Rust)
+  // -----------------------------------------------------------------------
+
+  /** Mostra il form di configurazione con i valori precompilati e un messaggio d'errore. */
+  function showConfigForm(host, port, errorMsg) {
+    document.getElementById('loadingBlock').style.display = 'none';
+    var form = document.getElementById('configForm');
+    form.style.display = 'flex';
+    document.getElementById('cfgErr').textContent = errorMsg || '';
+    document.getElementById('cfgHost').value = host || '127.0.0.1';
+    document.getElementById('cfgPort').value = port || 5005;
+  }
+
+  /** Nasconde il form e rimostra la barra di caricamento con messaggio "Nuovo tentativo…". */
+  function showRetrying() {
+    document.getElementById('configForm').style.display = 'none';
+    var lb = document.getElementById('loadingBlock');
+    lb.style.display = 'flex';
+    var bar = lb.querySelector('.bar');
+    if (bar) bar.style.display = '';
+    var note = lb.querySelector('.note');
+    if (note) note.textContent = 'Nuovo tentativo di avvio…';
+  }
+
+  // Handler del bottone "Salva e riprova"
+  document.getElementById('cfgSave').addEventListener('click', function() {
+    var host = document.getElementById('cfgHost').value.trim();
+    var port = parseInt(document.getElementById('cfgPort').value, 10);
+    var errEl = document.getElementById('cfgErr');
+
+    if (!host) { errEl.textContent = 'Inserisci un host valido.'; return; }
+    if (isNaN(port) || port < 1024 || port > 65535) {
+      errEl.textContent = 'La porta deve essere tra 1024 e 65535.';
+      return;
+    }
+
+    showRetrying();
+
+    // Chiama i comandi Tauri v2: usa l'IPC bridge interno (sempre disponibile)
+    window.__TAURI_INTERNALS__.invoke('save_config', { host: host, port: port })
+      .then(function() {
+        return window.__TAURI_INTERNALS__.invoke('retry_backend');
+      })
+      .catch(function(e) {
+        console.error('Errore invoke:', e);
+        showConfigForm(host, port, 'Errore interno: ' + e);
+      });
+  });
 </script>
 </body>
 </html>

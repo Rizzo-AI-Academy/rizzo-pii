@@ -10,15 +10,21 @@ In modalita' windowed sys.stdout/sys.stderr sono None: li reindirizziamo su un f
 log PRIMA di importare 'app' (che al caricamento stampa e carica il modello), cosi'
 nessun print() fa crashare il processo e i problemi restano diagnosticabili.
 
-Porta: 5005 (override con la variabile d'ambiente PII_PORT). NB: la 5000 su macOS
-e' occupata da AirPlay Receiver (ControlCenter) -> pagina bianca.
-Log:   %LOCALAPPDATA%\\rizzo-pii\\backend.log
+Configurazione host/porta:
+  1) CLI args (--host / --port)   -\u003e  precedenza massima
+  2) env PII_HOST / PII_PORT     -\u003e  passati da Tauri (lib.rs)
+  3) config.json                 -\u003e  salvato da Tauri o dall'UI Flask
+  4) default 127.0.0.1:5005
+
+NB: la 5000 su macOS e' occupata da AirPlay Receiver (ControlCenter) -\u003e pagina bianca.
+Log:   %LOCALAPPDATA%\\\\rizzo-pii\\\\backend.log
+
+Il processo esce con codice 76 (EX_PROTOCOL) se la porta e' occupata: Tauri lo
+riconosce e mostra il form di configurazione nello splash screen.
 """
 
 import os
 import sys
-
-PORT = int(os.environ.get("PII_PORT", "5005"))
 
 # --- log su file (windowed mode -> niente console) ------------------------- #
 _logdir = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "rizzo-pii")
@@ -30,9 +36,23 @@ try:
 except Exception:
     pass  # se non si puo' loggare, si prosegue comunque
 
+import server_config  # noqa: E402
+
+HOST, PORT = server_config.resolve()
+
+# --- pre-check porta PRIMA di caricare il modello (che richiede secondi) --- #
+if not server_config.port_available(HOST, PORT):
+    print(f"[serve] ERRORE: porta {PORT} occupata su {HOST}")
+    sys.exit(server_config.EXIT_PORT_CONFLICT)
+
 # l'import carica il modello (puo' richiedere alcuni secondi)
 from app import app  # noqa: E402
 
 if __name__ == "__main__":
-    print(f"[serve] avvio server su 127.0.0.1:{PORT}")
-    app.run(host="127.0.0.1", port=PORT, threaded=True)
+    print(f"[serve] avvio server su {HOST}:{PORT}")
+    try:
+        app.run(host=HOST, port=PORT, threaded=True)
+    except OSError as e:
+        # sicurezza extra: se il bind fallisce nonostante il pre-check (race condition)
+        print(f"[serve] ERRORE bind: {e}")
+        sys.exit(server_config.EXIT_PORT_CONFLICT)

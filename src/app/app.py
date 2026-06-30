@@ -16,7 +16,9 @@ Il modello e' affiancato da una rete REGEX + CHECKSUM (EMAIL, TELEFONO, IBAN, CF
 carta di credito, importi, targhe). Le entita' validate matematicamente (IBAN/CF/PIVA/
 carta) hanno priorita' sul modello in caso di sovrapposizione.
 
-Avvio:  python app.py   ->   http://127.0.0.1:5005   (override: env PII_PORT)
+Avvio:  python app.py   ->   http://127.0.0.1:5005
+Configurazione host/porta (precedenza): CLI --host/--port > env PII_HOST/PII_PORT >
+  config.json (vedi server_config.py) > default 127.0.0.1:5005
 """
 
 import os
@@ -28,6 +30,8 @@ import fitz  # PyMuPDF
 import torch
 from flask import (Flask, jsonify, render_template_string, request,
                    send_from_directory)
+
+import server_config
 from transformers import pipeline
 
 
@@ -381,6 +385,43 @@ def analyze_route():
 
 
 # --------------------------------------------------------------------------- #
+# Config host/porta (GET = leggi, POST = salva per il prossimo avvio)
+# --------------------------------------------------------------------------- #
+@app.route("/config", methods=["GET"])
+def config_get():
+    cfg = server_config.load_config()
+    return jsonify({
+        "host": cfg.get("host", server_config.DEFAULT_HOST),
+        "port": cfg.get("port", server_config.DEFAULT_PORT),
+        "config_path": str(server_config.config_path()),
+    })
+
+
+@app.route("/config", methods=["POST"])
+def config_post():
+    data = request.get_json(silent=True) or {}
+    host = str(data.get("host", server_config.DEFAULT_HOST)).strip()
+    try:
+        port = int(data.get("port", server_config.DEFAULT_PORT))
+    except (ValueError, TypeError):
+        return jsonify({"error": "Porta non valida."}), 400
+    if not (1024 <= port <= 65535):
+        return jsonify({"error": "La porta deve essere tra 1024 e 65535."}), 400
+    server_config.save_config(host, port)
+    return jsonify({"ok": True, "host": host, "port": port})
+
+
+@app.route("/port-check")
+def port_check():
+    host = request.args.get("host", server_config.DEFAULT_HOST)
+    try:
+        port = int(request.args.get("port", server_config.DEFAULT_PORT))
+    except (ValueError, TypeError):
+        return jsonify({"available": False})
+    return jsonify({"available": server_config.port_available(host, port)})
+
+
+# --------------------------------------------------------------------------- #
 # UI (single page)
 # --------------------------------------------------------------------------- #
 PAGE = r"""
@@ -588,6 +629,31 @@ PAGE = r"""
   #toast.ok::before{content:"✓";color:#6ee7a8}
   .kbd{font-family:ui-monospace,Consolas,monospace;background:#eef1f6;border:1px solid var(--line);
        border-radius:5px;padding:1px 6px;font-size:11.5px;color:var(--muted)}
+
+  /* config modal */
+  .cfg-overlay{position:fixed;inset:0;background:rgba(33,26,48,.35);z-index:100;
+               display:flex;align-items:center;justify-content:center;opacity:0;
+               visibility:hidden;transition:.18s}
+  .cfg-overlay.open{opacity:1;visibility:visible}
+  .cfg-card{background:#fff;border-radius:16px;box-shadow:0 16px 48px rgba(33,26,48,.18);
+            padding:26px 28px 22px;width:380px;max-width:92vw}
+  .cfg-card h3{margin:0 0 16px;font-size:16px;font-weight:700;display:flex;align-items:center;gap:9px}
+  .cfg-row{display:flex;flex-direction:column;gap:5px;margin-bottom:14px}
+  .cfg-row label{font-size:12.5px;font-weight:600;color:var(--muted);text-transform:uppercase;
+                 letter-spacing:.04em}
+  .cfg-row input{border:1px solid var(--line);border-radius:9px;padding:9px 12px;font:inherit;
+                 font-size:14px;color:var(--ink);background:#fcfcfe}
+  .cfg-row input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(124,58,158,.13)}
+  .cfg-status{font-size:12.5px;font-weight:600;padding:7px 11px;border-radius:8px;margin-bottom:14px;
+              display:none}
+  .cfg-status.ok{display:block;background:#eaf7ef;color:var(--ok)}
+  .cfg-status.fail{display:block;background:#fef2f2;color:#b91c1c}
+  .cfg-btns{display:flex;gap:9px;align-items:center}
+  .cfg-note{font-size:11.5px;color:var(--soft);margin-top:12px}
+  .gear{background:none;border:1px solid var(--line);width:30px;height:30px;border-radius:8px;
+        display:grid;place-items:center;font-size:15px;padding:0;cursor:pointer;transition:.12s;
+        margin-left:6px;flex:none}
+  .gear:hover{border-color:#cfd5e0;background:#fafbfd}
 </style>
 </head>
 <body>
@@ -605,6 +671,7 @@ PAGE = r"""
         <option value="it">🇮🇹 Italiano</option>
         <option value="en">🇬🇧 English</option>
       </select>
+      <button class="gear" id="gearBtn" title="Configurazione server" aria-label="Server config" onclick="openConfig()">⚙️</button>
       <span class="info" id="infoBtn" tabindex="0" role="button" aria-label="Avviso / info">⚠️<span class="tip" data-i18n="notice"></span></span>
     </div>
   </header>
@@ -730,6 +797,28 @@ PAGE = r"""
 
 <div id="toast"></div>
 
+<!-- config modal -->
+<div class="cfg-overlay" id="cfgOverlay">
+  <div class="cfg-card">
+    <h3>⚙️ <span data-i18n="cfg_title">Configurazione server</span></h3>
+    <div class="cfg-row">
+      <label data-i18n="cfg_host">Indirizzo</label>
+      <input id="cfgHost" type="text" value="127.0.0.1" spellcheck="false">
+    </div>
+    <div class="cfg-row">
+      <label data-i18n="cfg_port">Porta</label>
+      <input id="cfgPort" type="number" min="1024" max="65535" value="5005">
+    </div>
+    <div class="cfg-status" id="cfgStatus"></div>
+    <div class="cfg-btns">
+      <button class="btn" id="cfgSave" onclick="saveConfig()">💾 <span data-i18n="cfg_save">Salva</span></button>
+      <button class="ghost" id="cfgCheck" onclick="checkPort()"><span data-i18n="cfg_check">Verifica porta</span></button>
+      <button class="ghost" onclick="closeConfig()" data-i18n="cfg_cancel">Annulla</button>
+    </div>
+    <div class="cfg-note" data-i18n="cfg_restart_note">Le modifiche avranno effetto al prossimo avvio.</div>
+  </div>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
 let DATA = null;            // ultimo risultato analyze
@@ -773,6 +862,11 @@ const T = {
   dict_loaded_n:n=>"dizionario caricato · "+n+" ID",
   dict_session:n=>"dizionario sessione · "+n+" ID",
   chars:n=>n.toLocaleString('it'),
+  cfg_title:"Configurazione server", cfg_host:"Indirizzo", cfg_port:"Porta",
+  cfg_check:"Verifica porta", cfg_save:"Salva", cfg_cancel:"Annulla",
+  cfg_available:"Porta disponibile ✓", cfg_in_use:"Porta occupata ✗",
+  cfg_saved:"Configurazione salvata (riavvia per applicare)",
+  cfg_restart_note:"Le modifiche avranno effetto al prossimo avvio.",
  },
  en:{
   tagline:"local model on CPU · GDPR compliant", badge:"100% local",
@@ -808,6 +902,11 @@ const T = {
   dict_loaded_n:n=>"dictionary loaded · "+n+" IDs",
   dict_session:n=>"session dictionary · "+n+" IDs",
   chars:n=>n.toLocaleString('en'),
+  cfg_title:"Server configuration", cfg_host:"Host", cfg_port:"Port",
+  cfg_check:"Check port", cfg_save:"Save", cfg_cancel:"Cancel",
+  cfg_available:"Port available ✓", cfg_in_use:"Port in use ✗",
+  cfg_saved:"Config saved (restart to apply)",
+  cfg_restart_note:"Changes take effect on next startup.",
  }
 };
 const tt=k=>T[L][k];
@@ -1003,7 +1102,34 @@ applyLang(localStorage.getItem('pii_lang')||'it');
 $('infoBtn').addEventListener('click',e=>{e.stopPropagation();$('infoBtn').classList.toggle('open');});
 $('infoBtn').addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();$('infoBtn').classList.toggle('open');}});
 document.addEventListener('click',e=>{if(!$('infoBtn').contains(e.target))$('infoBtn').classList.remove('open');});
-document.addEventListener('keydown',e=>{if(e.key==='Escape')$('infoBtn').classList.remove('open');});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('infoBtn').classList.remove('open');closeConfig();}});
+
+/* ---- config modal ---- */
+async function openConfig(){
+  const r=await fetch('/config');const d=await r.json();
+  $('cfgHost').value=d.host||'127.0.0.1';
+  $('cfgPort').value=d.port||5005;
+  $('cfgStatus').className='cfg-status';$('cfgStatus').textContent='';
+  $('cfgOverlay').classList.add('open');
+}
+function closeConfig(){$('cfgOverlay').classList.remove('open');}
+$('cfgOverlay').addEventListener('click',e=>{if(e.target===$('cfgOverlay'))closeConfig();});
+async function checkPort(){
+  const h=$('cfgHost').value.trim(),p=parseInt($('cfgPort').value);
+  if(!p||p<1024||p>65535){$('cfgStatus').className='cfg-status fail';$('cfgStatus').textContent=tt('cfg_in_use');return;}
+  const r=await fetch(`/port-check?host=${encodeURIComponent(h)}&port=${p}`);
+  const d=await r.json();
+  $('cfgStatus').className=d.available?'cfg-status ok':'cfg-status fail';
+  $('cfgStatus').textContent=d.available?tt('cfg_available'):tt('cfg_in_use');
+}
+async function saveConfig(){
+  const h=$('cfgHost').value.trim(),p=parseInt($('cfgPort').value);
+  if(!p||p<1024||p>65535){toast(tt('cfg_in_use'),false);return;}
+  await fetch('/config',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({host:h,port:p})});
+  toast(tt('cfg_saved'));
+  closeConfig();
+}
 
 /* recupera dizionario da sessione precedente (dopo applyLang -> testo nella lingua giusta) */
 try{const m=localStorage.getItem('pii_map');if(m){MAP=JSON.parse(m);
@@ -1014,6 +1140,21 @@ try{const m=localStorage.getItem('pii_map');if(m){MAP=JSON.parse(m);
 """
 
 if __name__ == "__main__":
-    # 5005 di default: la 5000 su macOS e' occupata da AirPlay Receiver
-    # (ControlCenter) -> pagina bianca. Override con la env PII_PORT.
-    app.run(host="127.0.0.1", port=int(os.environ.get("PII_PORT", "5005")), threaded=True)
+    import argparse as _ap
+    _p = _ap.ArgumentParser(description="Rizzo PII — server locale di anonimizzazione.")
+    _p.add_argument("--host", default=None, help="indirizzo su cui ascoltare (default da config/env/127.0.0.1)")
+    _p.add_argument("--port", type=int, default=None, help="porta su cui ascoltare (default da config/env/5005)")
+    _args = _p.parse_args()
+
+    _host, _port = server_config.resolve(cli_host=_args.host, cli_port=_args.port)
+
+    if not server_config.port_available(_host, _port):
+        print(f"ERRORE: porta {_port} occupata su {_host}")
+        sys.exit(server_config.EXIT_PORT_CONFLICT)
+
+    print(f"Server su http://{_host}:{_port}")
+    try:
+        app.run(host=_host, port=_port, threaded=True)
+    except OSError as e:
+        print(f"ERRORE bind: {e}")
+        sys.exit(server_config.EXIT_PORT_CONFLICT)
