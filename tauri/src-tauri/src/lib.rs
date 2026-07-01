@@ -320,7 +320,22 @@ fn retry_backend(app_handle: tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let (host, port) = load_config();
+    let (mut host, mut port) = load_config();
+
+    // CLI args hanno precedenza sul config.json (stessa catena di serve.py)
+    let args: Vec<String> = std::env::args().collect();
+    let mut i = 1; // salta argv[0]
+    while i < args.len() {
+        match args[i].as_str() {
+            "--host" if i + 1 < args.len() => { host = args[i + 1].clone(); i += 2; }
+            "--port" if i + 1 < args.len() => {
+                if let Ok(p) = args[i + 1].parse::<u16>() { port = p; }
+                i += 2;
+            }
+            _ => { i += 1; }
+        }
+    }
+
     tlog(&format!("=== AVVIO === config: {}:{}", host, port));
 
     tauri::Builder::default()
