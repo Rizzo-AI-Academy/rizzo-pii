@@ -1,0 +1,490 @@
+{
+  "generated_at": "2026-07-05T19:33:50.860688+00:00",
+  "model": "rizzo-pii-0.3B-v1.2.0",
+  "dataset": "dataset/validation/validation_targa_it_stress_300.jsonl",
+  "rows": 300,
+  "metric": "exact character-span match for TARGA",
+  "raw_model": {
+    "overall": {
+      "tp": 120,
+      "fp": 287,
+      "fn": 80,
+      "documents": 300,
+      "documents_exact": 118,
+      "documents_with_fp": 171,
+      "precision": 0.29484,
+      "recall": 0.6,
+      "f1": 0.395387,
+      "document_exact_rate": 0.393333,
+      "false_positive_document_rate": 0.57
+    },
+    "by_category": {
+      "hard_negative": {
+        "tp": 0,
+        "fp": 163,
+        "fn": 0,
+        "documents": 100,
+        "documents_exact": 0,
+        "documents_with_fp": 100,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "document_exact_rate": 0.0,
+        "false_positive_document_rate": 1.0
+      },
+      "mixed_pii": {
+        "tp": 56,
+        "fp": 67,
+        "fn": 44,
+        "documents": 100,
+        "documents_exact": 54,
+        "documents_with_fp": 40,
+        "precision": 0.455285,
+        "recall": 0.56,
+        "f1": 0.502242,
+        "document_exact_rate": 0.54,
+        "false_positive_document_rate": 0.4
+      },
+      "positive": {
+        "tp": 64,
+        "fp": 57,
+        "fn": 36,
+        "documents": 100,
+        "documents_exact": 64,
+        "documents_with_fp": 31,
+        "precision": 0.528926,
+        "recall": 0.64,
+        "f1": 0.579186,
+        "document_exact_rate": 0.64,
+        "false_positive_document_rate": 0.31
+      }
+    }
+  },
+  "model_plus_regex": {
+    "overall": {
+      "tp": 180,
+      "fp": 133,
+      "fn": 20,
+      "documents": 300,
+      "documents_exact": 179,
+      "documents_with_fp": 116,
+      "precision": 0.57508,
+      "recall": 0.9,
+      "f1": 0.701754,
+      "document_exact_rate": 0.596667,
+      "false_positive_document_rate": 0.386667
+    },
+    "by_category": {
+      "hard_negative": {
+        "tp": 0,
+        "fp": 100,
+        "fn": 0,
+        "documents": 100,
+        "documents_exact": 0,
+        "documents_with_fp": 100,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "document_exact_rate": 0.0,
+        "false_positive_document_rate": 1.0
+      },
+      "mixed_pii": {
+        "tp": 93,
+        "fp": 8,
+        "fn": 7,
+        "documents": 100,
+        "documents_exact": 92,
+        "documents_with_fp": 5,
+        "precision": 0.920792,
+        "recall": 0.93,
+        "f1": 0.925373,
+        "document_exact_rate": 0.92,
+        "false_positive_document_rate": 0.05
+      },
+      "positive": {
+        "tp": 87,
+        "fp": 25,
+        "fn": 13,
+        "documents": 100,
+        "documents_exact": 87,
+        "documents_with_fp": 11,
+        "precision": 0.776786,
+        "recall": 0.87,
+        "f1": 0.820755,
+        "document_exact_rate": 0.87,
+        "false_positive_document_rate": 0.11
+      }
+    }
+  },
+  "error_examples": {
+    "raw_model": [
+      {
+        "category": "mixed_pii",
+        "text": "La segnalazione di Franco Gallo, inviata da arianna.conte@example.it, riguarda JD509PK.",
+        "expected": [
+          [
+            79,
+            86
+          ]
+        ],
+        "predicted": [
+          [
+            79,
+            82
+          ],
+          [
+            84,
+            86
+          ]
+        ]
+      },
+      {
+        "category": "mixed_pii",
+        "text": "Il mezzo FL141FY è assegnato a Industriale Padana S. de R.L. e affidato a Diego Sorrentino.",
+        "expected": [
+          [
+            9,
+            16
+          ]
+        ],
+        "predicted": [
+          [
+            9,
+            16
+          ],
+          [
+            90,
+            91
+          ]
+        ]
+      },
+      {
+        "category": "mixed_pii",
+        "text": "Per informazioni su AK-202-XT, scrivere a giuseppe.pellegrino@example.it indicando Debora Gentile.",
+        "expected": [
+          [
+            20,
+            29
+          ]
+        ],
+        "predicted": []
+      },
+      {
+        "category": "hard_negative",
+        "text": "Inserire XX941CZ nel campo codice di verifica.",
+        "expected": [],
+        "predicted": [
+          [
+            9,
+            11
+          ],
+          [
+            14,
+            16
+          ]
+        ]
+      },
+      {
+        "category": "positive",
+        "text": "La vettura sostava in doppia fila: HD-412-KC.",
+        "expected": [
+          [
+            35,
+            44
+          ]
+        ],
+        "predicted": [
+          [
+            35,
+            41
+          ],
+          [
+            42,
+            44
+          ]
+        ]
+      },
+      {
+        "category": "hard_negative",
+        "text": "Il lotto farmaceutico SA619KH è stato richiamato.",
+        "expected": [],
+        "predicted": [
+          [
+            22,
+            29
+          ]
+        ]
+      },
+      {
+        "category": "mixed_pii",
+        "text": "Silvio Ceccarelli ha ritirato MY584PM; recapito telefonico +39 316 8141117.",
+        "expected": [
+          [
+            30,
+            37
+          ]
+        ],
+        "predicted": [
+          [
+            30,
+            33
+          ],
+          [
+            35,
+            37
+          ]
+        ]
+      },
+      {
+        "category": "hard_negative",
+        "text": "Il buono sconto RV271MM può essere utilizzato una sola volta.",
+        "expected": [],
+        "predicted": [
+          [
+            16,
+            19
+          ],
+          [
+            19,
+            23
+          ]
+        ]
+      },
+      {
+        "category": "mixed_pii",
+        "text": "La segnalazione di Cosimo Di Maio, inviata da ennio.esposito@example.it, riguarda JB 189 XN.",
+        "expected": [
+          [
+            82,
+            91
+          ]
+        ],
+        "predicted": []
+      },
+      {
+        "category": "positive",
+        "text": "Nel box numero sette era parcheggiata KM-239-YE.",
+        "expected": [
+          [
+            38,
+            47
+          ]
+        ],
+        "predicted": [
+          [
+            38,
+            40
+          ],
+          [
+            41,
+            44
+          ],
+          [
+            45,
+            47
+          ]
+        ]
+      },
+      {
+        "category": "mixed_pii",
+        "text": "Per informazioni su BA 721 FV, scrivere a mattia.greco@example.it indicando Arianna Pellegrini.",
+        "expected": [
+          [
+            20,
+            29
+          ]
+        ],
+        "predicted": [
+          [
+            20,
+            22
+          ],
+          [
+            25,
+            29
+          ]
+        ]
+      },
+      {
+        "category": "hard_negative",
+        "text": "Inserire JJ498PZ nel campo codice di verifica.",
+        "expected": [],
+        "predicted": [
+          [
+            9,
+            12
+          ],
+          [
+            14,
+            16
+          ]
+        ]
+      }
+    ],
+    "model_plus_regex": [
+      {
+        "category": "mixed_pii",
+        "text": "Il mezzo FL141FY è assegnato a Industriale Padana S. de R.L. e affidato a Diego Sorrentino.",
+        "expected": [
+          [
+            9,
+            16
+          ]
+        ],
+        "predicted": [
+          [
+            9,
+            16
+          ],
+          [
+            90,
+            91
+          ]
+        ]
+      },
+      {
+        "category": "mixed_pii",
+        "text": "Per informazioni su AK-202-XT, scrivere a giuseppe.pellegrino@example.it indicando Debora Gentile.",
+        "expected": [
+          [
+            20,
+            29
+          ]
+        ],
+        "predicted": []
+      },
+      {
+        "category": "hard_negative",
+        "text": "Inserire XX941CZ nel campo codice di verifica.",
+        "expected": [],
+        "predicted": [
+          [
+            9,
+            16
+          ]
+        ]
+      },
+      {
+        "category": "positive",
+        "text": "La vettura sostava in doppia fila: HD-412-KC.",
+        "expected": [
+          [
+            35,
+            44
+          ]
+        ],
+        "predicted": [
+          [
+            35,
+            41
+          ],
+          [
+            42,
+            44
+          ]
+        ]
+      },
+      {
+        "category": "hard_negative",
+        "text": "Il lotto farmaceutico SA619KH è stato richiamato.",
+        "expected": [],
+        "predicted": [
+          [
+            22,
+            29
+          ]
+        ]
+      },
+      {
+        "category": "hard_negative",
+        "text": "Il buono sconto RV271MM può essere utilizzato una sola volta.",
+        "expected": [],
+        "predicted": [
+          [
+            16,
+            23
+          ]
+        ]
+      },
+      {
+        "category": "positive",
+        "text": "Nel box numero sette era parcheggiata KM-239-YE.",
+        "expected": [
+          [
+            38,
+            47
+          ]
+        ],
+        "predicted": [
+          [
+            38,
+            40
+          ],
+          [
+            41,
+            44
+          ],
+          [
+            45,
+            47
+          ]
+        ]
+      },
+      {
+        "category": "hard_negative",
+        "text": "Inserire JJ498PZ nel campo codice di verifica.",
+        "expected": [],
+        "predicted": [
+          [
+            9,
+            16
+          ]
+        ]
+      },
+      {
+        "category": "hard_negative",
+        "text": "La pratica software usa come chiave interna ZW934MP.",
+        "expected": [],
+        "predicted": [
+          [
+            44,
+            51
+          ]
+        ]
+      },
+      {
+        "category": "hard_negative",
+        "text": "L'ordine web YV958RH è stato rimborsato.",
+        "expected": [],
+        "predicted": [
+          [
+            13,
+            20
+          ]
+        ]
+      },
+      {
+        "category": "hard_negative",
+        "text": "Il numero della richiesta tecnica è ED595FM.",
+        "expected": [],
+        "predicted": [
+          [
+            36,
+            43
+          ]
+        ]
+      },
+      {
+        "category": "hard_negative",
+        "text": "Il codice del componente sostituito è DK230XL.",
+        "expected": [],
+        "predicted": [
+          [
+            38,
+            45
+          ]
+        ]
+      }
+    ]
+  }
+}
