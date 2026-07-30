@@ -59,6 +59,7 @@ ambiguità al modello ed evitare confini decisi solo da una parola-chiave di con
 | `RG`, `DOCID` | → | `DOCID` | il n. di Ruolo Generale è un codice di documento; stesso formato `NNNN/AAAA` |
 | `IDCARDNUM`, `PASSPORTNUM`, `DRIVERLICENSENUM`, `SOCIALNUM` | → | `ID_DOC` | tutti "numero di documento d'identità personale" |
 | `CONTO`, `IBAN` | → | `IBAN` | il numero di conto è un sottoinsieme dell'IBAN |
+| `CIG`, `CUP`, `POLIZZA`, `MATRICOLA` | → | `DOCID` | codici di **procedura / contratto / posizione**: identificano un atto o un rapporto, non l'identità di una persona → stessa politica di mascheramento. Il numero previdenziale **personale** resta su `ID_DOC` via `SOCIALNUM` |
 
 ### Tag rimossi (→ `O`, restano nel testo ma non sono PII)
 

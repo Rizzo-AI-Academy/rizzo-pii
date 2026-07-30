@@ -461,6 +461,45 @@ def docid_piece():
              f"{random.randint(10000, 999999)}"]
     return [(random.choice(forms), "DOCID")]
 
+# --- codici di procedura/contratto: forme NUOVE sotto un tag GIA' esistente ------------
+# Allargando i domini oltre gli atti civili compaiono identificativi che il modello non ha
+# mai visto: CIG e CUP negli appalti, il numero di polizza nei sinistri, la matricola INPS
+# nel lavoro. NON servono tag nuovi: identificano una procedura, un contratto o una
+# posizione -- non l'identita' di una persona -- quindi hanno la stessa politica di
+# mascheramento di DOCID, su cui TAG_MAP li rimappa. Il numero previdenziale PERSONALE
+# resta invece su ID_DOC via SOCIALNUM, invariato.
+# Quello che cambia e' la FORMA: un CIG e' alfanumerico a 10 caratteri, un CUP a 15, una
+# polizza spesso ha lettere e barre. Grafie che oggi DOCID non copre (ha solo NNNN/AAAA e
+# cifre nude), quindi in produzione passerebbero inosservate.
+_ALFA = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+def cig_piece():
+    """Codice Identificativo Gara: 10 caratteri alfanumerici maiuscoli."""
+    return [("".join(random.choice(_ALFA + "0123456789") for _ in range(10)), "CIG")]
+
+def cup_piece():
+    """Codice Unico di Progetto: 15 caratteri (lettera, cifre, lettere, cifre)."""
+    c = (random.choice(_ALFA) + f"{random.randint(0, 99):02d}" +
+         "".join(random.choice(_ALFA) for _ in range(2)) +
+         f"{random.randint(0, 10**10 - 1):010d}")
+    return [(c[:15], "CUP")]
+
+def polizza_piece():
+    """Numero di polizza assicurativa: cifre, o con prefisso di ramo, o con barra."""
+    r = random.random()
+    if r < 0.45:
+        v = f"{random.randint(10**7, 10**12 - 1)}"
+    elif r < 0.75:
+        v = f"{random.choice(_ALFA)}{random.choice(_ALFA)}/{random.randint(10**5, 10**8 - 1)}"
+    else:
+        v = f"{random.randint(100, 999)}-{random.randint(10**5, 10**7 - 1)}"
+    return [(v, "POLIZZA")]
+
+def matricola_piece():
+    """Matricola aziendale INPS/INAIL: 10 cifre, a volte con separatore."""
+    d = f"{random.randint(0, 10**10 - 1):010d}"
+    return [(d if random.random() < 0.7 else f"{d[:4]}/{d[4:]}", "MATRICOLA")]
+
 def catasto_piece():
     """Dati catastali: i numeri (foglio/particella/sub) sono CATASTO, le parole-chiave O."""
     return [("Foglio ", None), (str(random.randint(1, 200)), "CATASTO"),
@@ -522,6 +561,8 @@ SLOTS = {
     "DRIVING": driving_piece, "CITY": city_piece, "DATE": date_piece,
     "ORG": org_piece, "DOCID": docid_piece, "CATASTO": catasto_piece,
     "CONTO": conto_piece, "PROVINCE": province_piece,
+    "CIG": cig_piece, "CUP": cup_piece, "POLIZZA": polizza_piece,
+    "MATRICOLA": matricola_piece,
     "NAMELIST": name_list, "ORGLIST": org_list, "MIXEDLIST": mixed_list,
 }
 
@@ -568,6 +609,22 @@ TEMPLATES = [
 
     "Vista la sentenza n. {DOCID} pronunciata dal {TRIBUNAL}, lo {ORG}, in persona "
     "dell'avv. {LAWYER}, propone appello (prot. n. {DOCID}).",
+
+    # --- codici di procedura/contratto (forme nuove sotto DOCID) ---
+    "Procedura aperta indetta da {ORG}, P.IVA {PIVA}, CIG {CIG} - CUP {CUP}, per un importo "
+    "a base d'asta di {AMOUNT}; responsabile del procedimento {FULLNAME}.",
+
+    "Con riferimento al sinistro del {DATE}, polizza n. {POLIZZA} stipulata con {ORG}, il "
+    "sottoscritto {FULLNAME}, C.F. {CF}, chiede il risarcimento di {AMOUNT}.",
+
+    "Il datore di lavoro {ORG}, P.IVA {PIVA}, matricola INPS {MATRICOLA}, comunica che "
+    "{FULLNAME}, C.F. {CF}, e' stato assunto in data {DATE}.",
+
+    "Reclamo relativo alla polizza {POLIZZA}: si chiede il rimborso di {AMOUNT} sull'IBAN "
+    "{IBAN}, intestato a {FULLNAME}, C.F. {CF}.",
+
+    "Determina a contrarre n. {DOCID}, CIG {CIG}: si affida a {ORG}, con sede in {ADDRESS}, "
+    "il servizio per {AMOUNT}.",
 
     # --- elenchi: entita' consecutive separate da virgola/a-capo (caso 'nomi/societa'
     #     uno dopo l'altro', non coperto dai template in prosa) ---
