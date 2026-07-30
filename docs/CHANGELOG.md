@@ -5,6 +5,28 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-07-30 — I template si possono scrivere con un LLM **locale** (senza chiave Gemini)
+
+Per contribuire dati serviva una chiave Google, e i prompt uscivano dalla macchina: attrito
+d'ingresso per chi vuole aiutare, e una stonatura in un progetto il cui punto è **non mandare
+niente a terzi**. `llm_template_bank.py` ha ora un secondo backend: se è impostata
+**`LLM_BASE_URL`** (endpoint OpenAI-compatibile — llama.cpp server, Ollama, vLLM, LM Studio) i
+template li scrive quel modello, in locale. Senza la variabile nulla cambia: si usa Gemini
+esattamente come prima.
+
+`call_llm()` smista tra i due backend; `backend_name()` lo stampa nei log; `have_backend()`
+sostituisce il controllo della sola `GEMINI_API_KEY` in `contribute_dataset.py`, che ora spiega
+entrambe le strade. Le guardie sui template (segnaposto ammessi, nomi inline) sono le stesse:
+il testo di un modello locale passa gli stessi controlli.
+
+**Dettaglio non ovvio, costato una diagnosi:** un modello *reasoning* servito in locale può
+mettere **tutto** l'output in `reasoning_content` e restituire `content` **vuoto** (visto con
+gemma-4-12B su llama.cpp: 175 s di pensiero, zero testo). La richiesta manda quindi
+`chat_template_kwargs: {enable_thinking: false}` e, per sicurezza, accetta `reasoning_content`
+come ripiego.
+
+---
+
 ## 2026-06-30 — Porta del backend 5000 → 5005 (conflitto AirPlay su macOS)
 
 Gli utenti macOS vedevano una **pagina bianca**: la porta **5000** è occupata di default

@@ -452,7 +452,12 @@ the code injects valid values (CF/PIVA/IBAN checksums) and exact BIO labels — 
 **Pull Request** on the dataset for a maintainer to review. You can let your coding agent
 (Claude Code, Cursor, …) do everything: get a [Gemini API key](https://aistudio.google.com/apikey)
 and a [Hugging Face token](https://huggingface.co/settings/tokens), then **copy-paste the prompt
-below** (fill in the two keys and your handle):
+below** (fill in the two keys and your handle).
+
+> 🖥️ **No API key? Use your own local model.** Set `LLM_BASE_URL` (any OpenAI-compatible
+> endpoint — llama.cpp server, Ollama, vLLM, LM Studio) and `LLM_MODEL` instead of
+> `GEMINI_API_KEY`, and the templates are written **on your machine**: no key, no prompt
+> leaving the device. Fitting, for a privacy project.
 
 ```text
 Sei nel repository rizzo-pii. Voglio CONTRIBUIRE dati sintetici NUOVI al dataset Hugging Face

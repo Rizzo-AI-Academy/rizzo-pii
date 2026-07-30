@@ -20,6 +20,9 @@ Contributions of code, documentation and (above all) data are all welcome.
   ```bash
   pip install huggingface_hub                                     # the data script needs no torch
   export GEMINI_API_KEY=...      # https://aistudio.google.com/apikey   (PowerShell: $env:GEMINI_API_KEY=...)
+  # …or write the templates with a LOCAL model instead — no API key, nothing leaves the machine:
+  export LLM_BASE_URL=http://127.0.0.1:8080/v1   # llama.cpp / Ollama / vLLM / LM Studio
+  export LLM_MODEL=your-model-name
   hf auth login                  # or: export HF_TOKEN=hf_xxx
   # dry run (no upload), then the real batch boosting the weak tags:
   python src/data_pipeline/contribute_dataset.py --n 300  --handle yourname --no-upload
