@@ -33,6 +33,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -248,8 +249,23 @@ def find_stray_names(text):
     return stray
 
 
+def non_latin_char(text):
+    """Primo carattere alfabetico NON latino, se presente. Un modello locale (piccolo o
+    molto quantizzato) puo' infilare un ideogramma in mezzo alla prosa italiana; se il
+    template passa, quel carattere finisce in ogni esempio che lo usa."""
+    for ch in text:
+        if ch.isalpha():
+            try:
+                if "LATIN" not in unicodedata.name(ch):
+                    return ch
+            except ValueError:
+                return ch
+    return None
+
+
 def clean_and_validate(text):
-    """Pulisce il markdown, verifica i segnaposto e scarta i template con PII inline."""
+    """Pulisce il markdown, verifica i segnaposto e scarta i template con PII inline
+    o con caratteri non latini."""
     if not text:
         return None
     text = re.sub(r"^```.*?\n|```$", "", text.strip(), flags=re.MULTILINE).strip()
@@ -262,6 +278,10 @@ def clean_and_validate(text):
     stray = find_stray_names(text)
     if stray:
         print(f"  scartato: probabili nomi inline non taggati {sorted(set(stray))[:8]}")
+        return None
+    bad = non_latin_char(text)
+    if bad:
+        print(f"  scartato: carattere non latino {bad!r} (artefatto del modello)")
         return None
     return text
 

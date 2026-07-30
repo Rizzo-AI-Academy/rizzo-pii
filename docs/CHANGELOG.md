@@ -25,6 +25,13 @@ gemma-4-12B su llama.cpp: 175 s di pensiero, zero testo). La richiesta manda qui
 `chat_template_kwargs: {enable_thinking: false}` e, per sicurezza, accetta `reasoning_content`
 come ripiego.
 
+**Nuova guardia `non_latin_char()`** in `clean_and_validate()`: un modello locale quantizzato può
+infilare un **ideogramma** in mezzo alla prosa italiana (`"oltre a槽 interessi"`), e il template
+passava tutti i controlli esistenti — il carattere finiva poi in **ogni** esempio generato da quel
+template (visto: 87 righe su 5.000 da un solo template). Ora un template con caratteri non latini
+viene scartato. La guardia è utile anche col backend Gemini, ma è coi modelli locali che il caso
+si presenta davvero.
+
 ---
 
 ## 2026-06-30 — Porta del backend 5000 → 5005 (conflitto AirPlay su macOS)
