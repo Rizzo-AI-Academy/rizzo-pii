@@ -387,6 +387,7 @@ rizzo_pii/
 │   ├─ inspect/                       read-only utilities (counts, lengths, checksums)
 │   └─ app/                           local anonymization app
 │       ├─ app.py                     Flask server: reversible anonymization + regex/checksum net
+│       ├─ pdf_export.py              anonymized-PDF download: true redaction of the uploaded PDF
 │       ├─ serve.py                   headless entry (backend of the Tauri app, no browser)
 │       ├─ desktop_app.py             legacy PyInstaller entry (opens the browser)
 │       └─ assets/                    mascot (the hedgehog) and icons

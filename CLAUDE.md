@@ -77,12 +77,24 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
 - `app.py` — server Flask + **UI**: testo o PDF, chunking con overlap, offset globali + dedup.
   Anonimizzazione **reversibile** (ogni PII → `[FULLNAME_1]`/`[IBAN_1]`… + dizionario locale; tab
   "Ripristina"). Affianca al modello una **rete regex/checksum** (EMAIL/TELEFONO/IBAN/CF/PIVA/carta/
-  importo/targa; IBAN/CF/PIVA/carta validati con checksum, che ha priorità sul modello). `APP_VERSION`.
+  importo/targa/date numeriche; IBAN/CF/PIVA/carta validati con checksum, che ha priorità sul modello). **Entità manuali**: dall'UI si seleziona il testo sfuggito al modello e lo si aggiunge come PII (label a scelta, campo `extra` di `/analyze`); le aggiunte manuali hanno priorità massima nella fusione, quindi correggono anche le etichette sbagliate del modello e finiscono nel dizionario (e quindi nel PDF redatto). `APP_VERSION`.
   Endpoint `GET/POST /config` e `GET /port-check` per la configurazione host/porta dall'UI (⚙️
   gear icon nell'header); `--host`/`--port` come argomenti CLI.
 - `serve.py` — entry **headless** (solo Flask, niente browser): è il backend dell'app Tauri; log su
   `%LOCALAPPDATA%\rizzo-pii\backend.log`. Pre-check porta + `sys.exit(76)` se occupata.
   `desktop_app.py` — entry PyInstaller legacy (apre il browser); stesso pre-check.
+- `pdf_export.py` — **download del PDF anonimizzato** (issue #7, punto 1), endpoint `POST /pdf`
+  in `app.py` (pulsante "Scarica PDF anonimizzato" nell'UI). Due modalita': **redazione vera** del
+  PDF caricato (le PII sono rimosse dal content stream con `apply_redactions`, i placeholder del
+  dizionario scritti al loro posto, layout conservato, metadati/XMP azzerati) oppure **PDF
+  ricostruito** dal solo testo anonimizzato quando l'input era testo incollato. Matching
+  CHAR-PRECISO con confini di parola (indice per carattere da `rawdict` + regex ancorate,
+  whitespace flessibile, multi-riga): niente redazioni di sottostringhe dentro altre parole.
+  I valori troppo corti/ambigui (frammenti del modello su testi tabellari) sono saltati e
+  riportati (`report["skipped"]`, header `X-PII-Skipped`); verifica finale dei
+  **residui** (valori ancora leggibili nell'output → header `X-PII-Residual`, avviso nell'UI).
+  Limite: niente OCR, il testo dentro immagini raster non viene redatto (punti 2-4 della issue).
+  Nessuna dipendenza dal modello: testabile in isolamento.
   `assets/` — mascotte (il riccio) + icone. `smoke_app.py`, `make_test_pdf.py`.
 
 **App desktop Tauri — `tauri/`:** finestra nativa **Rizzo PII** (WebView2) che lancia il backend

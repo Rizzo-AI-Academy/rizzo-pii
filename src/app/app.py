@@ -31,6 +31,7 @@ import torch
 from flask import (Flask, jsonify, render_template_string, request,
                    send_from_directory)
 
+import pdf_export
 import server_config
 from transformers import pipeline
 
@@ -187,6 +188,11 @@ DETECTORS = [
     ("TARGA",
      re.compile(r"\b[A-Za-z]{2}\s?\d{3}\s?[A-Za-z]{2}\b"),
      None, True),
+    ("DATE",
+     re.compile(r"(?<!\d)(?:0?[1-9]|[12]\d|3[01])[/.\-]"
+                r"(?:0?[1-9]|1[0-2])[/.\-](?:19|20)\d{2}"
+                r"(?:\s+\d{1,2}[:.]\d{2})?(?!\d)"),
+     None, True),
 ]
 
 
@@ -283,9 +289,36 @@ def _norm(s):
     return re.sub(r"\s+", " ", s.strip()).casefold()
 
 
-def analyze(text):
+def _manual_candidates(text, extra):
+    """Entita' aggiunte A MANO dall'utente (issue #7): per ogni {label, value}
+    trova TUTTE le occorrenze del valore nel testo (case-insensitive, spazi
+    flessibili, confini di parola). validated=True + score 1.0: nella fusione
+    vincono sul modello, quindi correggono anche le sue etichette sbagliate."""
+    cands = []
+    for item in (extra or []):
+        if not isinstance(item, dict):
+            continue
+        label = re.sub(r"[^A-Z_]", "", str(item.get("label", "")).upper())[:24] or "PII"
+        val = str(item.get("value", "")).strip()
+        toks = [re.escape(t) for t in _norm(val).split(" ") if t]
+        if not toks:
+            continue
+        rx = re.compile(r"(?<!\w)" + r"\s+".join(toks) + r"(?!\w)", re.IGNORECASE)
+        for m in rx.finditer(text):
+            cands.append({
+                "label": label,
+                "start": m.start(),
+                "end": m.end(),
+                "score": 1.0,
+                "validated": True,
+                "source": "manuale",
+            })
+    return cands
+
+
+def analyze(text, extra=None):
     model_ents, n_chunks = detect_model(text)
-    cands = model_ents + detect_regex(text)
+    cands = model_ents + detect_regex(text) + _manual_candidates(text, extra)
     kept = _merge(cands, text)
 
     # ID reversibili: stesso (label, valore-normalizzato) -> stesso placeholder.
@@ -369,19 +402,79 @@ def not_found(_e):
 
 @app.route("/analyze", methods=["POST"])
 def analyze_route():
-    text = ""
+    import json as _json
+    text, extra = "", []
     if "pdf" in request.files and request.files["pdf"].filename:
         data = request.files["pdf"].read()
         with fitz.open(stream=data, filetype="pdf") as doc:
             text = "\n".join(page.get_text() for page in doc)
+        try:
+            extra = _json.loads(request.form.get("extra") or "[]")
+        except ValueError:
+            extra = []
     else:
-        text = (request.get_json(silent=True) or {}).get("text", "")
+        payload = request.get_json(silent=True) or {}
+        text = payload.get("text", "")
+        extra = payload.get("extra") or []
     text = text.strip()
     if not text:
         return jsonify({"error": "Nessun testo da analizzare."}), 400
-    out = analyze(text)
+    out = analyze(text, extra if isinstance(extra, list) else [])
     out["source_text"] = text
     return jsonify(out)
+
+
+@app.route("/pdf", methods=["POST"])
+def pdf_route():
+    """Scarica il PDF anonimizzato (issue #7, punto 1). Due modalita':
+
+    - multipart con file 'pdf' + campo 'mapping' (JSON {placeholder: valore},
+      il dizionario restituito da /analyze): REDAZIONE VERA del PDF originale.
+      Le PII vengono rimosse dal content stream e sostituite dai placeholder,
+      il layout resta quello del documento. Metadati ripuliti.
+    - JSON {"text": "<testo anonimizzato>"}: PDF ricostruito dal solo testo
+      (usato quando l'input era testo incollato, senza PDF originale).
+
+    Header di risposta: X-PII-Redactions = redazioni applicate;
+    X-PII-Residual = valori del dizionario ANCORA leggibili nel testo
+    dell'output (verifica finale: deve essere 0, altrimenti l'UI avvisa).
+    """
+    import json as _json
+    if "pdf" in request.files and request.files["pdf"].filename:
+        data = request.files["pdf"].read()
+        try:
+            mapping = _json.loads(request.form.get("mapping") or "{}")
+        except ValueError:
+            return jsonify({"error": "Dizionario non valido."}), 400
+        try:
+            out, report = pdf_export.redact_pdf(data, mapping)
+        except pdf_export.PdfError as e:
+            return jsonify({"error": str(e)}), 400
+        if report["occurrences"] == 0:
+            return jsonify({"error": "Nessuna occorrenza trovata nel PDF: se il "
+                            "documento e' una scansione (testo in immagine) la "
+                            "redazione del layer testuale non puo' agire."}), 422
+        resp = app.response_class(out, mimetype="application/pdf")
+        resp.headers["Content-Disposition"] = \
+            "attachment; filename=documento_anonimizzato.pdf"
+        resp.headers["X-PII-Redactions"] = str(report["occurrences"])
+        resp.headers["X-PII-Residual"] = str(len(report["residual"]))
+        resp.headers["X-PII-Skipped"] = str(len(report["skipped"]))
+        return resp
+
+    text = ((request.get_json(silent=True) or {}).get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "Nessun testo da impaginare."}), 400
+    try:
+        out = pdf_export.text_to_pdf(text)
+    except pdf_export.PdfError as e:
+        return jsonify({"error": str(e)}), 400
+    resp = app.response_class(out, mimetype="application/pdf")
+    resp.headers["Content-Disposition"] = \
+        "attachment; filename=documento_anonimizzato.pdf"
+    resp.headers["X-PII-Redactions"] = "0"
+    resp.headers["X-PII-Residual"] = "0"
+    return resp
 
 
 # --------------------------------------------------------------------------- #
@@ -517,6 +610,7 @@ PAGE = r"""
   button:disabled{opacity:.55;cursor:default}
   .spin{width:15px;height:15px;border:2px solid rgba(255,255,255,.45);border-top-color:#fff;
         border-radius:50%;animation:sp .7s linear infinite}
+  .ghost .spin{border-color:rgba(124,58,158,.25);border-top-color:var(--brand)}
   @keyframes sp{to{transform:rotate(360deg)}}
   .hint{color:var(--soft);font-size:12.5px;margin-left:auto}
 
@@ -700,6 +794,16 @@ PAGE = r"""
             <input type="file" id="pdf" accept="application/pdf" hidden>
           </label>
           <div class="row">
+            <select id="mlabel" class="lang" title="Tipo PII" aria-label="Tipo PII">
+              <option>FULLNAME</option><option>DATE</option><option>CITY</option>
+              <option>STREET</option><option>ORG</option><option>ID_DOC</option>
+              <option>CF</option><option>EMAIL</option><option>TELEPHONENUM</option>
+              <option>PII</option>
+            </select>
+            <button class="ghost" id="addsel">➕ <span data-i18n="addsel">Aggiungi selezione come PII</span></button>
+          </div>
+          <div id="mchips" class="legend" style="padding:8px 0 0;border-top:0;display:none"></div>
+          <div class="row">
             <button class="btn lg" id="go">🛡️ <span data-i18n="go">Anonimizza</span></button>
             <button class="ghost" id="clear" data-i18n="clear">Pulisci</button>
             <span class="hint"><span class="kbd">Ctrl</span>+<span class="kbd">Enter</span></span>
@@ -730,6 +834,7 @@ PAGE = r"""
                     data-i18n-ph="anon_ph" placeholder="Il testo anonimizzato apparirà qui."></textarea>
           <div class="row">
             <button class="btn" id="copy">📋 <span data-i18n="copy">Copia per ChatGPT</span></button>
+            <button class="ghost" id="dlpdf">📄 <span data-i18n="dlpdf">Scarica PDF anonimizzato</span></button>
             <button class="ghost" id="dl">⬇️ <span data-i18n="dl">Scarica dizionario</span></button>
             <span class="hint" id="ulock"></span>
           </div>
@@ -839,7 +944,10 @@ const T = {
   out_title:"② Risultato", v_prev:"Anteprima", v_text:"Testo da copiare",
   empty_prev:"L'anteprima con le PII evidenziate apparirà qui.",
   anon_ph:"Il testo anonimizzato apparirà qui.",
-  copy:"Copia per ChatGPT", dl:"Scarica dizionario",
+  copy:"Copia per ChatGPT", dl:"Scarica dizionario", dlpdf:"Scarica PDF anonimizzato",
+  t_pdf_making:"Genero il PDF…", t_pdf_ok:"PDF anonimizzato scaricato",
+  t_pdf_err:"Errore nella creazione del PDF",
+  t_pdf_residual:n=>"PDF scaricato · ATTENZIONE: "+n+(n===1?" valore ancora leggibile":" valori ancora leggibili")+" nel file, verificalo",
   dict_title:"Dizionario reversibile", dict_hint:"resta solo qui, in locale",
   th_id:"ID", th_val:"Valore originale", th_type:"Tipo",
   callout:"Incolla qui la <b>risposta dell'LLM</b> (che contiene i placeholder come <span class=\"kbd\">[FULLNAME_1]</span>): l'app rimette i valori veri usando il dizionario di questa sessione. Se hai chiuso e riaperto l'app, <b>carica il dizionario .json</b> che avevi salvato.",
@@ -857,6 +965,8 @@ const T = {
   t_nothing_copy:"Niente da copiare", t_restored_copied:"Testo ripristinato copiato",
   t_dict_loaded:"Dizionario caricato", t_json_invalid:"JSON non valido",
   t_drag_pdf:"Trascina un file PDF",
+  addsel:"Aggiungi selezione come PII",
+  t_select_first:"Seleziona prima nell'editor il testo da anonimizzare",
   pii_found:(n,u)=>n+" PII trovate · "+u+" valori unici",
   dict_n:n=>n+" ID nel dizionario",
   dict_loaded_n:n=>"dizionario caricato · "+n+" ID",
@@ -879,7 +989,10 @@ const T = {
   out_title:"② Result", v_prev:"Preview", v_text:"Text to copy",
   empty_prev:"The preview with highlighted PII will appear here.",
   anon_ph:"The anonymized text will appear here.",
-  copy:"Copy for ChatGPT", dl:"Download dictionary",
+  copy:"Copy for ChatGPT", dl:"Download dictionary", dlpdf:"Download anonymized PDF",
+  t_pdf_making:"Building the PDF…", t_pdf_ok:"Anonymized PDF downloaded",
+  t_pdf_err:"Error while creating the PDF",
+  t_pdf_residual:n=>"PDF downloaded · WARNING: "+n+(n===1?" value still readable":" values still readable")+" in the file, please check it",
   dict_title:"Reversible dictionary", dict_hint:"stays here only, locally",
   th_id:"ID", th_val:"Original value", th_type:"Type",
   callout:"Paste here the <b>LLM's answer</b> (containing placeholders like <span class=\"kbd\">[FULLNAME_1]</span>): the app puts the real values back using this session's dictionary. If you closed and reopened the app, <b>load the .json dictionary</b> you saved.",
@@ -897,6 +1010,8 @@ const T = {
   t_nothing_copy:"Nothing to copy", t_restored_copied:"Restored text copied",
   t_dict_loaded:"Dictionary loaded", t_json_invalid:"Invalid JSON",
   t_drag_pdf:"Drop a PDF file",
+  addsel:"Add selection as PII",
+  t_select_first:"First select in the editor the text to anonymize",
   pii_found:(n,u)=>n+" PII found · "+u+" unique values",
   dict_n:n=>n+" IDs in the dictionary",
   dict_loaded_n:n=>"dictionary loaded · "+n+" IDs",
@@ -955,6 +1070,25 @@ function showTab(n){
 }
 
 /* ---- analyze ---- */
+let EXTRA=[];              // entita' aggiunte a mano: [{label, value}]
+function renderChips(){
+  const c=$('mchips');c.innerHTML='';c.style.display=EXTRA.length?'':'none';
+  EXTRA.forEach((e,i)=>{
+    const col=colors(e.label);const el=document.createElement('span');
+    el.className='chip';el.title=e.value;
+    const v=e.value.length>28?e.value.slice(0,28)+'…':e.value;
+    el.innerHTML=`<span class="sw" style="background:${col.bd}"></span>${e.label}: ${escapeHtml(v)} ✕`;
+    el.onclick=()=>{EXTRA.splice(i,1);renderChips();run();};
+    c.appendChild(el);
+  });
+}
+$('addsel').onclick=()=>{
+  const s=$('src');
+  const val=s.value.substring(s.selectionStart,s.selectionEnd).trim();
+  if(!val){toast(tt('t_select_first'),false);return;}
+  EXTRA.push({label:$('mlabel').value,value:val});
+  renderChips();run();
+};
 async function run(){
   const file=$('pdf').files[0];const text=$('src').value.trim();
   if(!file&&!text){toast(tt('t_need_input'),false);return;}
@@ -963,9 +1097,10 @@ async function run(){
   try{
     let resp;
     if(file){const fd=new FormData();fd.append('pdf',file);
+      fd.append('extra',JSON.stringify(EXTRA));
       resp=await fetch('/analyze',{method:'POST',body:fd});}
     else resp=await fetch('/analyze',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({text})});
+      body:JSON.stringify({text,extra:EXTRA})});
     const d=await resp.json();
     if(!resp.ok){toast(d.error||tt('t_error'),false);return;}
     if(d.source_text&&file)$('src').value=d.source_text;
@@ -1043,6 +1178,34 @@ $('dl').onclick=()=>{if(!DATA||!Object.keys(MAP).length){toast(tt('t_nothing_dl'
   a.download='dizionario_anonimizzazione.json';a.click();URL.revokeObjectURL(a.href);
   toast(tt('t_dl_ok'));};
 
+/* ---- PDF anonimizzato (issue #7): redazione del PDF caricato, oppure
+       PDF ricostruito dal testo anonimizzato se l'input era testo ---- */
+$('dlpdf').onclick=async()=>{
+  if(!DATA){toast(tt('t_need_anon'),false);return;}
+  const file=$('pdf').files[0];
+  const btn=$('dlpdf');btn.disabled=true;const old=btn.innerHTML;
+  btn.innerHTML='<span class="spin"></span> '+tt('t_pdf_making');
+  try{
+    let resp;
+    if(file){
+      const fd=new FormData();fd.append('pdf',file);
+      fd.append('mapping',JSON.stringify(DATA.mapping||{}));
+      resp=await fetch('/pdf',{method:'POST',body:fd});
+    }else{
+      resp=await fetch('/pdf',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({text:DATA.anonymized_text})});
+    }
+    if(!resp.ok){const d=await resp.json().catch(()=>({}));toast(d.error||tt('t_pdf_err'),false);return;}
+    const blob=await resp.blob();
+    const name=file?file.name.replace(/\.pdf$/i,'')+'_anonimizzato.pdf':'documento_anonimizzato.pdf';
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+    a.download=name;a.click();URL.revokeObjectURL(a.href);
+    const res=parseInt(resp.headers.get('X-PII-Residual')||'0',10);
+    if(res>0)toast(T[L].t_pdf_residual(res),false);else toast(tt('t_pdf_ok'));
+  }catch(e){toast(tt('t_pdf_err')+': '+e.message,false);}
+  finally{btn.disabled=false;btn.innerHTML=old;}
+};
+
 /* ---- reverse ---- */
 function reverse(){
   const txt=$('rin').value;
@@ -1075,6 +1238,7 @@ $('dictFile').onchange=e=>{const f=e.target.files[0];if(!f)return;
 /* ---- input helpers ---- */
 $('go').onclick=run;
 $('clear').onclick=()=>{$('src').value='';$('pdf').value='';$('dropTxt').innerHTML=tt('drop');
+  EXTRA=[];renderChips();
   DATA=null;$('prev').style.display='none';$('emptyPrev').style.display='';
   $('anon').value='';$('meta').innerHTML='';$('legend').innerHTML='';
   $('dictCard').style.display='none';$('ulock').textContent='';
