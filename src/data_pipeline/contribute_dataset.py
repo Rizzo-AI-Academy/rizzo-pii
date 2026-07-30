@@ -179,14 +179,43 @@ def parse_boost(items):
     return boost
 
 
+# --- tassonomia ammessa -------------------------------------------------------------
+# ATTENZIONE, non ovvio: train_pii.py costruisce l'elenco delle label DAI DATI
+# (`label_set` dall'unione train+validation, `num_labels=len(label_list)`), e
+# normalize_labels() lascia passare invariata qualsiasi label che non sia in TAG_MAP.
+# Conseguenza: una label sconosciuta in un file contribuito -- anche solo un errore di
+# battitura come "CREDITCARD" o "FULLNAM" -- NON da' errore: diventa silenziosamente una
+# CLASSE NUOVA del modello, con dati di training e zero support in validation. Qui la
+# contribuzione viene fermata prima, cosi' un cambio di tassonomia resta una decisione
+# esplicita dei maintainer e non un effetto collaterale di un upload.
+TAG_FINALI = {
+    "FULLNAME", "AGE", "GENDER", "DATE", "TIME", "STREET", "BUILDINGNUM", "ZIPCODE",
+    "CITY", "PROVINCE", "EMAIL", "TELEPHONENUM", "CF", "PIVA", "ID_DOC", "IBAN",
+    "CREDITCARDNUMBER", "AMOUNT", "TARGA", "ORG", "DOCID", "CATASTO",
+}
+# label "grezze" che TAG_MAP in train_pii.py sa rimappare su un tag finale
+TAG_GREZZI = {
+    "GIVENNAME", "SURNAME", "GIUDICE", "AVVOCATO", "ATTORE", "CONVENUTO", "TESTIMONE",
+    "SEX", "TAXNUM", "PEC", "RG", "IDCARDNUM", "PASSPORTNUM", "DRIVERLICENSENUM",
+    "SOCIALNUM", "CONTO",
+}
+TAG_AMMESSI = TAG_FINALI | TAG_GREZZI
+
+
 def _validate_record(rec):
     """Controlli di integrita' strutturale + checksum su una riga generata."""
     if len(rec["tokens"]) != len(rec["bio_labels"]):
         return "tokens/bio_labels di lunghezza diversa"
+    for lab in rec["bio_labels"]:
+        if lab != "O" and lab[2:] not in TAG_AMMESSI:
+            return f"label BIO fuori tassonomia: '{lab}'"
     for e in rec["entities"]:
         # offset coerenti col testo
         if rec["source_text"][e["start"]:e["end"]] != e["value"]:
             return f"offset entita' incoerente: {e}"
+        if e["label"] not in TAG_AMMESSI:
+            return (f"label fuori tassonomia: '{e['label']}' (aggiungerebbe una classe "
+                    f"nuova al modello; vedi docs/TASSONOMIA_TAG.md)")
         if e["label"] == "CF" and not cf_ok(e["value"]):
             return f"CF con checksum non valido: {e['value']}"
         if e["label"] == "PIVA" and not piva_ok(e["value"]):

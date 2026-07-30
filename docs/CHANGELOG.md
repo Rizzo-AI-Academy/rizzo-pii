@@ -5,6 +5,28 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-07-30 — Una label sconosciuta in un contributo aggiunge una classe al modello, in silenzio
+
+`train_pii.py` costruisce la tassonomia **dai dati**: `label_set` è l'unione delle label presenti
+in train + validation e `num_labels = len(label_list)` (righe 315-319). `normalize_labels()` lascia
+passare invariata ogni label che non sia in `TAG_MAP` (`TAG_MAP.get(l[2:], l[2:])`).
+
+Conseguenza: un file contribuito che contenga una label non prevista — anche solo un errore di
+battitura, `CREDITCARD` invece di `CREDITCARDNUMBER`, `FULLNAM` invece di `FULLNAME` — **non produce
+alcun errore**. Diventa una classe nuova della testa di classificazione, con dati di training e zero
+support in validation: invisibile nelle metriche, e le percentuali per-tag pubblicate non sono più
+confrontabili coi run precedenti. Un cambio di tassonomia può quindi avvenire come effetto
+collaterale di un upload, mentre `docs/TASSONOMIA_TAG.md` e `CONTRIBUTING.md` lo descrivono
+giustamente come una decisione deliberata (si edita solo `TAG_MAP`/`DROP_TYPES`).
+
+`contribute_dataset.py` ora rifiuta le righe con label fuori dai **22 tag finali** o dai tag grezzi
+che `TAG_MAP` sa rimappare, controllando sia `entities` sia `bio_labels`. Il messaggio d'errore
+rimanda a `docs/TASSONOMIA_TAG.md`. Chi vuole davvero proporre un tag nuovo apre una PR sul codice,
+che è dove la decisione va discussa: cambia la dimensione della testa, impone un riaddestramento e
+invalida il confronto con le metriche pubblicate.
+
+---
+
 ## 2026-06-30 — Porta del backend 5000 → 5005 (conflitto AirPlay su macOS)
 
 Gli utenti macOS vedevano una **pagina bianca**: la porta **5000** è occupata di default
