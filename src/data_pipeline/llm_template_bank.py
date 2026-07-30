@@ -281,6 +281,66 @@ def normalizza_escape(text):
     B-), inutilizzabile in training. Misurato: 1 template su 237 conteneva la
     sequenza e ha rotto 721 righe su 200.000."""
     return text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+# --- concordanza articolo/nome -------------------------------------------------------
+# Il PROMPT chiede "il/la {LAWYER}", ma l'LLM scrive quasi sempre "il {LAWYER}": con un
+# nome femminile esce "il Lara De Angelis" (13,9% delle persone in una generazione reale
+# da 5.000 esempi). Nel linguaggio giuridico italiano il NOME DI RUOLO porta l'articolo
+# maschile per entrambi i sessi ("il giudice Sara Rossi", "l'avvocato Lara Bianchi"):
+# inserirlo risolve la concordanza invece di aggirarla. Per {FULLNAME}, che non ha un
+# ruolo, si toglie l'articolo ("di Sara Rossi" invece di "del Sara Rossi").
+RUOLI = {"JUDGE": ("giudice", False), "LAWYER": ("avvocato", True),
+         "PLAINTIFF": ("attore", True), "DEFENDANT": ("convenuto", False),
+         "WITNESS": ("teste", False)}
+
+# determinante trovato -> (forma davanti a consonante, forma davanti a vocale)
+DETERMINANTI = {
+    "il": ("il", "l'"), "lo": ("il", "l'"), "la": ("il", "l'"), "l'": ("il", "l'"),
+    "un": ("un", "un"), "una": ("un", "un"), "uno": ("un", "un"),
+    "del": ("del", "dell'"), "dello": ("del", "dell'"), "della": ("del", "dell'"),
+    "dell'": ("del", "dell'"),
+    "al": ("al", "all'"), "allo": ("al", "all'"), "alla": ("al", "all'"),
+    "all'": ("al", "all'"),
+    "dal": ("dal", "dall'"), "dallo": ("dal", "dall'"), "dalla": ("dal", "dall'"),
+    "dall'": ("dal", "dall'"),
+}
+# per {FULLNAME}: l'articolo si toglie, la preposizione articolata diventa semplice
+SENZA_ARTICOLO = {"il": "", "lo": "", "la": "", "l'": "", "un": "", "una": "", "uno": "",
+                  "del": "di", "dello": "di", "della": "di", "dell'": "di",
+                  "al": "a", "allo": "a", "alla": "a", "all'": "a",
+                  "dal": "da", "dallo": "da", "dalla": "da", "dall'": "da"}
+
+_DET = "|".join(sorted((re.escape(d) for d in DETERMINANTI), key=len, reverse=True))
+_RE_RUOLO = re.compile(rf"\b({_DET})\s*\{{({'|'.join(RUOLI)})\}}", re.IGNORECASE)
+_RE_FULLNAME = re.compile(rf"\b({_DET})\s*\{{FULLNAME\}}", re.IGNORECASE)
+
+
+def fix_concordanza(text):
+    """Riscrive i determinanti davanti ai segnaposto di persona (vedi sopra).
+    Ritorna (testo, n_correzioni)."""
+    n = 0
+
+    def _ruolo(m):
+        nonlocal n
+        det, slot = m.group(1).lower(), m.group(2).upper()
+        noun, vocale = RUOLI[slot]
+        forma = DETERMINANTI[det][1 if vocale else 0]
+        n += 1
+        sep = "" if forma.endswith("'") else " "
+        out = f"{forma}{sep}{noun} {{{slot}}}"
+        return out[0].upper() + out[1:] if m.group(1)[0].isupper() else out
+
+    def _fullname(m):
+        nonlocal n
+        det = m.group(1).lower()
+        prep = SENZA_ARTICOLO[det]
+        n += 1
+        if not prep:
+            return "{FULLNAME}"
+        return f"{prep} {{FULLNAME}}"
+
+    text = _RE_RUOLO.sub(_ruolo, text)
+    text = _RE_FULLNAME.sub(_fullname, text)
+    return text, n
 
 
 def clean_and_validate(text):
@@ -304,6 +364,9 @@ def clean_and_validate(text):
     if bad:
         print(f"  scartato: carattere non latino {bad!r} (artefatto del modello)")
         return None
+    text, nfix = fix_concordanza(text)
+    if nfix:
+        print(f"  concordanza: {nfix} determinanti riscritti davanti ai nomi")
     return text
 
 
