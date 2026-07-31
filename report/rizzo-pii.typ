@@ -786,51 +786,21 @@ regex/checksum safety net.* The two together are stronger than either alone.
 The community dataset
 #link("https://huggingface.co/datasets/rizzoaiacademy/anonimizzazione-testi-italiano")[`rizzoaiacademy/anonimizzazione-testi-italiano`]
 is built by people who ran the generator and opened a pull request on Hugging
-Face. The contributors below have had contributions *merged* into the dataset.
+Face. Everyone who has sent data is listed here, in alphabetical order, whether
+their pull request is already merged or still under review:
 
-#let ctb(name, handle) = block(
-  width: 100%, fill: white, radius: 6pt, inset: (x: 8pt, y: 6pt),
-  stroke: 0.7pt + rgb("#e0d8ec"),
-)[
-  #text(size: 9pt, weight: "bold")[#name] \
-  #text(size: 7.6pt, fill: muted, font: "Noto Sans")[\@#handle]
-]
-
-#v(2pt)
-#grid(
-  columns: (1fr, 1fr, 1fr),
-  gutter: 6pt,
-  ctb("Francesco Wfm", "workingfm"),
-  ctb("Craicek", "Craicekhf"),
-  ctb("Lucio Palmieri", "plucius"),
-  ctb("Lorenzo Ferrari", "Lorenzfer"),
-  ctb("Yuri", "D3ros"),
-  ctb("Daniele Murabito", "worksdem"),
-  ctb("Fabio Accalai", "fabos"),
-  ctb("Igino", "ijinx"),
-  ctb("Attilio Pregnolato", "8Attilio1"),
-  ctb("Andrea", "Renaad"),
-  ctb("Matteo Scortegagna", "Mascorte0"),
-  ctb("Marco Sinatra", "CapitanJackMarcoS"),
-  ctb("Carlos H. P. Ross", "WolCarlos"),
-  ctb("Alessandro Betti", "bettialessandro"),
-  ctb("Marco Occhialini", "occhials"),
-)
-#v(3pt)
-#text(size: 8pt, fill: muted)[
-  Maintainer commits (Simone Rizzo) are excluded.
-]
-
-#v(6pt)
-*Contributions under review.* A further 15 people have open pull requests that
-are not merged yet, and are gratefully acknowledged here as well:
 #text(size: 9pt)[
-  Lino (\@Lino9999), Raffaele Francesco D'Amato (\@kekkodamato), Francesco
-  (\@francechian), Luca (\@LucaVes), ebbasta (\@esseggi), Emiliano
-  (\@Darkfog81), Luca Mazzola (\@LuCaMazZ), Pietro Bardone (\@p3pp01), Marco
-  Buzzanca (\@Eagle-lab), Di Gesto (\@Filippo76), Gianluca Vertemati (\@GiaVer),
-  Massimiliano (\@MassiLLM), go hatfd (\@blokka11), flyer (\@maxxflyer), nicola
-  (\@najmarte).
+  Alessandro Betti (\@bettialessandro), Andrea (\@Renaad), Attilio Pregnolato
+  (\@8Attilio1), Carlos H. P. Ross (\@WolCarlos), Craicek (\@Craicekhf), Daniele
+  Murabito (\@worksdem), Di Gesto (\@Filippo76), ebbasta (\@esseggi), Emiliano
+  (\@Darkfog81), Fabio Accalai (\@fabos), flyer (\@maxxflyer), Francesco
+  (\@francechian), Francesco Wfm (\@workingfm), Gianluca Vertemati (\@GiaVer), go
+  hatfd (\@blokka11), Igino (\@ijinx), Lino (\@Lino9999), Lorenzo Ferrari
+  (\@Lorenzfer), Luca (\@LucaVes), Luca Mazzola (\@LuCaMazZ), Lucio Palmieri
+  (\@plucius), Marco Buzzanca (\@Eagle-lab), Marco Occhialini (\@occhials), Marco
+  Sinatra (\@CapitanJackMarcoS), Massimiliano (\@MassiLLM), Matteo Scortegagna
+  (\@Mascorte0), Nicola (\@najmarte), Peppone Peppe (\@Peepp1one), Pietro Bardone
+  (\@p3pp01), Raffaele Francesco D'Amato (\@kekkodamato), Yuri (\@D3ros).
 ]
 
 #v(4pt)
