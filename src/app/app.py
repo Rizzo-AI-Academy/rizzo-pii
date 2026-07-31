@@ -253,6 +253,11 @@ def detect_model(text):
 # --------------------------------------------------------------------------- #
 # Fusione modello + regex, ID reversibili, testo anonimizzato
 # --------------------------------------------------------------------------- #
+def _is_word(ch):
+    """Carattere interno a una parola (lettere accentate e cifre incluse)."""
+    return ch.isalnum() or ch == "_"
+
+
 def _merge(cands, text):
     """Greedy senza overlap. Priorita': checksum-valido > fonte regex > score > lunghezza.
     La rete regex copre campi a forma molto specifica: per quegli span e' piu' affidabile
@@ -275,8 +280,33 @@ def _merge(cands, text):
         while e["end"] > e["start"] and text[e["end"] - 1].isspace():
             e["end"] -= 1
     kept = [e for e in kept if e["end"] > e["start"]]
-    kept.sort(key=lambda e: e["start"])
-    return kept
+
+    # Allineamento ai confini di parola. Il modello etichetta i sotto-token e a volte ne
+    # copre solo una parte ("No" di "Novara"): sostituendo la span cosi' com'e' resterebbe
+    # "[CITY_1]vara", cioe' un valore ancora ricostruibile. Se una span taglia una parola
+    # a meta', la si estende fino a coprirla. Nel dubbio si maschera un carattere in piu':
+    # per un anonimizzatore l'errore per eccesso e' l'unico accettabile.
+    for e in kept:
+        while (e["start"] > 0
+               and _is_word(text[e["start"] - 1]) and _is_word(text[e["start"]])):
+            e["start"] -= 1
+        while (e["end"] < len(text)
+               and _is_word(text[e["end"]]) and _is_word(text[e["end"] - 1])):
+            e["end"] += 1
+
+    # L'estensione puo' rendere due span sovrapposte o adiacenti: si fondono, altrimenti
+    # una stessa parola verrebbe sostituita due volte ("[CATASTO_1][CATASTO_2]").
+    kept.sort(key=lambda e: (e["start"], -(e["end"] - e["start"])))
+    merged = []
+    for e in kept:
+        if merged and e["start"] < merged[-1]["end"]:
+            merged[-1]["end"] = max(merged[-1]["end"], e["end"])
+            continue
+        if merged and e["start"] == merged[-1]["end"] and e["label"] == merged[-1]["label"]:
+            merged[-1]["end"] = e["end"]
+            continue
+        merged.append(e)
+    return merged
 
 
 def _norm(s):
