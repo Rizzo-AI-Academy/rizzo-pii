@@ -786,47 +786,38 @@ regex/checksum safety net.* The two together are stronger than either alone.
 The community dataset
 #link("https://huggingface.co/datasets/rizzoaiacademy/anonimizzazione-testi-italiano")[`rizzoaiacademy/anonimizzazione-testi-italiano`]
 is built by people who ran the generator and opened a pull request on Hugging
-Face. The contributors below have had contributions *merged* into the dataset;
-they are listed by number of merged pull requests.
+Face. The contributors below have had contributions *merged* into the dataset.
 
-#let ctb(name, handle, n) = block(
+#let ctb(name, handle) = block(
   width: 100%, fill: white, radius: 6pt, inset: (x: 8pt, y: 6pt),
   stroke: 0.7pt + rgb("#e0d8ec"),
 )[
-  #grid(
-    columns: (1fr, auto),
-    align: (left + horizon, right + horizon),
-    [
-      #text(size: 9pt, weight: "bold")[#name] \
-      #text(size: 7.6pt, fill: muted, font: "Noto Sans")[\@#handle]
-    ],
-    text(size: 8pt, fill: primary2, weight: "bold")[#n],
-  )
+  #text(size: 9pt, weight: "bold")[#name] \
+  #text(size: 7.6pt, fill: muted, font: "Noto Sans")[\@#handle]
 ]
 
 #v(2pt)
 #grid(
   columns: (1fr, 1fr, 1fr),
   gutter: 6pt,
-  ctb("Francesco Wfm", "workingfm", 147),
-  ctb("Craicek", "Craicekhf", 47),
-  ctb("Lucio Palmieri", "plucius", 19),
-  ctb("Lorenzo Ferrari", "Lorenzfer", 12),
-  ctb("Yuri", "D3ros", 11),
-  ctb("Daniele Murabito", "worksdem", 10),
-  ctb("Fabio Accalai", "fabos", 8),
-  ctb("Igino", "ijinx", 7),
-  ctb("Attilio Pregnolato", "8Attilio1", 3),
-  ctb("Andrea", "Renaad", 2),
-  ctb("Matteo Scortegagna", "Mascorte0", 2),
-  ctb("Marco Sinatra", "CapitanJackMarcoS", 1),
-  ctb("Carlos H. P. Ross", "WolCarlos", 1),
-  ctb("Alessandro Betti", "bettialessandro", 1),
-  ctb("Marco Occhialini", "occhials", 1),
+  ctb("Francesco Wfm", "workingfm"),
+  ctb("Craicek", "Craicekhf"),
+  ctb("Lucio Palmieri", "plucius"),
+  ctb("Lorenzo Ferrari", "Lorenzfer"),
+  ctb("Yuri", "D3ros"),
+  ctb("Daniele Murabito", "worksdem"),
+  ctb("Fabio Accalai", "fabos"),
+  ctb("Igino", "ijinx"),
+  ctb("Attilio Pregnolato", "8Attilio1"),
+  ctb("Andrea", "Renaad"),
+  ctb("Matteo Scortegagna", "Mascorte0"),
+  ctb("Marco Sinatra", "CapitanJackMarcoS"),
+  ctb("Carlos H. P. Ross", "WolCarlos"),
+  ctb("Alessandro Betti", "bettialessandro"),
+  ctb("Marco Occhialini", "occhials"),
 )
 #v(3pt)
 #text(size: 8pt, fill: muted)[
-  Number on the right = merged pull requests on the dataset repository.
   Maintainer commits (Simone Rizzo) are excluded.
 ]
 
