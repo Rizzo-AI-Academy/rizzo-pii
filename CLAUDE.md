@@ -80,6 +80,20 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   importo/targa; IBAN/CF/PIVA/carta validati con checksum, che ha priorità sul modello). `APP_VERSION`.
   Endpoint `GET/POST /config` e `GET /port-check` per la configurazione host/porta dall'UI (⚙️
   gear icon nell'header); `--host`/`--port` come argomenti CLI.
+- `pii_regex.py` — **rete regex + checksum** (estratta da `app.py`: quel file carica il modello
+  all'import, quindi non era testabile). `detect_regex(text, relax_strict=False)`. Con
+  `relax_strict=True` (testo da OCR) IBAN/PIVA/carta sono redatti anche a **checksum fallito**:
+  gli errori OCR (0/O, 1/l, 5/S, 8/B) rompono i checksum e una PII non redatta finirebbe
+  all'LLM. Quelle entita' escono con `source="regex-ocr"` e l'UI le mostra tratteggiate.
+- `pdf_text.py` — estrazione testo da PDF: `page.get_text()` dove c'e' testo nativo, **OCR solo
+  sulle pagine scansionate** (soglia `MIN_CHARS_PER_PAGE`, raster a 300 DPI). Ritorna
+  `(testo, info)` con `info["ocr_pages"]`, che `app.py` usa per attivare `from_ocr`.
+- `ocr/` — backend OCR **CPU**: `rapid_ocr.py` (RapidOCR = PP-OCRv6 su ONNXRuntime, 3 file
+  ONNX per ~32 MB, niente GPU/torch), `layout.py` (box sparsi -> ordine di lettura; assume
+  colonna singola), `fetch_models.py` (popola `ocr_models/` prima della build).
+  `PII_OCR=off` disattiva. Modelli impacchettati apposta: RapidOCR di suo li scaricherebbe
+  al primo uso, e l'app promette zero rete. **Il modello di riconoscimento v6 e' unico e
+  multilingua** (52 lingue): `Rec.lang_type="it"` valida soltanto, non cambia il file.
 - `serve.py` — entry **headless** (solo Flask, niente browser): è il backend dell'app Tauri; log su
   `%LOCALAPPDATA%\rizzo-pii\backend.log`. Pre-check porta + `sys.exit(76)` se occupata.
   `desktop_app.py` — entry PyInstaller legacy (apre il browser); stesso pre-check.
@@ -168,6 +182,24 @@ legale IT (il training resta multilingue; le altre lingue non sono validate).
 Logga la **train loss live a ogni step** e le **metriche finali** (`final/train_*`, `final/val_*`).
 Il `.env` è **gitignorato**: non committarlo. Senza chiave, W&B si disattiva da solo.
 
+## Test
+
+```powershell
+python -m unittest discover -s tests -t .
+```
+
+Coprono **solo logica pura**: checksum CF/PIVA/IBAN/Luhn, rete regex (comportamento normale e
+`relax_strict` su OCR), ricostruzione dell'ordine di lettura dai box OCR, decisione
+"pagina da OCR" e ricomposizione del documento. Nessun torch, nessun modello, nessuna GPU:
+girano in millisecondi e in CI (`.github/workflows/tests.yml`, solo `numpy`).
+
+Il test che conta di più: **un IBAN col checksum rotto da un errore OCR deve comunque essere
+redatto** (`tests/test_pii_regex.py::DetectRegexOnOcrText`). È la garanzia di privacy del
+percorso OCR — se salta quello, una PII vera finisce nel prompt di un LLM cloud.
+
+Quello che i test **non** coprono: `app.py` (carica il modello all'import), l'engine RapidOCR
+vero, e la qualità dell'OCR su scansioni reali. Quest'ultima va misurata a mano.
+
 ## Comandi
 
 Tutti gli script forzano UTF-8 e risolvono i path da soli (girano da qualsiasi CWD; i comandi
@@ -220,3 +252,20 @@ python src/inspect/inspect_lengths.py
 - **Valori off-domain di DeepMount**: nomi/indirizzi USA; utili per forma/contesto, non come
   valori italiani.
 - In produzione affiancare **sempre** la rete regex+checksum (`src/inspect/validate_checksums.py`) al modello.
+- **OCR — modo di fallire misurato.** Su render sintetici degradati (fino a 75 DPI, 3,5° di
+  rotazione, rumore forte, JPEG qualità 20) PP-OCRv6 ha letto CF/IBAN/PIVA/email **esatti**:
+  `relax_strict` non è mai scattato. Oltre quella soglia (60 DPI, 5°) l'OCR **non sbaglia
+  qualche carattere: collassa** — 50 caratteri su 790, PII mai viste. Quindi:
+  - `relax_strict` (redige IBAN/PIVA/carta anche a checksum fallito, entità tratteggiate
+    nell'UI) resta una precauzione **non dimostrata dai test**: copre il regime intermedio
+    che i render sintetici non producono (fotocopie di fotocopie, timbri, fax stampati).
+    Costa falsi positivi visibili. Toglierla è una decisione legittima, da prendere
+    consapevolmente.
+  - il rischio vero è il **collasso silenzioso**: `unreadable_pages` in `pdf_text.py` segnala
+    le pagine che dopo l'OCR restano sotto `MIN_CHARS_PER_PAGE`, e l'UI avvisa che
+    l'anonimizzazione non è affidabile. Senza quel controllo l'utente riceverebbe un
+    documento apparentemente pulito a cui manca il 94% del testo.
+  - **su documenti scansionati il risultato va comunque riletto a occhio.**
+- `ocr/layout.py` assume **colonna singola**: su pagine a due colonne mescola le colonne.
+- Non misurato: scansioni **reali** (grana della carta, bleed-through, timbri, testo storto in
+  modo non uniforme), pagine a due colonne, tabelle. I numeri sopra vengono da render sintetici.
