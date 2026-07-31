@@ -109,6 +109,21 @@ def piva_ok(p):
     return (10 - t % 10) % 10 == int(p[10])
 
 
+def luhn_ok(c):
+    """Checksum di Luhn: vale per le carte di credito (spazi ignorati)."""
+    cifre = [int(x) for x in c if x.isdigit()]
+    if len(cifre) < 13:
+        return False
+    tot = 0
+    for i, d in enumerate(reversed(cifre)):
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        tot += d
+    return tot % 10 == 0
+
+
 def cf_ok(c):
     if len(c) != 16:
         return False
@@ -199,6 +214,8 @@ def _validate_record(rec):
             return f"PIVA con checksum non valido: {e['value']}"
         if e["label"] == "IBAN" and not iban_ok(e["value"]):
             return f"IBAN con checksum non valido: {e['value']}"
+        if e["label"] == "CREDITCARDNUMBER" and not luhn_ok(e["value"]):
+            return f"carta di credito con checksum non valido: {e['value']}"
     return None
 
 

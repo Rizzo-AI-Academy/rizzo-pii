@@ -41,7 +41,7 @@ ALLOWED_SLOTS = {
     "FULLNAME", "JUDGE", "LAWYER", "PLAINTIFF", "DEFENDANT", "WITNESS",
     "CF", "PIVA", "IBAN", "ADDRESS", "EMAIL", "PEC", "PHONE", "AMOUNT",
     "RG", "TRIBUNAL", "TARGA", "IDCARD", "DRIVING", "CITY", "DATE",
-    "ORG", "DOCID", "CATASTO", "CONTO",
+    "ORG", "DOCID", "CATASTO", "CONTO", "CREDITCARD", "TIME", "AGE", "GENDER",
 }
 
 # breve legenda per i segnaposto il cui uso non e' ovvio dal nome (guida l'LLM a
@@ -49,7 +49,11 @@ ALLOWED_SLOTS = {
 SLOT_HINTS = """  {ORG}     = ragione sociale di una societa'/studio legale/banca (la PARTE, non il tribunale)
   {DOCID}   = codice identificativo di un atto: n. protocollo, n. repertorio/raccolta, n. sentenza
   {CATASTO} = dati catastali di un immobile (foglio, particella, subalterno)
-  {CONTO}   = numero di conto corrente (diverso dall'IBAN)"""
+  {CONTO}   = numero di conto corrente (diverso dall'IBAN)
+  {CREDITCARD} = numero di carta di credito (verbali di frode, contratti con pagamento a mezzo carta)
+  {TIME}    = orario, da usare dopo la parola "ore" (es. "alle ore {TIME}") nei verbali
+  {AGE}     = eta' di una persona; il segnaposto porta gia' con se' la parola "anni"
+  {GENDER}  = sesso/genere come compare nei moduli anagrafici e nei verbali di identificazione"""
 
 DOC_TYPES = [
     "atto di citazione", "comparsa di costituzione e risposta", "sentenza civile",

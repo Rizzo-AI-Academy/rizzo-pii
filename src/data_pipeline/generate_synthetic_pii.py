@@ -339,6 +339,50 @@ def piva_piece():
 def iban_piece():
     return [(iban_it(), "IBAN")]
 
+def _luhn_check_digit(parziale):
+    """Cifra di controllo di Luhn per un numero privo dell'ultima cifra."""
+    tot = 0
+    for i, c in enumerate(reversed(parziale)):
+        d = int(c)
+        if i % 2 == 0:            # nel numero completo finira' in posizione da raddoppiare
+            d *= 2
+            if d > 9:
+                d -= 9
+        tot += d
+    return (10 - tot % 10) % 10
+
+def creditcard_piece():
+    """Numero di carta con checksum di Luhn VALIDO.
+
+    Stessa logica di CF/PIVA/IBAN: il valore deve superare il proprio controllo
+    matematico, cosi' la rete regex+checksum in produzione lo riconosce davvero.
+    Le cifre sono casuali: nessun numero reale viene mai prodotto."""
+    prefisso = random.choice(["4", "51", "52", "53", "54", "55"])   # circuiti piu' comuni
+    corpo = prefisso + "".join(str(random.randint(0, 9)) for _ in range(15 - len(prefisso)))
+    numero = corpo + str(_luhn_check_digit(corpo))
+    if random.random() < 0.7:                      # come compare su estratti conto e atti
+        numero = " ".join(numero[i:i + 4] for i in range(0, 16, 4))
+    return [(numero, "CREDITCARDNUMBER")]
+
+def time_piece():
+    """Ora del giorno. Si tagga il solo orario: 'ore' resta contesto, come per il
+    tribunale (il termine non e' il dato personale)."""
+    h = random.randint(6, 21)
+    m = random.choice([0, 5, 10, 15, 20, 30, 40, 45, 50])
+    return [(random.choice([f"{h:02d}:{m:02d}", f"{h}:{m:02d}", f"{h}.{m:02d}"]), "TIME")]
+
+def age_piece():
+    """Eta'. Il numero e' l'entita', 'anni' e' il contesto che la introduce o la segue."""
+    n = str(random.randint(18, 92))
+    if random.random() < 0.7:
+        return [(n, "AGE"), (" anni", None)]
+    return [("anni ", None), (n, "AGE")]
+
+def gender_piece():
+    """Sesso/genere come compare negli atti e nei moduli anagrafici."""
+    return [(random.choice(["maschile", "femminile", "M", "F", "uomo", "donna",
+                            "maschio", "femmina"]), "GENDER")]
+
 # stem per ragioni sociali (nomi di fantasia, nessun riferimento reale)
 COMPANY_STEMS = ["Adriatica", "Meridionale", "Lombarda", "Tirrenica", "Alfa", "Beta",
                  "Costruzioni Moderne", "Logistica Veloce", "Tecnoimpianti",
@@ -522,6 +566,8 @@ SLOTS = {
     "DRIVING": driving_piece, "CITY": city_piece, "DATE": date_piece,
     "ORG": org_piece, "DOCID": docid_piece, "CATASTO": catasto_piece,
     "CONTO": conto_piece, "PROVINCE": province_piece,
+    "CREDITCARD": creditcard_piece, "TIME": time_piece, "AGE": age_piece,
+    "GENDER": gender_piece,
     "NAMELIST": name_list, "ORGLIST": org_list, "MIXEDLIST": mixed_list,
 }
 
