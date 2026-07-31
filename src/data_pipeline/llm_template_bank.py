@@ -263,12 +263,25 @@ def non_latin_char(text):
     return None
 
 
+def normalizza_escape(text):
+    r"""Converte gli escape LETTERALI (i due caratteri '\' + 'n') in veri a capo.
+
+    Il modello a volte scrive la sequenza invece dell'a capo. Non e' un problema
+    estetico: iniettando un valore subito dopo, il tokenizzatore incolla la 'n'
+    all'inizio dell'entita' ('\n09/06/1965' -> token 'n09'), che resta O mentre il
+    resto dell'entita' diventa I-DATE. Ne esce una riga con BIO malformato (I- senza
+    B-), inutilizzabile in training. Misurato: 1 template su 237 conteneva la
+    sequenza e ha rotto 721 righe su 200.000."""
+    return text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+
+
 def clean_and_validate(text):
     """Pulisce il markdown, verifica i segnaposto e scarta i template con PII inline
     o con caratteri non latini."""
     if not text:
         return None
     text = re.sub(r"^```.*?\n|```$", "", text.strip(), flags=re.MULTILINE).strip()
+    text = normalizza_escape(text)
     slots = set(SLOT_RE.findall(text))
     if not slots:
         return None                       # nessun segnaposto -> inutile
