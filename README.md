@@ -526,6 +526,22 @@ _The mascot, a hedgehog, guards the document and **stays inside the EU**. Built 
 
 ---
 
+## Star History
+
+<div align="center">
+
+<a href="https://star-history.com/#Rizzo-AI-Academy/rizzo-pii&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Rizzo-AI-Academy/rizzo-pii&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Rizzo-AI-Academy/rizzo-pii&type=Date" />
+    <img src="https://api.star-history.com/svg?repos=Rizzo-AI-Academy/rizzo-pii&type=Date" alt="Star History Chart" width="600" />
+  </picture>
+</a>
+
+</div>
+
+---
+
 ### References
 
 1. mmBERT: a multilingual ModernBERT encoder. JHU-CLSP, `jhu-clsp/mmBERT-base`, Hugging Face.
