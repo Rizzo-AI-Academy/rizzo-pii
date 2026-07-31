@@ -16,7 +16,11 @@ for pkg in ("transformers", "tokenizers", "safetensors", "huggingface_hub", "reg
 # modello + asset grafici impacchettati (app.py li risolve via _resource_path / _MEIPASS)
 datas += [("models/rizzo-pii-0.3B-v1.2.0", "pii_model")]
 datas += [("src/app/assets", "assets")]
-hiddenimports += ["fitz", "flask", "sklearn.utils._typedefs"]
+# modelli OCR ONNX (~25 MB): impacchettati, cosi' l'app non va MAI in rete a scaricarli.
+# Popolare la cartella con:  python -m ocr.fetch_models   (vedi src/app/ocr_models/README.md)
+datas += [("src/app/ocr_models", "ocr_models")]
+hiddenimports += ["fitz", "flask", "sklearn.utils._typedefs",
+                  "onnxruntime", "rapidocr", "cv2"]
 
 excludes = [
     "tensorflow", "tensorflow_intel", "tf_keras", "keras", "jax", "jaxlib", "flax",

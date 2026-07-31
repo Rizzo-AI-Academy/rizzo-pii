@@ -29,5 +29,10 @@ python-dotenv
 flask
 pymupdf
 
+# OCR for scanned PDFs — CPU only (PP-OCR on ONNXRuntime, ~25 MB of models).
+# No GPU, no torch. Optional: without it the app just skips scanned pages.
+rapidocr
+onnxruntime
+
 # Loss / metric plots produced by the training script
 matplotlib
