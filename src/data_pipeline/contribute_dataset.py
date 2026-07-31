@@ -453,7 +453,9 @@ def main():
             sys.exit(f"ERRORE: file inesistente: {p}")
         n = sum(1 for _ in open(p, encoding="utf-8"))
         print(f"Carico file esistente ({n} righe): {p}")
-        upload_pr(p, f"contributions/{p.name}", "upload", n, "-", args.repo)
+        # se il contributore passa anche --handle, il commit porta il suo nome invece
+        # del generico "upload" (il file e' gia' stato generato in un run precedente)
+        upload_pr(p, f"contributions/{p.name}", args.handle or "upload", n, "-", args.repo)
         return
 
     if args.n < 1 or args.n > MAX_N:
