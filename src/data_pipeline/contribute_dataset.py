@@ -263,8 +263,10 @@ def gen_new_templates(per_type, boost, n_doc_types=None):
     for doc_type in doc_types:
         for _ in range(per_type):
             done += 1
+            persona, stile = tb.registro(doc_type)
             prompt = tb.PROMPT.format(doc_type=doc_type, slot_list=slot_list,
-                                      slot_hints=tb.SLOT_HINTS) + hint
+                                      slot_hints=tb.SLOT_HINTS,
+                                      persona=persona, stile=stile) + hint
             text = tb.clean_and_validate(tb.call_llm(prompt))
             if text:
                 out.append(text)
