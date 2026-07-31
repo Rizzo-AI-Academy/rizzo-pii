@@ -241,13 +241,14 @@ def gen_new_templates(per_type, boost):
 
 
 def skeleton_key(rec):
-    """Impronta della STRUTTURA della riga: il testo con ogni entita' sostituita dalla sua
+    """Impronta della SUPERFICIE della riga: il testo con ogni entita' sostituita dalla sua
     label, normalizzato negli spazi. Due righe con lo stesso scheletro sono la stessa frase
-    con dentro valori diversi.
+    con dentro gli stessi valori non etichettati: leggerle una dopo l'altra e' leggere due
+    volte la stessa cosa.
 
     E' un'impronta a 8 byte e non lo scheletro intero: su centinaia di migliaia di righe
     l'insieme degli scheletri per esteso non starebbe in memoria, e cio' che serve e' solo
-    sapere se una struttura e' gia' passata."""
+    sapere se una riga cosi' e' gia' passata."""
     st = rec["source_text"]
     pezzi, pos = [], 0
     for e in sorted(rec["entities"], key=lambda e: e["start"]):
@@ -261,27 +262,58 @@ def skeleton_key(rec):
     return hashlib.blake2b(scheletro.encode(), digest_size=8).digest()
 
 
-# tentativi consecutivi senza una struttura nuova dopo i quali si considera esaurita la
-# banca di template. La generazione e' rapidissima (decine di migliaia di righe al
-# secondo), quindi conviene una soglia larga: e' preferibile spendere qualche secondo in
-# piu' che fermarsi presto e consegnare meno strutture di quelle disponibili.
-STOP_SATURAZIONE = 50_000
+def structure_key(rec):
+    """Impronta della STRUTTURA DI ETICHETTE: template di origine + sequenza delle label
+    nell'ordine in cui compaiono.
+
+    Serve perche' lo scheletro conta come "struttura nuova" anche una variazione di testo
+    NON etichettato. Misurato sui 36 template built-in, 3.000 tentativi ciascuno: 3.805
+    scheletri distinti ma solo 574 sequenze di label, e la maggior parte dei template ne ha
+    UNA sola -- due dei loro scheletri differiscono per il nome del tribunale iniettato
+    ("Corte d'Appello di Carrara" invece di "Procura della Repubblica di Civitavecchia"),
+    cioe' sono la stessa riga con un valore diverso.
+
+    Questa e' quindi la grana giusta per dire "quante cose diverse c'e' dentro", e le righe
+    che condividono la struttura si tengono a numero chiuso: qualche variante di valori
+    insegna al modello che la label non dipende dal valore, mille sono zavorra."""
+    labels = "|".join(e["label"] for e in sorted(rec["entities"], key=lambda e: e["start"]))
+    return hashlib.blake2b(f"{rec['template_id']}#{labels}".encode(),
+                           digest_size=8).digest()
+
+
+# Rifiuti consecutivi dopo i quali un template si considera esaurito e smette di essere
+# pescato. Senza questo l'ultima parte della generazione e' quasi tutta lavoro buttato: i
+# template le cui strutture sono gia' piene continuano a uscire (sono la maggioranza) e ogni
+# loro riga viene costruita per essere scartata. Con l'uscita per template la generazione si
+# ferma da sola quando sono esauriti tutti, e il numero di righe e' quello che la banca sa
+# dare. La soglia e' un compromesso: troppo bassa dichiara esaurito un template che avrebbe
+# ancora strutture rare, troppo alta spreca tentativi.
+STOP_TEMPLATE = 2_000
 
 
 def generate(n, seed, handle, per_type, offline, boost, out_path=None,
-             max_per_skeleton=1):
-    """Genera esempi sintetici fino ad averne n con struttura DISTINTA.
+             max_per_structure=25):
+    """Genera esempi sintetici tenendo solo le righe che aggiungono qualcosa.
 
     Perche' non semplicemente n righe: il testo di ogni riga e' unico (i valori cambiano
-    sempre), quindi "0 duplicati" non dice niente sulla varieta'. Cio' che il modello vede
-    e' lo SCHELETRO -- il testo con le entita' sostituite dalle label -- e su 200.000 righe
-    da un pool di 273 template gli scheletri distinti misurati erano 57.093: il 71% del
-    file ripeteva una struttura gia' presente, cioe' era volume, non informazione. Con
-    max_per_skeleton=1 ogni struttura entra una volta sola e il file contiene solo cio' che
-    aggiunge qualcosa; alzandolo si ammettono piu' valori sulla stessa struttura.
+    sempre), quindi "0 duplicati" non dice niente sulla varieta'. Misurato su una
+    contribuzione da 200.000 righe con 273 template: 57.093 scheletri distinti, cioe' il 71%
+    del file ripeteva una riga gia' presente -- 800 MB di zavorra che allunga ogni download
+    e ogni epoca di training senza insegnare niente di nuovo.
 
-    Se la banca di template si esaurisce prima di arrivare a n, la generazione si ferma e
-    lo dichiara: il numero di righe consegnabili e' un RISULTATO della banca, non una scelta.
+    Due filtri, a due grane diverse, perche' "uguale" ha due sensi:
+      - nessuno SCHELETRO ripetuto: due righe non possono avere lo stesso testo a meno dei
+        valori etichettati. E' la ripetizione visibile a chi legge il file.
+      - al massimo max_per_structure righe per STRUTTURA DI ETICHETTE (template + sequenza
+        delle label). Serve perche' lo scheletro conta come nuovo anche il cambio di un
+        valore non etichettato: sui built-in, 3.805 scheletri corrispondevano a 574
+        strutture vere. Qualche variante di valori sulla stessa struttura e' utile -- il
+        modello impara che la label non dipende dal valore -- ma oltre una manciata e'
+        volume. Con 1 si tiene una sola riga per struttura.
+
+    Se la banca si esaurisce prima di arrivare a n, la generazione si ferma e lo dichiara:
+    il numero di righe consegnabili e' un RISULTATO della banca, non una scelta di chi
+    genera.
 
     Con out_path le righe vengono SCRITTE MANO A MANO invece di essere accumulate in
     memoria. Serve: MAX_N e' 200.000 e con template lunghi (documenti interi, non frasi)
@@ -312,15 +344,33 @@ def generate(n, seed, handle, per_type, offline, boost, out_path=None,
     n_new = len(new_templates)
     rows, label_counts, bad = ([] if out_path is None else None), {}, 0
     n_ok = n_da_nuovi = 0
-    visti = {}                     # impronta della struttura -> quante volte gia' scritta
-    ripetute = tentativi = a_vuoto = 0
+    scheletri = set()              # superfici gia' scritte: mai due righe identiche a meno
+                                   # dei valori etichettati
+    strutture = {}                 # struttura di etichette -> quante righe gia' scritte
+    rip_scheletro = rip_struttura = tentativi = 0
+    rifiuti = {}                   # tid -> rifiuti consecutivi (per l'uscita del template)
+    attivi = list(idx_pool)
+    pesi = list(weights) if weights else None
     out = None
     if out_path is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out = open(out_path, "w", encoding="utf-8")
-    while n_ok < n and a_vuoto < STOP_SATURAZIONE:
+    def esaurisci(tid):
+        """Toglie dal sorteggio un template che non da' piu' niente di nuovo."""
+        nonlocal attivi, pesi
+        posizione = attivi.index(tid)
+        attivi = attivi[:posizione] + attivi[posizione + 1:]
+        if pesi is not None:
+            pesi = pesi[:posizione] + pesi[posizione + 1:]
+
+    def rifiuta(tid):
+        rifiuti[tid] = rifiuti.get(tid, 0) + 1
+        if rifiuti[tid] >= STOP_TEMPLATE:
+            esaurisci(tid)
+
+    while n_ok < n and attivi:
         tentativi += 1
-        tid = random.choices(idx_pool, weights=weights, k=1)[0]
+        tid = random.choices(attivi, weights=pesi, k=1)[0]
         text, entities = gen.build_example(tid, templates)
         tokens, bio = gen.to_bio(text, entities)
         rec = {
@@ -339,15 +389,21 @@ def generate(n, seed, handle, per_type, offline, boost, out_path=None,
         err = _validate_record(rec)
         if err:
             bad += 1
-            a_vuoto += 1
+            rifiuta(tid)
             continue
-        impronta = skeleton_key(rec)
-        if visti.get(impronta, 0) >= max_per_skeleton:
-            ripetute += 1
-            a_vuoto += 1
+        scheletro = skeleton_key(rec)
+        if scheletro in scheletri:                  # la stessa riga, di nuovo
+            rip_scheletro += 1
+            rifiuta(tid)
             continue
-        visti[impronta] = visti.get(impronta, 0) + 1
-        a_vuoto = 0
+        struttura = structure_key(rec)
+        if strutture.get(struttura, 0) >= max_per_structure:
+            rip_struttura += 1                      # struttura gia' vista abbastanza volte
+            rifiuta(tid)
+            continue
+        scheletri.add(scheletro)
+        strutture[struttura] = strutture.get(struttura, 0) + 1
+        rifiuti[tid] = 0
         for e in entities:
             label_counts[e["label"]] = label_counts.get(e["label"], 0) + 1
         n_ok += 1
@@ -363,14 +419,17 @@ def generate(n, seed, handle, per_type, offline, boost, out_path=None,
 
     if bad:
         print(f"  scartati {bad} esempi non validi (self-check)")
-    print(f"  strutture distinte scritte: {n_ok} su {tentativi} tentativi "
-          f"({100 * n_ok / max(1, tentativi):.1f}%); {ripetute} righe scartate perche' "
-          f"ripetevano una struttura gia' presente")
+    print(f"  righe tenute: {n_ok} su {tentativi} tentativi "
+          f"({100 * n_ok / max(1, tentativi):.1f}%) | scartate {rip_scheletro} righe "
+          f"identiche a una gia' scritta e {rip_struttura} oltre il tetto di "
+          f"{max_per_structure} per struttura")
+    print(f"  strutture di etichette distinte: {len(strutture)} "
+          f"({n_ok / max(1, len(strutture)):.1f} righe per struttura)")
     if n_ok < n:
-        print(f"  BANCA ESAURITA: chieste {n} righe a struttura distinta, ottenute {n_ok}. "
-              f"{STOP_SATURAZIONE} tentativi di fila non hanno prodotto una struttura "
-              f"nuova.\n  Per averne di piu' serve allargare la banca di template "
-              f"(llm_template_bank.py), non alzare --n.")
+        print(f"  BANCA ESAURITA: chieste {n} righe, ottenute {n_ok}. Tutti i "
+              f"{len(templates)} template hanno smesso di produrre righe nuove "
+              f"({STOP_TEMPLATE} rifiuti di fila ciascuno).\n  Per averne di piu' serve "
+              f"allargare la banca di template (llm_template_bank.py), non alzare --n.")
     return rows, label_counts, n_new, n_ok, n_da_nuovi
 
 
@@ -430,11 +489,12 @@ def main():
                     help="genera solo in locale, non apre la PR")
     ap.add_argument("--upload-file", metavar="PATH",
                     help="non rigenerare: carica un .jsonl gia' prodotto (push veloce, niente Gemini)")
-    ap.add_argument("--max-per-skeleton", type=int, default=1, metavar="K",
-                    help="quante righe al massimo possono condividere la stessa STRUTTURA "
-                         "(default 1: nessuna struttura ripetuta). Il testo di ogni riga e' "
-                         "sempre unico, ma su 200.000 righe da 273 template il 71% "
-                         "ripeteva uno scheletro gia' presente: volume, non informazione")
+    ap.add_argument("--max-per-structure", type=int, default=25, metavar="K",
+                    help="quante righe al massimo possono condividere la stessa STRUTTURA DI "
+                         "ETICHETTE (template + sequenza delle label). Default 25: qualche "
+                         "variante di valori insegna che la label non dipende dal valore, "
+                         "oltre e' volume. Le righe identiche a meno dei valori etichettati "
+                         "sono comunque escluse sempre")
     ap.add_argument("--repo", default=REPO_ID, help="dataset di destinazione (override)")
     args = ap.parse_args()
 
@@ -472,7 +532,7 @@ def main():
     tmp_path = ROOT / "dataset" / "contributions" / f".{handle}-{stamp}.parziale.jsonl"
     _, counts, n_new, n_ok, from_new = generate(
         args.n, seed, handle, args.per_type, args.offline, boost, out_path=tmp_path,
-        max_per_skeleton=args.max_per_skeleton)
+        max_per_structure=args.max_per_structure)
     if n_new:
         print(f"\n{from_new}/{n_ok} esempi da template NUOVI di Gemini.")
     print(f"Generati {n_ok} esempi validi. Entita' per label:")
