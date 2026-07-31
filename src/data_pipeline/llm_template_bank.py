@@ -364,9 +364,13 @@ def find_stray_names(text):
             continue
         if any(_cap(w).lower() in lessico for w in corsa):        # "Mario Rossi"
             stray.append(" ".join(corsa))
-        elif intro in CONTESTO_FORTE:                             # "sottoscritto Sferrazza"
+        # il nome di una persona sta in 2-3 parole: una corsa piu' lunga e' la
+        # denominazione di qualcos'altro (un'offerta commerciale, un ufficio, un titolo di
+        # sezione), e chi la introduce puo' avere un altro senso -- in "l'offerta
+        # sottoscritta Mobile Plan Pro" il participio non introduce nessun sottoscritto
+        elif intro in CONTESTO_FORTE and len(corsa) <= 3:         # "sottoscritto Sferrazza"
             stray.append(f"{intro} {' '.join(corsa)}")
-        elif intro in CONTESTO_RUOLO and len(corsa) >= 2:         # "intestatario L. Marinetti"
+        elif intro in CONTESTO_RUOLO and 2 <= len(corsa) <= 3:    # "intestatario L. Marinetti"
             stray.append(f"{intro} {' '.join(corsa)}")
         i = j + 1
     return stray
