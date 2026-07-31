@@ -240,42 +240,28 @@ def gen_new_templates(per_type, boost):
     return out
 
 
-def skeleton_key(rec):
-    """Impronta della SUPERFICIE della riga: il testo con ogni entita' sostituita dalla sua
-    label, normalizzato negli spazi. Due righe con lo stesso scheletro sono la stessa frase
-    con dentro gli stessi valori non etichettati: leggerle una dopo l'altra e' leggere due
-    volte la stessa cosa.
-
-    E' un'impronta a 8 byte e non lo scheletro intero: su centinaia di migliaia di righe
-    l'insieme degli scheletri per esteso non starebbe in memoria, e cio' che serve e' solo
-    sapere se una riga cosi' e' gia' passata."""
-    st = rec["source_text"]
-    pezzi, pos = [], 0
-    for e in sorted(rec["entities"], key=lambda e: e["start"]):
-        if e["start"] < pos:                     # entita' sovrapposte: la prima vince
-            continue
-        pezzi.append(st[pos:e["start"]])
-        pezzi.append("{" + e["label"] + "}")
-        pos = e["end"]
-    pezzi.append(st[pos:])
-    scheletro = " ".join("".join(pezzi).split())
-    return hashlib.blake2b(scheletro.encode(), digest_size=8).digest()
+def text_key(rec):
+    """Impronta del testo esatto. Serve solo a non scrivere due volte la stessa riga
+    identica: con valori pescati a caso non capita quasi mai, ma costa poco escluderlo."""
+    return hashlib.blake2b(rec["source_text"].encode(), digest_size=8).digest()
 
 
 def structure_key(rec):
-    """Impronta della STRUTTURA DI ETICHETTE: template di origine + sequenza delle label
-    nell'ordine in cui compaiono.
+    """Impronta della STRUTTURA della riga: template di origine + sequenza delle label
+    nell'ordine in cui compaiono. E' la grana giusta per dire quante cose diverse c'e'
+    dentro un file, e quindi quella su cui mettere un tetto.
 
-    Serve perche' lo scheletro conta come "struttura nuova" anche una variazione di testo
-    NON etichettato. Misurato sui 36 template built-in, 3.000 tentativi ciascuno: 3.805
-    scheletri distinti ma solo 574 sequenze di label, e la maggior parte dei template ne ha
-    UNA sola -- due dei loro scheletri differiscono per il nome del tribunale iniettato
-    ("Corte d'Appello di Carrara" invece di "Procura della Repubblica di Civitavecchia"),
-    cioe' sono la stessa riga con un valore diverso.
+    Non lo scheletro (il testo con le entita' sostituite dalle label): misurato, lo
+    scheletro punisce i template migliori. Un template di bolletta, in cui OGNI valore
+    iniettato e' etichettato, produce 1 solo scheletro su 500 righe -- tutte le sue righe
+    hanno lo stesso testo a meno delle label -- mentre un atto che contiene {TRIBUNAL}, il
+    cui valore iniettato NON e' etichettato, ne produce 343 perche' cambia il nome del
+    tribunale. Filtrando per scheletro il primo avrebbe diritto a una riga e il secondo a
+    venticinque: esattamente al rovescio.
 
-    Questa e' quindi la grana giusta per dire "quante cose diverse c'e' dentro", e le righe
-    che condividono la struttura si tengono a numero chiuso: qualche variante di valori
-    insegna al modello che la label non dipende dal valore, mille sono zavorra."""
+    A parita' di struttura le righe hanno nomi, date, importi e indirizzi tutti diversi, ed
+    e' variazione utile: insegna al modello che la label non dipende dal valore. Utile a
+    dosi piccole, zavorra a dosi grandi -- da qui il tetto."""
     labels = "|".join(e["label"] for e in sorted(rec["entities"], key=lambda e: e["start"]))
     return hashlib.blake2b(f"{rec['template_id']}#{labels}".encode(),
                            digest_size=8).digest()
@@ -301,15 +287,12 @@ def generate(n, seed, handle, per_type, offline, boost, out_path=None,
     del file ripeteva una riga gia' presente -- 800 MB di zavorra che allunga ogni download
     e ogni epoca di training senza insegnare niente di nuovo.
 
-    Due filtri, a due grane diverse, perche' "uguale" ha due sensi:
-      - nessuno SCHELETRO ripetuto: due righe non possono avere lo stesso testo a meno dei
-        valori etichettati. E' la ripetizione visibile a chi legge il file.
-      - al massimo max_per_structure righe per STRUTTURA DI ETICHETTE (template + sequenza
-        delle label). Serve perche' lo scheletro conta come nuovo anche il cambio di un
-        valore non etichettato: sui built-in, 3.805 scheletri corrispondevano a 574
-        strutture vere. Qualche variante di valori sulla stessa struttura e' utile -- il
-        modello impara che la label non dipende dal valore -- ma oltre una manciata e'
-        volume. Con 1 si tiene una sola riga per struttura.
+    Il tetto sta sulla STRUTTURA (template + sequenza delle label): al massimo
+    max_per_structure righe possono condividerla. A parita' di struttura le righe hanno
+    nomi, date, importi e indirizzi tutti diversi -- variazione utile al modello, che
+    impara che la label non dipende dal valore -- ma utile a dosi piccole. Con 1 si tiene
+    una riga per struttura, e il file diventa il puro inventario di cio' che la banca sa
+    dire.
 
     Se la banca si esaurisce prima di arrivare a n, la generazione si ferma e lo dichiara:
     il numero di righe consegnabili e' un RISULTATO della banca, non una scelta di chi
@@ -344,10 +327,9 @@ def generate(n, seed, handle, per_type, offline, boost, out_path=None,
     n_new = len(new_templates)
     rows, label_counts, bad = ([] if out_path is None else None), {}, 0
     n_ok = n_da_nuovi = 0
-    scheletri = set()              # superfici gia' scritte: mai due righe identiche a meno
-                                   # dei valori etichettati
-    strutture = {}                 # struttura di etichette -> quante righe gia' scritte
-    rip_scheletro = rip_struttura = tentativi = 0
+    testi = set()                  # testi gia' scritti: nessuna riga identica due volte
+    strutture = {}                 # struttura -> quante righe gia' scritte
+    rip_testo = rip_struttura = tentativi = 0
     rifiuti = {}                   # tid -> rifiuti consecutivi (per l'uscita del template)
     attivi = list(idx_pool)
     pesi = list(weights) if weights else None
@@ -391,17 +373,17 @@ def generate(n, seed, handle, per_type, offline, boost, out_path=None,
             bad += 1
             rifiuta(tid)
             continue
-        scheletro = skeleton_key(rec)
-        if scheletro in scheletri:                  # la stessa riga, di nuovo
-            rip_scheletro += 1
+        testo = text_key(rec)
+        if testo in testi:                          # la stessa riga identica, di nuovo
+            rip_testo += 1
             rifiuta(tid)
             continue
         struttura = structure_key(rec)
         if strutture.get(struttura, 0) >= max_per_structure:
-            rip_struttura += 1                      # struttura gia' vista abbastanza volte
+            rip_struttura += 1                      # questa struttura ha gia' le sue righe
             rifiuta(tid)
             continue
-        scheletri.add(scheletro)
+        testi.add(testo)
         strutture[struttura] = strutture.get(struttura, 0) + 1
         rifiuti[tid] = 0
         for e in entities:
@@ -420,9 +402,9 @@ def generate(n, seed, handle, per_type, offline, boost, out_path=None,
     if bad:
         print(f"  scartati {bad} esempi non validi (self-check)")
     print(f"  righe tenute: {n_ok} su {tentativi} tentativi "
-          f"({100 * n_ok / max(1, tentativi):.1f}%) | scartate {rip_scheletro} righe "
-          f"identiche a una gia' scritta e {rip_struttura} oltre il tetto di "
-          f"{max_per_structure} per struttura")
+          f"({100 * n_ok / max(1, tentativi):.1f}%) | scartate {rip_testo} righe identiche "
+          f"a una gia' scritta e {rip_struttura} oltre il tetto di {max_per_structure} "
+          f"per struttura")
     print(f"  strutture di etichette distinte: {len(strutture)} "
           f"({n_ok / max(1, len(strutture)):.1f} righe per struttura)")
     if n_ok < n:
@@ -490,11 +472,10 @@ def main():
     ap.add_argument("--upload-file", metavar="PATH",
                     help="non rigenerare: carica un .jsonl gia' prodotto (push veloce, niente Gemini)")
     ap.add_argument("--max-per-structure", type=int, default=25, metavar="K",
-                    help="quante righe al massimo possono condividere la stessa STRUTTURA DI "
-                         "ETICHETTE (template + sequenza delle label). Default 25: qualche "
-                         "variante di valori insegna che la label non dipende dal valore, "
-                         "oltre e' volume. Le righe identiche a meno dei valori etichettati "
-                         "sono comunque escluse sempre")
+                    help="quante righe al massimo possono condividere la stessa STRUTTURA "
+                         "(template + sequenza delle label). Default 25: qualche variante di "
+                         "valori insegna al modello che la label non dipende dal valore, "
+                         "oltre e' volume. Con 1 il file e' l'inventario delle strutture")
     ap.add_argument("--repo", default=REPO_ID, help="dataset di destinazione (override)")
     args = ap.parse_args()
 
