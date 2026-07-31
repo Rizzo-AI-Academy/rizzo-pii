@@ -48,6 +48,11 @@ NON_SONO_NOMI = [
     "Consumo rilevato pari a 3.450 kWh nel periodo di riferimento.",
     "Valutazione finale: Ottimo. Media dei voti 8,5 su 10.",
     "L'offerta sottoscritta Mobile Plan Pro Canone prevede minuti illimitati.",
+    "Gentile Servizio Clienti, chiedo il rimborso del titolo di viaggio.",
+    "Gentile Cliente, la informiamo che la fattura e' disponibile.",
+    "Il presente verbale e' redatto dal sottoscritto Agente accertatore.",
+    "Il Venditore consegna il bene entro il {DATE}.",
+    "La pratica passa al Responsabile del Procedimento entro 10 giorni.",
 ]
 
 # codici e date scritti inline: entita' presenti nel testo ma assenti dalle label

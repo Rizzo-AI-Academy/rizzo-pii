@@ -220,6 +220,16 @@ CONTESTO_RUOLO = {
     "beneficiaria", "dipendente", "lavoratore", "lavoratrice", "paziente", "alunno",
     "alunna", "studente", "studentessa", "cliente", "contraente", "assicurato",
     "assicurata", "delegato", "delegata", "richiedente", "denunciante", "querelante",
+    # gli altri modi italiani di dire "la persona che fa X". Stanno qui e non fra i
+    # contesti forti perche' sono seguiti spesso da un qualificatore maiuscolo ("il
+    # sottoscritto Agente accertatore", "il Venditore"), e perche' una corsa fatta solo
+    # di queste parole e' vocabolario di ruolo, non un nome
+    "agente", "operatore", "funzionario", "responsabile", "incaricato", "accertatore",
+    "verbalizzante", "conducente", "proprietario", "trasgressore", "socio", "abbonato",
+    "utente", "assegnatario", "candidato", "conduttore", "locatore", "locatrice",
+    "venditore", "venditrice", "acquirente", "mandante", "mandatario", "cancelliere",
+    "segretario", "presidente", "amministratore", "custode", "tutore", "genitore",
+    "committente", "appaltatore", "fornitore", "debitore", "creditore", "passeggero",
 }
 TITLES_L = {t.lower() for t in TITLES}
 # le ABBREVIAZIONI di titolo ("Sig.", "Avv.", "Dott.") stanno solo davanti a un nome, e
@@ -227,17 +237,10 @@ TITLES_L = {t.lower() for t in TITLES}
 # un qualificatore ("il Dottore Commercialista"), quindi valgono come ruolo
 CONTESTO_FORTE = (CONTESTO_FORTE | TITLES_L) - CONTESTO_RUOLO
 
-# teste di denominazione istituzionale: "<istituzione> di <Maiuscola>" e' il nome
-# dell'UFFICIO, non una persona -- "Giudice di Pace", "Corte dei Conti", "Corte di
-# Cassazione". Serve perche' diversi cognomi italiani sono anche parole comuni (Pace,
-# Conti, Costa, Villa, Monti) e il solo lessico li leggerebbe come persone: "Giudice di
-# Pace" era 11 dei 12 falsi positivi rimasti su 237 template. Restano invece segnalati
-# "l'avvocato di Bianchi" e "la firma di Rossi": chi introduce non e' un'istituzione.
-ISTITUZIONI = {
-    "giudice", "corte", "tribunale", "procura", "ministero", "agenzia", "commissione",
-    "sezione", "ufficio", "camera", "consiglio", "collegio", "autorita", "direzione",
-    "servizio", "istituto", "azienda", "comune", "provincia", "regione", "prefettura",
-}
+# preposizioni della famiglia di "di": davanti a una maiuscola la rendono un complemento
+# ("Giudice di Pace", "Corte dei Conti") e non un nome. Sostituiscono una lista di
+# istituzioni scritta a mano: la relazione grammaticale vale per qualunque ufficio, la
+# lista sarebbe rimasta indietro al primo dominio nuovo.
 PREPOSIZIONI = {"di", "del", "dello", "della", "dei", "degli", "delle", "d"}
 
 # I segnaposto vanno TOLTI prima di cercare i nomi, ma non lasciando un buco: se al loro
@@ -261,11 +264,18 @@ _LESSICO_PERSONE = None
 
 
 def _lessico_persone():
-    """Nomi propri e cognomi noti al progetto (minuscoli).
+    """(nomi propri, cognomi) noti al progetto, minuscoli e tenuti SEPARATI.
 
     Sono le stesse liste con cui generate_synthetic_pii INIETTA le persone: se il modello
     scrive un nome inline, quasi sempre pesca da questo stesso repertorio di nomi comuni
     italiani. Riusarle qui evita di mantenere un secondo elenco a mano.
+
+    Separati perche' non valgono lo stesso. Un nome proprio ("Giulia", "Aldo") in un
+    documento e' quasi sempre una persona. Un cognome italiano e' spessissimo anche una
+    parola comune -- Gentile, Pace, Costa, Conte, Villa, Monti, Fiore, Guerra, Bianco --
+    e nei documenti amministrativi quelle parole compaiono con la maiuscola per motivi
+    loro: "Gentile Cliente" apre ogni lettera commerciale, "Giudice di Pace" e' un
+    ufficio. Un cognome vale quindi solo se qualcosa lo introduce come persona.
 
     Import pigro e stato del generatore casuale ripristinato: importare
     generate_synthetic_pii esegue random.seed(42) a import-time, e questo script pesca a
@@ -277,11 +287,11 @@ def _lessico_persone():
         try:
             sys.path.insert(0, str(Path(__file__).resolve().parent))
             import generate_synthetic_pii as _g
-            _LESSICO_PERSONE = {w.lower() for w in
-                                _g.MALE_NAMES + _g.FEMALE_NAMES + _g.SURNAMES}
+            _LESSICO_PERSONE = ({w.lower() for w in _g.MALE_NAMES + _g.FEMALE_NAMES},
+                                {w.lower() for w in _g.SURNAMES})
         except Exception as e:                       # pragma: no cover
             print(f"  (lessico dei nomi non caricato: {e}) -> guardia solo per contesto")
-            _LESSICO_PERSONE = set()
+            _LESSICO_PERSONE = (set(), set())
         finally:
             _r.setstate(stato)
     return _LESSICO_PERSONE
@@ -337,7 +347,7 @@ def find_stray_names(text):
     le sue parole."""
     masked = re.sub(r"\{\w+\}", f" {SEGNO_SLOT} ", text)      # i segnaposto fanno barriera
     words = re.findall(r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'.]*", masked)
-    lessico = _lessico_persone()
+    nomi, cognomi = _lessico_persone()
     stray = []
     i = 0
     while i < len(words):
@@ -357,12 +367,21 @@ def find_stray_names(text):
         if all(_cap(w).lower() in CONTESTO_FORTE | CONTESTO_RUOLO for w in corsa):
             i = j + 1
             continue
-        # denominazione di un ufficio: "Giudice di Pace", non una persona di nome Pace
+        # Una preposizione appena prima della corsa la rende un COMPLEMENTO di cio' che
+        # viene prima, non un nome in apposizione: "Giudice di Pace", "agente di Polizia
+        # Locale", "Responsabile del Procedimento" sono denominazioni di uffici, mentre una
+        # persona segue il proprio ruolo senza preposizione in mezzo ("il paziente
+        # Bianchi", "l'intestatario Ludovico Marinetti"). Il nome proprio resta valido
+        # comunque: "la firma di Giulia" e' una persona anche da complemento.
         prec = _confrontabile(words[i - 1])[0] if i else ""
-        if len(corsa) == 1 and prec in PREPOSIZIONI and intro in ISTITUZIONI:
-            i = j + 1
-            continue
-        if any(_cap(w).lower() in lessico for w in corsa):        # "Mario Rossi"
+        complemento = prec in PREPOSIZIONI
+        parole = [_cap(w).lower() for w in corsa]
+        introdotta = intro in CONTESTO_FORTE or intro in CONTESTO_RUOLO
+        if any(p in nomi for p in parole):                        # "Mario Rossi", "Giulia"
+            stray.append(" ".join(corsa))
+        elif complemento:
+            pass
+        elif any(p in cognomi for p in parole) and introdotta:    # "il paziente Bianchi"
             stray.append(" ".join(corsa))
         # il nome di una persona sta in 2-3 parole: una corsa piu' lunga e' la
         # denominazione di qualcos'altro (un'offerta commerciale, un ufficio, un titolo di
