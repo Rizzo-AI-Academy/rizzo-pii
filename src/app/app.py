@@ -246,7 +246,8 @@ MAPPING_ENABLED = _prefs["mapping_enabled"]
 # Rete REGEX + CHECKSUM (affianca il modello)
 # --------------------------------------------------------------------------- #
 def iban_ok(s):
-    s = re.sub(r"\s", "", s).upper()
+    # separatori del formato di stampa (ISO 13616: "IT60 X054 2811 ...") normalizzati
+    s = re.sub(r"[\s.\-]", "", s).upper()
     if not (15 <= len(s) <= 34):
         return False
     r = s[4:] + s[:4]
@@ -320,6 +321,8 @@ DETECTORS = [
     ("CF",
      re.compile(r"\b[A-Za-z]{6}\d{2}[A-Za-z]\d{2}[A-Za-z]\d{3}[A-Za-z]\b"),
      cf_ok, False),
+    # forma compatta, invariata: copre qualsiasi paese, anche fuori dal registro ISO.
+    # Il formato a gruppi lo aggiunge detect_iban() (serve la lunghezza per paese).
     ("IBAN",
      re.compile(r"\b[A-Za-z]{2}\d{2}[A-Za-z0-9]{11,30}\b"),
      iban_ok, True),
@@ -361,9 +364,78 @@ DETECTORS = [
 _URL_TRAIL = ".,;:!?)]}»\"'"
 
 
+# ISO 13616: lunghezza dell'IBAN per paese. Serve a sapere DOVE finisce quando e'
+# scritto a gruppi: indovinare il confine significa inghiottire le parole vicine o
+# fermarsi a meta' lasciando la coda dell'IBAN in chiaro.
+IBAN_LEN = {c[:2]: int(c[2:]) for c in (
+    "AD24 AE23 AL28 AT20 AZ28 BA20 BE16 BG22 BH22 BI27 BR29 BY28 CH21 CR22 CY28 CZ24 "
+    "DE22 DJ27 DK18 DO28 EE20 EG29 ES24 FI18 FK18 FO18 FR27 GB22 GE22 GI23 GL18 GR27 "
+    "GT28 HN28 HR21 HU28 IE22 IL23 IQ23 IS26 IT27 JO30 KW30 KZ20 LB28 LC32 LI21 LT20 "
+    "LU20 LV21 LY25 MC27 MD24 ME22 MK19 MN20 MR27 MT31 MU30 NI28 NL18 NO15 OM23 PK24 "
+    "PL28 PS29 PT25 QA29 RO24 RS22 RU33 SA24 SC31 SD18 SE24 SI19 SK24 SM27 SO23 ST25 "
+    "SV28 TL23 TN24 TR26 UA29 VA22 VG24 XK20 YE30").split()}
+
+# sigla e cifre di controllo attaccate: sono sempre stampate insieme, e pretenderlo
+# evita che "il 17 luglio 2008" o "RO 48 2897 ..." si aggancino come IBAN.
+_IBAN_HEAD = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]{2}\d{2}")
+_IBAN_MAX_SEP = 3                      # separatori di fila (PDF giustificati, tabelle)
+_IBAN_RUN = 5                          # caratteri per gruppo: piu' lunghi sono parole
+
+
+def _iban_char(c):
+    """ASCII: senza isascii() la scansione inghiotte "eta'", "piu'", ..."""
+    return c.isascii() and c.isalnum()
+
+
+def detect_iban(text):
+    """IBAN nel formato di stampa a gruppi ("IT60 X054 2811 ...").
+
+    Dalla sigla del paese consuma esattamente i caratteri previsti da IBAN_LEN,
+    tollerando i separatori; poi decide il mod-97.
+    """
+    ents = []
+    for m in _IBAN_HEAD.finditer(text):
+        n, i = IBAN_LEN.get(m.group()[:2].upper()), m.start()
+        if not n or (i and text[i - 1].isalnum()):
+            continue
+        chars, sep, run, nl, grp, start = [], 0, 0, 0, False, i
+        while i < len(text) and len(chars) < n:
+            c = text[i]
+            if _iban_char(c):
+                chars.append(c)
+                run += 1
+                sep = 0
+            elif sep < _IBAN_MAX_SEP and run <= _IBAN_RUN and (c in ".-" or c.isspace()):
+                sep, run, grp = sep + 1, 0, True
+                nl += c.isspace() and c not in " \t\u00a0"
+                if nl > 1:
+                    break              # un IBAN va a capo una volta; una colonna a ogni cella
+            else:
+                break
+            i += 1
+        if len(chars) < n or (i < len(text) and _iban_char(text[i])):
+            continue                    # troncato, oppure il codice prosegue oltre
+        if grp:
+            g = [x for x in re.split(r"[\s.\-]+", text[start:i]) if x]
+            if len(set(map(len, g[:-1]))) > 1 or len(g[-1]) > len(g[0]):
+                continue                # gruppi disuguali: e' prosa, non un IBAN stampato
+        if iban_ok(text[start:i]):
+            ents.append({"label": "IBAN", "start": start, "end": i,
+                         "score": 1.0, "validated": True, "source": "regex"})
+    # due candidati sovrapposti: uno e' l'artefatto di una scansione partita da un codice
+    # vicino, ma quale dei due non e' decidibile dal testo. Si maschera l'unione, perche'
+    # scartarne uno lascia in chiaro un pezzo dell'altro sotto un [IBAN_1] rassicurante.
+    ents.sort(key=lambda e: e["start"])
+    for a, b in zip(ents, ents[1:]):
+        if b["start"] < a["end"]:
+            b["start"], b["end"] = a["start"], max(a["end"], b["end"])
+            a["end"] = a["start"]       # assorbito in b
+    return [e for e in ents if e["end"] > e["start"]]
+
+
 def detect_regex(text):
     """Entita' della rete regex. validated=True solo quando il checksum passa."""
-    ents = []
+    ents = detect_iban(text)
     for label, rx, validator, strict in DETECTORS:
         for m in rx.finditer(text):
             start, end = m.start(), m.end()
@@ -1995,6 +2067,42 @@ try{const m=localStorage.getItem('pii_map');if(m){MAP=JSON.parse(m);
 </html>
 """
 
+
+def _self_test():
+    """Rete regex/checksum: `python src/app/app.py --self-test`."""
+    def span(t):                       # cio' che l'utente vede davvero, dopo _merge
+        e = [x for x in _merge(detect_regex(t), t) if x["label"] == "IBAN"]
+        return t[e[0]["start"]:e[0]["end"]] if e else None
+
+    IB = "IT60X0542811101000000123456"
+    grp = lambda k, sep=" ": sep.join(IB[i:i + k] for i in range(0, len(IB), k))
+    acapo = "\n".join(grp(4).rsplit(" ", 1))       # spezzato a fine riga, come nei PDF
+    # o esce per intero, o non esce: mai un pezzo, la coda resterebbe in chiaro
+    for v in (IB, IB.lower(), grp(4), grp(4).lower(), grp(4, "-"), grp(4, "\u00a0"),
+              grp(4, "   "), grp(5), acapo, "IT60-X054 2811-1010.0000 0123 456",
+              "MA64011519000001205000534921"):     # paese fuori dal registro ISO
+        assert span("Bonifico su %s al ricorrente." % v) == v, v
+    for t in ("Codice IT99 X999 9999 9999 9999 9999 999 da verificare.",   # checksum ko
+              "Come da mandato il 17 luglio 2008 conferito a Mario Rossi.",
+              "Prot. LV94 et\u00e0 pi\u00f9 attivita del 2025.",   # l'alfabeto IBAN e' ASCII
+              "Il SA 67 ha deliberato in data 21/12/2008 la ratifica.",  # prosa
+              "Prot. IT60 X0542 811 1010 0000 0123 456 in atti.",   # gruppi disuguali
+              "Codici\nAT29\n2914\n1777\n6317\n0669\n",   # colonna di tabella, non un IBAN
+              "Codice IT96 3B8J I6WA Q9YI    KB8S ASPB 8JO in atti.",   # 4 separatori: il
+              # prefisso fin li' passa il mod-97, ma e' mezzo IBAN e non va mascherato
+              "Codice commessa GR14 0172 7402 1280 riferimento interno.",
+              "Codice %s7890 interno." % IB):
+        assert span(t) is None, t
+    # un codice vicino non deve troncare l'IBAN: ne uscirebbe un [IBAN_1] con la coda in
+    # chiaro, cioe' il contrario di quello che l'utente crede di vedere
+    HU = "HU26 ED40 LPFN GL54 NKH1 X8UD SV92"      # un gruppo interno ha la forma di sigla
+    for t, v in (("P. IVA IT77781880495 bonifico su %s entro 30 giorni." % grp(4), grp(4)),
+                 ("Si dispone il pagamento sul conto AL56 %s intestato." % acapo, acapo),
+                 ("Bonifico su %s al ricorrente." % HU, HU)):
+        assert v in (span(t) or ""), t
+    print("self-test: OK")
+
+
 if __name__ == "__main__":
     import argparse as _ap
     _p = _ap.ArgumentParser(description="Rizzo PII — server locale di anonimizzazione.")
@@ -2004,7 +2112,13 @@ if __name__ == "__main__":
                     help="tag PII da NON anonimizzare, es. AGE,GENDER (default da env/prefs.json)")
     _p.add_argument("--no-mapping", action="store_true",
                     help="anonimizzazione definitiva: non costruire il dizionario di ripristino")
+    _p.add_argument("--self-test", action="store_true",
+                    help="verifica la rete regex/checksum ed esce (non avvia il server)")
     _args = _p.parse_args()
+
+    if _args.self_test:
+        _self_test()
+        sys.exit(0)
 
     if _args.exclude_tags is not None:
         EXCLUDED_TAGS = server_config.parse_tag_list(_args.exclude_tags)

@@ -5,6 +5,43 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-07-31 — IBAN a gruppi: la rete checksum non lo vedeva (`src/app/app.py`)
+
+La regex IBAN pretende 11-30 caratteri **contigui**, quindi un IBAN stampato a gruppi di 4
+(`IT60 X054 2811 1010 0000 0123 456`, il formato di fatture e atti) non veniva mai
+matchato: restava solo il modello, che sui codici lunghi frammenta. Con `rizzo-pii-0.3B` su
+200 frasi il testo "anonimizzato" conteneva l'IBAN in chiaro **200 volte su 200**, in media
+21 caratteri su 27, con `[IBAN_1]` mostrato all'utente.
+
+Il detector storico resta e continua a coprire la forma compatta di qualsiasi paese; il
+formato a gruppi lo aggiunge `detect_iban()`, che dalla sigla del paese consuma esattamente
+i caratteri previsti dalla tabella ISO 13616 (89 paesi), pretende **gruppi di lunghezza
+uniforme** e infine valida il mod-97: le due condizioni insieme evitano sia di fermarsi a
+metà dell'IBAN sia di sconfinare nella prosa vicina. Quando due candidati si sovrappongono
+maschera l'**unione**, perché scartarne uno lascerebbe in chiaro un pezzo dell'altro.
+
+Misurato: **200 → 0** fughe sulle frasi e **50 → 0** su documenti multi-chunk; 89 paesi ×
+10 spaziature reali (gruppi di 4 e 5, spazio singolo, doppio e triplo, `U+00A0`, tab, punto,
+trattino, a capo, minuscolo) senza span parziali né mancati; nessuna regressione rispetto al
+codice attuale su 30k confronti. Verifica: `python src/app/app.py --self-test` (richiede il
+modello presente, come l'app). Nessun impatto sul training.
+
+Limiti noti: quando l'IBAN vero non produce un candidato — forma non prevista (più di tre
+separatori di fila, due a capo, gruppi disuguali, un carattere attaccato) oppure paese fuori
+dal registro scritto a gruppi — e ha davanti un codice di quattro caratteri che inizia per
+sigla ISO, può uscire uno span parziale: lascia in chiaro la coda dell'IBAN e può far scartare
+da `_merge` un'entità sovrapposta di un altro tag. Misurato: ~0,3% dei documenti costruiti
+apposta così, 2 su 300k documenti realistici. Su 100k
+documenti amministrativi sintetici, ~0,03% contiene un codice a gruppi uniformi che supera il
+mod-97 per coincidenza e viene redatto: è sovra-redazione, non una fuga, ed è il costo
+inerente di un controllo basato solo sul checksum. Se un IBAN e una carta sono adiacenti
+**senza parole in mezzo**, la regex della carta ingloba la cifra finale dell'IBAN e `_merge`,
+che scarta in blocco, ne perde una: prima di questa modifica perdeva l'IBAN (26 caratteri su
+27 in chiaro), adesso perde la carta. Il difetto è della regex della carta e va chiuso lì;
+0 su sette layout con etichetta o punteggiatura.
+
+---
+
 ## 2026-06-30 — Porta del backend 5000 → 5005 (conflitto AirPlay su macOS)
 
 Gli utenti macOS vedevano una **pagina bianca**: la porta **5000** è occupata di default
