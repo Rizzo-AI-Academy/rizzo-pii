@@ -398,8 +398,12 @@ def write_local(rows, out_path):
     return out_path
 
 
-def upload_pr(local_path, path_in_repo, handle, n, seed, repo_id):
-    """Carica il file aprendo una Pull Request sul dataset HF."""
+def upload_pr(local_path, path_in_repo, handle, n, seed, repo_id, descrizione=None):
+    """Carica il file aprendo una Pull Request sul dataset HF.
+
+    'descrizione' e' il corpo della PR: serve a spiegare al maintainer cosa contiene
+    quel lotto (tipi di documento, tag rinforzati, come e' stato verificato). Senza,
+    si usa il testo generico."""
     try:
         from huggingface_hub import HfApi
     except ImportError:
@@ -424,7 +428,7 @@ def upload_pr(local_path, path_in_repo, handle, n, seed, repo_id):
         repo_id=repo_id,
         repo_type="dataset",
         commit_message=commit,
-        commit_description=(
+        commit_description=descrizione or (
             "Dati 100% sintetici generati con src/data_pipeline/contribute_dataset.py "
             "(principio 'LLM autore, codice etichettatore', checksum CF/PIVA/IBAN validi). "
             "Nessuna PII reale."),
@@ -461,7 +465,17 @@ def main():
     ap.add_argument("--upload-file", metavar="PATH",
                     help="non rigenerare: carica un .jsonl gia' prodotto (push veloce, niente Gemini)")
     ap.add_argument("--repo", default=REPO_ID, help="dataset di destinazione (override)")
+    ap.add_argument("--pr-description", metavar="PATH",
+                    help="file di testo con il corpo della Pull Request: spiega al "
+                         "maintainer cosa contiene il lotto")
     args = ap.parse_args()
+
+    descrizione = None
+    if args.pr_description:
+        p_desc = Path(args.pr_description)
+        if not p_desc.is_file():
+            sys.exit(f"ERRORE: file di descrizione inesistente: {p_desc}")
+        descrizione = p_desc.read_text(encoding="utf-8")
 
     # scorciatoia: ri-carica un file gia' generato (utile per ritentare il push)
     if args.upload_file:
@@ -472,7 +486,8 @@ def main():
         print(f"Carico file esistente ({n} righe): {p}")
         # se il contributore passa anche --handle, il commit porta il suo nome invece
         # del generico "upload" (il file e' gia' stato generato in un run precedente)
-        upload_pr(p, f"contributions/{p.name}", args.handle or "upload", n, "-", args.repo)
+        upload_pr(p, f"contributions/{p.name}", args.handle or "upload", n, "-", args.repo,
+                  descrizione)
         return
 
     if args.n < 1 or args.n > MAX_N:
@@ -518,7 +533,8 @@ def main():
         print("\n(--no-upload) Nessun caricamento. Rilancia senza --no-upload per aprire la PR.")
         return
 
-    upload_pr(local_path, f"contributions/{fname}", handle, len(rows), seed, args.repo)
+    upload_pr(local_path, f"contributions/{fname}", handle, len(rows), seed, args.repo,
+              descrizione)
 
 
 if __name__ == "__main__":
