@@ -26,12 +26,13 @@ import re
 import sys
 from pathlib import Path
 
-import fitz  # PyMuPDF
 import torch
 from flask import (Flask, jsonify, render_template_string, request,
                    send_from_directory)
 
+import pdf_text
 import server_config
+from pii_regex import detect_regex
 from transformers import pipeline
 
 
@@ -87,126 +88,6 @@ print("Modello pronto.")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
-
-
-# --------------------------------------------------------------------------- #
-# Rete REGEX + CHECKSUM (affianca il modello)
-# --------------------------------------------------------------------------- #
-def iban_ok(s):
-    s = re.sub(r"\s", "", s).upper()
-    if not (15 <= len(s) <= 34):
-        return False
-    r = s[4:] + s[:4]
-    try:
-        n = int("".join(str(ord(c) - 55) if c.isalpha() else c for c in r))
-    except ValueError:
-        return False
-    return n % 97 == 1
-
-
-def piva_ok(p):
-    p = re.sub(r"\D", "", p)
-    if len(p) != 11:
-        return False
-    t = 0
-    for i, c in enumerate(map(int, p[:10])):
-        if i % 2 == 0:
-            t += c
-        else:
-            x = c * 2
-            t += x - 9 if x > 9 else x
-    return (10 - t % 10) % 10 == int(p[10])
-
-
-_CF_ODD = {"0": 1, "1": 0, "2": 5, "3": 7, "4": 9, "5": 13, "6": 15, "7": 17, "8": 19,
-           "9": 21, "A": 1, "B": 0, "C": 5, "D": 7, "E": 9, "F": 13, "G": 15, "H": 17,
-           "I": 19, "J": 21, "K": 2, "L": 4, "M": 18, "N": 20, "O": 11, "P": 3, "Q": 6,
-           "R": 8, "S": 12, "T": 14, "U": 16, "V": 10, "W": 22, "X": 25, "Y": 24, "Z": 23}
-
-
-def cf_ok(c):
-    c = c.strip().upper()
-    if len(c) != 16 or not c.isalnum():
-        return False
-    b = c[:15]
-    try:
-        t = sum((_CF_ODD[ch] if i % 2 == 0
-                 else (int(ch) if ch.isdigit() else ord(ch) - 65))
-                for i, ch in enumerate(b))
-    except KeyError:
-        return False
-    return chr(65 + t % 26) == c[15]
-
-
-def luhn_ok(s):
-    d = re.sub(r"\D", "", s)
-    if not (13 <= len(d) <= 19):
-        return False
-    tot, alt = 0, False
-    for ch in reversed(d):
-        n = int(ch)
-        if alt:
-            n *= 2
-            if n > 9:
-                n -= 9
-        tot += n
-        alt = not alt
-    return tot % 10 == 0
-
-
-# Ogni detector: (label, regex, validatore-o-None, strict).
-#   validatore None  -> match accettato sulla sola forma (validated=False).
-#   strict=True      -> il match si scarta se il checksum FALLISCE (forma troppo generica:
-#                       IBAN/PIVA/carta -> servono i numeri giusti per non avere falsi positivi).
-#   strict=False     -> si redige comunque (forma molto specifica, es. CF: meglio nascondere);
-#                       validated=True solo se il checksum passa (mette il ✓).
-DETECTORS = [
-    ("EMAIL",
-     re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"),
-     None, True),
-    ("CF",
-     re.compile(r"\b[A-Za-z]{6}\d{2}[A-Za-z]\d{2}[A-Za-z]\d{3}[A-Za-z]\b"),
-     cf_ok, False),
-    ("IBAN",
-     re.compile(r"\b[A-Za-z]{2}\d{2}[A-Za-z0-9]{11,30}\b"),
-     iban_ok, True),
-    ("CREDITCARDNUMBER",
-     re.compile(r"(?<!\d)(?:\d[ \-]?){13,19}(?!\d)"),
-     luhn_ok, True),
-    ("PIVA",
-     re.compile(r"(?<!\d)\d{11}(?!\d)"),
-     piva_ok, True),
-    ("TELEPHONENUM",
-     re.compile(r"(?<![\w.])(?:\+39[\s.]?)?(?:3\d{2}[\s.]?\d{3}[\s.]?\d{3,4}"
-                r"|0\d{1,3}[\s.]?\d{5,8})(?![\w])"),
-     None, True),
-    ("AMOUNT",
-     re.compile(r"(?:€|EUR|euro)\s?\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})?"
-                r"|\d{1,3}(?:\.\d{3})*,\d{2}\s?(?:€|EUR|euro)", re.IGNORECASE),
-     None, True),
-    ("TARGA",
-     re.compile(r"\b[A-Za-z]{2}\s?\d{3}\s?[A-Za-z]{2}\b"),
-     None, True),
-]
-
-
-def detect_regex(text):
-    """Entita' della rete regex. validated=True solo quando il checksum passa."""
-    ents = []
-    for label, rx, validator, strict in DETECTORS:
-        for m in rx.finditer(text):
-            ok = validator(m.group(0)) if validator else False
-            if validator and strict and not ok:
-                continue
-            ents.append({
-                "label": label,
-                "start": m.start(),
-                "end": m.end(),
-                "score": 1.0 if ok else 0.9,
-                "validated": ok,
-                "source": "regex",
-            })
-    return ents
 
 
 # --------------------------------------------------------------------------- #
@@ -283,9 +164,12 @@ def _norm(s):
     return re.sub(r"\s+", " ", s.strip()).casefold()
 
 
-def analyze(text):
+def analyze(text, from_ocr=False):
+    """from_ocr=True: il testo viene (anche solo in parte) da OCR -> la rete regex
+    non pretende piu' il checksum valido, che gli errori di riconoscimento rompono.
+    Vedi pii_regex.detect_regex."""
     model_ents, n_chunks = detect_model(text)
-    cands = model_ents + detect_regex(text)
+    cands = model_ents + detect_regex(text, relax_strict=from_ocr)
     kept = _merge(cands, text)
 
     # ID reversibili: stesso (label, valore-normalizzato) -> stesso placeholder.
@@ -369,18 +253,22 @@ def not_found(_e):
 
 @app.route("/analyze", methods=["POST"])
 def analyze_route():
-    text = ""
+    ocr_info = None
     if "pdf" in request.files and request.files["pdf"].filename:
         data = request.files["pdf"].read()
-        with fitz.open(stream=data, filetype="pdf") as doc:
-            text = "\n".join(page.get_text() for page in doc)
+        text, ocr_info = pdf_text.extract_text(data)
     else:
         text = (request.get_json(silent=True) or {}).get("text", "")
     text = text.strip()
     if not text:
+        # PDF scansionato senza OCR disponibile: dirlo, invece di un generico "niente testo"
+        if ocr_info and ocr_info.get("backend") == "unavailable":
+            return jsonify({"error": "Il PDF sembra scansionato (nessun testo "
+                                     "selezionabile) e l'OCR non e' disponibile."}), 400
         return jsonify({"error": "Nessun testo da analizzare."}), 400
-    out = analyze(text)
+    out = analyze(text, from_ocr=bool(ocr_info and ocr_info["ocr_pages"]))
     out["source_text"] = text
+    out["ocr"] = ocr_info
     return jsonify(out)
 
 
@@ -553,6 +441,8 @@ PAGE = r"""
       transition:.12s}
   .ph .ck{font-size:10px;opacity:.8;margin-left:3px}
   .ph.dim{opacity:.25;filter:grayscale(.6)}
+  /* entita' ammessa senza checksum valido (testo da OCR): redatta, ma da verificare */
+  .ph.unver{border-style:dashed;border-width:1.5px}
   .empty{color:var(--soft);display:flex;flex-direction:column;align-items:center;justify-content:center;
          height:100%;gap:9px;text-align:center;font-size:14px}
   .empty .big{font-size:34px;opacity:.6}
@@ -570,6 +460,8 @@ PAGE = r"""
   .stat{background:#f7f8fb;border:1px solid var(--line2);border-radius:9px;padding:6px 11px;
         font-size:12.5px;color:var(--muted)}
   .stat b{color:var(--ink);font-weight:700}
+  .stat.ocr{background:#fff7e8;border-color:#f2e0bd;color:#8a6d1f;font-weight:600}
+  .stat.bad{background:#fdecec;border-color:#f5c9c9;color:#9c2a2a;font-weight:700}
 
   /* mapping table */
   .tablewrap{max-height:240px;overflow:auto;padding:0 16px 16px}
@@ -849,6 +741,9 @@ const T = {
   empty_rout:"Il testo con i valori reali apparirà qui.", rcopy:"Copia testo ripristinato",
   st_ent:"entità", st_uniq:"valori unici", st_model:"dal modello",
   st_regex:"da regex/checksum", st_chars:"caratteri", analyzing:"Analizzo…",
+  st_ocr:n=>`${n} ${n===1?'pagina letta':'pagine lette'} via OCR`,
+  st_unreadable:p=>`⚠ pagine illeggibili (${p}): testo incompleto, anonimizzazione NON affidabile`,
+  t_unverified:"checksum non valido: verifica",
   t_need_input:"Inserisci del testo o un PDF", t_error:"Errore",
   t_copied:"Testo anonimizzato copiato", t_need_anon:"Prima anonimizza un testo",
   t_nothing_dl:"Niente da scaricare", t_dl_ok:"Dizionario scaricato",
@@ -889,6 +784,9 @@ const T = {
   empty_rout:"The text with the real values will appear here.", rcopy:"Copy restored text",
   st_ent:"entities", st_uniq:"unique values", st_model:"from the model",
   st_regex:"from regex/checksum", st_chars:"characters", analyzing:"Analyzing…",
+  st_ocr:n=>`${n} ${n===1?'page read':'pages read'} via OCR`,
+  st_unreadable:p=>`⚠ unreadable pages (${p}): incomplete text, anonymization NOT reliable`,
+  t_unverified:"checksum invalid: please verify",
   t_need_input:"Enter some text or a PDF", t_error:"Error",
   t_copied:"Anonymized text copied", t_need_anon:"Anonymize a text first",
   t_nothing_dl:"Nothing to download", t_dl_ok:"Dictionary downloaded",
@@ -986,9 +884,9 @@ function render(){
   for(const s of d.segments){
     if(s.label){
       const c=colors(s.label);const sp=document.createElement('span');
-      sp.className='ph'+(off.has(s.label)?' dim':'');
+      sp.className='ph'+(off.has(s.label)?' dim':'')+(s.src==='regex-ocr'?' unver':'');
       sp.style.background=c.bg;sp.style.borderColor=c.bd;sp.style.color=c.tx;
-      sp.title=`${s.t}\n(${s.src}${s.validated?' · checksum ✓':''})`;
+      sp.title=`${s.t}\n(${s.src}${s.validated?' · checksum ✓':(s.src==='regex-ocr'?' · '+tt('t_unverified'):'')})`;
       sp.innerHTML=s.ph.replace(/[\[\]]/g,'')+(s.validated?'<span class="ck">✓</span>':'');
       prev.appendChild(sp);
     }else prev.appendChild(document.createTextNode(s.t));
@@ -1000,8 +898,11 @@ function render(){
     `<span class="stat"><b>${d.n_entities}</b> ${tt('st_ent')}</span>`+
     `<span class="stat"><b>${d.n_unique}</b> ${tt('st_uniq')}</span>`+
     `<span class="stat"><b>${(d.by_source.modello||0)}</b> ${tt('st_model')}</span>`+
-    `<span class="stat"><b>${(d.by_source.regex||0)}</b> ${tt('st_regex')}</span>`+
-    `<span class="stat"><b>${T[L].chars(d.n_chars)}</b> ${tt('st_chars')}</span>`;
+    `<span class="stat"><b>${(d.by_source.regex||0)+(d.by_source['regex-ocr']||0)}</b> ${tt('st_regex')}</span>`+
+    `<span class="stat"><b>${T[L].chars(d.n_chars)}</b> ${tt('st_chars')}</span>`+
+    (d.ocr&&d.ocr.ocr_pages?`<span class="stat ocr">${tt('st_ocr')(d.ocr.ocr_pages)}</span>`:'')+
+    (d.ocr&&d.ocr.unreadable_pages&&d.ocr.unreadable_pages.length
+      ?`<span class="stat bad">${tt('st_unreadable')(d.ocr.unreadable_pages.map(n=>n+1).join(', '))}</span>`:'');
   // legenda cliccabile (toggle highlight)
   const lg=$('legend');lg.innerHTML='';
   for(const [k,v] of Object.entries(d.by_label)){

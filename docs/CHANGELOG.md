@@ -5,6 +5,51 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-07-31 — OCR per i PDF scansionati (CPU) + prima suite di test
+
+Gli atti italiani arrivano spesso come **scansioni**: `page.get_text()` restituiva zero e l'app
+diceva solo "nessun testo". Ora le pagine senza testo nativo passano per un **OCR locale su CPU**.
+Nessun impatto sul training.
+
+**1. Backend OCR** (`src/app/ocr/`). [RapidOCR](https://github.com/RapidAI/RapidOCR) = PP-OCRv6 su
+**ONNXRuntime**: 3 file ONNX per ~32 MB, niente GPU, niente torch. Scelto contro le alternative
+(Unlimited-OCR/DeepSeek-OCR: 3B e CUDA obbligatoria, ~6 GB — incompatibile con la promessa
+"0.3B su CPU"; Tesseract: binario di sistema da distribuire su 3 OS; PaddleOCR: wheel >100 MB).
+Il modello di riconoscimento v6 è **unico e multilingua** (52 lingue, italiano incluso):
+`Rec.lang_type="it"` valida soltanto. Modelli **impacchettati** nell'installer via
+`ocr/fetch_models.py` + le spec PyInstaller: RapidOCR di suo li scaricherebbe al primo uso, e
+l'app promette zero rete. `PII_OCR=off` disattiva tutto.
+
+**2. Solo le pagine che servono** (`pdf_text.py`). Le pagine con testo nativo lo tengono (esatto e
+istantaneo); solo quelle sotto `MIN_CHARS_PER_PAGE` vengono rasterizzate a 300 DPI e lette.
+`ocr/layout.py` ricostruisce l'ordine di lettura dai bounding box (righe → paragrafi): senza,
+il testo esce mescolato e le entità si spezzano a metà. Assume **colonna singola**.
+
+**3. Checksum rilassati su testo OCR** (`pii_regex.py`, estratto da `app.py`). Con
+`relax_strict=True` IBAN/PIVA/carta si redigono **anche a checksum fallito**: un identificativo
+storpiato dall'OCR non passerebbe mod-97 e resterebbe **in chiaro** nel testo mandato all'LLM.
+Quelle entità escono con `source="regex-ocr"` e l'UI le mostra tratteggiate, "da verificare".
+Più falsi positivi visibili, zero PII perse in silenzio.
+
+**4. Pagine illeggibili segnalate.** Misurando il degrado si è visto che l'OCR, oltre una certa
+soglia, **non sbaglia qualche carattere: collassa** (50 caratteri su 790). L'utente avrebbe
+ricevuto un documento anonimizzato dall'aria pulita a cui mancava il 94% del testo, con PII mai
+viste. `unreadable_pages()` le rileva e l'UI avvisa in rosso che l'anonimizzazione non è
+affidabile su quelle pagine.
+
+**5. Prima suite di test + CI** (`tests/`, `.github/workflows/tests.yml`). 54 test su logica pura
+— checksum CF/PIVA/IBAN/Luhn, rete regex nei due regimi, ricostruzione dell'ordine di lettura,
+decisione "pagina da OCR". Nessun torch, nessun modello, nessuna GPU: girano in millisecondi su
+Python 3.11/3.12/3.13. `pii_regex.py` è stato estratto da `app.py` proprio per questo: `app.py`
+carica il modello all'import e non era testabile.
+
+**Misurato** (render sintetici degradati): fino a **75 DPI, 3,5° di rotazione, JPEG qualità 20**
+CF/IBAN/PIVA/email letti **esatti**; a 60 DPI/5° l'OCR collassa. `relax_strict` non è mai scattato
+in questi test: resta una precauzione per il regime intermedio (fotocopie di fotocopie, timbri,
+fax) che i render sintetici non producono. **Non misurato**: scansioni reali, due colonne, tabelle.
+
+---
+
 ## 2026-06-30 — Porta del backend 5000 → 5005 (conflitto AirPlay su macOS)
 
 Gli utenti macOS vedevano una **pagina bianca**: la porta **5000** è occupata di default

@@ -1,0 +1,27 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # I test coprono logica pura (checksum, rete regex, layout OCR, chunking
+      # delle pagine): non servono torch, transformers, modelli ne' GPU.
+      - name: Install test dependencies
+        run: pip install numpy
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -t . -v

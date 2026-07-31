@@ -280,6 +280,15 @@ identifiers whose leakage is most damaging. The app adds the reversible layer (s
 downloadable local dictionary, a "restore" tab tolerant to markdown/format drift), chunking with
 overlap for long PDFs, and a colored per-tag UI.
 
+**Scanned PDFs are read too.** Italian legal practice runs on paper: deeds, certificates and
+court filings routinely arrive as image-only scans, where text extraction returns nothing at all.
+The app now falls back to **on-device OCR** ([RapidOCR](https://github.com/RapidAI/RapidOCR) —
+PP-OCRv6 on ONNXRuntime, three ONNX files for ~32 MB) for those pages only: pages that already
+carry selectable text keep using it, because it is exact and instant. The OCR models are
+**bundled in the installer**, not downloaded on first use — an app that promises "no network"
+must not open a connection the first time you drop a scan on it. No GPU, no PyTorch, a few
+hundred MB of RAM.
+
 | To use the model (inference) | To retrain the model |
 |---|---|
 | Any 64-bit CPU (no GPU) | A single 16 GB GPU is enough |
@@ -319,6 +328,14 @@ cd rizzo-pii
 python -m venv .venv; .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt          # NVIDIA Blackwell? install torch cu128 first — see requirements.txt
 copy .env.example .env                    # optional: add W&B / Gemini keys
+cd src/app; python -m ocr.fetch_models; cd ../..   # optional: OCR models for scanned PDFs (~32 MB)
+```
+
+The OCR step is optional: without it the app runs exactly as before and simply tells you when a
+PDF is a scan it cannot read. Run the test suite (pure logic — no models, no GPU, seconds):
+
+```powershell
+python -m unittest discover -s tests -t .
 ```
 
 ### 1) Generate the data
@@ -386,10 +403,16 @@ rizzo_pii/
 │   │   └─ test_pii.py                CLI inference on the saved model
 │   ├─ inspect/                       read-only utilities (counts, lengths, checksums)
 │   └─ app/                           local anonymization app
-│       ├─ app.py                     Flask server: reversible anonymization + regex/checksum net
+│       ├─ app.py                     Flask server: reversible anonymization + UI
+│       ├─ pii_regex.py               regex + checksum safety net (IBAN/CF/PIVA/card…)
+│       ├─ pdf_text.py                PDF text: native where present, OCR on scanned pages
+│       ├─ ocr/                       CPU OCR backend (RapidOCR) + reading-order rebuild
+│       ├─ ocr_models/                the 3 ONNX files (gitignored — see its README)
 │       ├─ serve.py                   headless entry (backend of the Tauri app, no browser)
 │       ├─ desktop_app.py             legacy PyInstaller entry (opens the browser)
 │       └─ assets/                    mascot (the hedgehog) and icons
+├─ tests/                    unit tests — checksums, regex net, OCR layout (no models needed)
+├─ .github/workflows/        CI: the test suite on Python 3.11 / 3.12 / 3.13
 ├─ tauri/                    native desktop app (Tauri) + Windows installer — see docs/BUILD.md
 ├─ dataset/                  (gitignored — regenerable from the scripts)
 ├─ models/                   (gitignored) trained models, one folder per version
@@ -417,6 +440,14 @@ Stated plainly:
   sentences, whereas the real use case is whole documents. Measuring true end-to-end behaviour
   (long context, PDF chunking with overlap, real act structure) needs a dedicated test set of
   large, real Italian documents, which still has to be assembled.
+- **On scanned pages, OCR quality sets the ceiling.** Measured on synthetically degraded renders,
+  PP-OCRv6 read every identifier (CF, IBAN, PIVA, email) **character-exact** down to 75 DPI with
+  3.5° skew and JPEG quality 20. Past that point it does not misread a digit here and there — it
+  **collapses**, returning 50 characters out of 790. That silent failure is the real danger, so
+  pages that come back near-empty are flagged in the UI as unreadable and the anonymization is
+  declared unreliable for them. Two-column layouts are not handled (the reading-order rebuild
+  assumes a single column), and none of this has been measured on **real** scans — paper grain,
+  bleed-through, stamps. **Always re-read the result of a scanned document.**
 
 The mitigation that matters in practice: **always pair the model with the regex/checksum safety
 net** (`src/inspect/validate_checksums.py` is the blueprint). The two together are stronger than
