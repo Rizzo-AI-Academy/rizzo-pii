@@ -27,12 +27,12 @@ import sys
 from pathlib import Path
 
 import fitz  # PyMuPDF
-import torch
 from flask import (Flask, jsonify, render_template_string, request,
                    send_from_directory)
 
 import server_config
-from transformers import pipeline
+# NB: torch / transformers si importano SOLO nel fallback PyTorch (vedi caricamento modello):
+# con un bundle ONNX l'app gira senza il framework di training.
 
 
 def _resource_path(rel):
@@ -72,18 +72,37 @@ MAX_WORDS = 120      # parole per chunk (~180 subword, sotto i 512 del training)
 OVERLAP = 20         # parole di sovrapposizione tra chunk consecutivi
 
 # --------------------------------------------------------------------------- #
-# Caricamento modello (una sola volta all'avvio)
+# Caricamento modello (una sola volta all'avvio).
+#
+# Preferisce il backend ONNX (onnxruntime + tokenizers, leggero): se e' disponibile un
+# bundle esportato con src/export/export_onnx.py, l'app gira SENZA PyTorch/Transformers --
+# l'applicazione e' cosi' separata dal framework di training. Altrimenti fallback a PyTorch.
+# Forza il fallback con PII_FORCE_TORCH=1; forza fp32 nell'ONNX con PII_ONNX_FP32=1.
 # --------------------------------------------------------------------------- #
-device = 0 if torch.cuda.is_available() else -1
-print(f"Carico il modello da {MODEL_DIR} su {'GPU' if device == 0 else 'CPU'}...")
-nlp = pipeline(
-    "token-classification",
-    model=MODEL_DIR,
-    tokenizer=MODEL_DIR,
-    aggregation_strategy="simple",
-    device=device,
-)
-print("Modello pronto.")
+nlp = None
+if os.environ.get("PII_FORCE_TORCH", "") not in ("1", "true", "yes", "on"):
+    try:
+        from onnx_infer import build_tagger
+        nlp = build_tagger()
+        if nlp is not None:
+            print(f"Modello ONNX pronto ({nlp.dtype}, {nlp.model_name}).")
+    except Exception as _e:
+        print(f"Backend ONNX non disponibile ({_e}); passo a PyTorch.")
+        nlp = None
+
+if nlp is None:
+    import torch
+    from transformers import pipeline
+    device = 0 if torch.cuda.is_available() else -1
+    print(f"Carico il modello PyTorch da {MODEL_DIR} su {'GPU' if device == 0 else 'CPU'}...")
+    nlp = pipeline(
+        "token-classification",
+        model=MODEL_DIR,
+        tokenizer=MODEL_DIR,
+        aggregation_strategy="simple",
+        device=device,
+    )
+    print("Modello PyTorch pronto.")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
