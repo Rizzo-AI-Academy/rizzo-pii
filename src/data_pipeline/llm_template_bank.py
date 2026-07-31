@@ -192,68 +192,183 @@ def call_gemini(prompt, retries=3):
     return None
 
 
-# vocabolario di parole con la maiuscola LEGITTIME nei testi legali italiani:
-# se resta una maiuscola fuori da questo set (e fuori dai segnaposto), e' un nome
-# proprio "sciolto" scritto inline dall'LLM -> PII non taggata -> template da scartare.
-LEGAL_CAPITALIZED = set("""
-Il La Lo Gli Le Un Una Uno Con Per Si Che Chi In Da Del Della Dei Delle Dello Al Alla
-Ai Alle Allo Nel Nella Nei Sul Sulla Tra Fra A Ad E Ed O Od Ma Se Come Quando Dove
-Mentre Inoltre Pertanto Quindi Tutto Tutti Tutte Questa Questo Questi Queste Tale Tali
-Detto Detta Predetto Suddetto Premesso Considerato Visto Vista Visti Viste Letto Letti
-Letta Rilevato Ritenuto Dichiara Dichiarano Chiede Chiedono Voglia Vogliano Cosi Così
-Ciò Essendo Avendo Ove Salvo Fermo Nonche Nonché Ovvero Stante Affinche Affinché
-Tribunale Corte Appello Cassazione Giudice Giudici Giudicante Avvocato Avvocati
-Procuratore Procura Pubblico Ministero Repubblica Italiana Italia Stato Regione
-Provincia Comune Codice Civile Penale Procedura Costituzione Legge Leggi Decreto Decreti
-Articolo Art Comma Commi Capo Sezione Sez Ruolo Generale Causa Cause Sentenza Sentenze
-Ordinanza Ordinanze Ricorso Ricorrente Comparsa Atto Atti Citazione Liti Foro Udienza
-Cancelleria Cancelliere Spettabile Spett Egregio Egr Signor Signora Sig Sigg Dottor
-Dottore Dott Avv Ill Illustrissimo Onorevole Oggetto Premessa Fatto Diritto Conclusioni
-Motivi Domanda Eccezione Memoria Verbale Notaio Repertorio Raccolta Parte Parti Attore
-Convenuto Resistente Testimone Teste Perito Curatore Fallimento Societa Società
-Gennaio Febbraio Marzo Aprile Maggio Giugno Luglio Agosto Settembre Ottobre Novembre
-Dicembre Lunedi Lunedì Martedi Martedì Mercoledi Mercoledì Giovedi Giovedì Venerdi
-Venerdì Sabato Domenica Euro
-Costituzionale Ufficiale Gazzetta Ordinario Ordinaria Suprema Supremo Amministrativo
-Amministrativa Regionale Nazionale Europea Europeo Unione Agenzia Entrate Comunale
-Provinciale Locatore Locatrice Conduttore Conduttrice Venditore Venditrice Acquirente
-Promittente Promissario Canone Deposito Cauzione Cauzionale Durata Oneri Onere Catasto
-Catastale Particella Foglio Subalterno Mappale Rendita Fabbricati Fabbricato Terreni
-Immobile Immobili Bene Beni Prezzo Acconto Saldo Designato Designata Condanna Condannato
-Deciso Decisa Firma Firme Regolamento Mandato Delega Comparente Comparenti Contraenti
-Contraente Contrattuale Mensile Annuale Banca Filiale Bonifico Pagamento Pagamenti
-Scadenza Interessi Interesse Capitale Allegato Allegati Documento Documenti Conto
-Corrente Vi Voi Vostra Vostro Vostri Vostre Tanto Nondimeno
-""".split())
+
+# titoli che, seguiti da una maiuscola, segnalano un nome scritto inline. Solo le forme
+# che introducono una PERSONA: "Spett." e "Spettabile" si rivolgono a un'organizzazione
+# ("Spett.le Azienda ...") e da soli non dicono nulla su un nome.
+TITLES = {"Sig", "Sig.ra", "Sigg", "Signor", "Signora", "Dott", "Dottor",
+          "Dssa", "Avv", "Egr", "Egregio", "Ill", "Onorevole"}
+
+# Parole che in italiano INTRODUCONO una persona. Due livelli, perche' non danno la stessa
+# certezza:
+#  - FORTI: dopo di queste una maiuscola e' un nome anche da sola ("il sottoscritto
+#    Sferrazza"). Non introducono altro.
+#  - RUOLI: possono essere seguite da un QUALIFICATORE maiuscolo che non e' una persona
+#    ("il Giudice Unico", "di seguito denominato Locatore"). Qui serve una maiuscola in
+#    piu' -- Nome + Cognome -- per parlare di nome inline.
+# Sono classi chiuse che parlano di persone, non di domini: non vanno allungate quando si
+# aggiunge un tipo di documento.
+CONTESTO_FORTE = {
+    "nato", "nata", "nati", "nate", "sottoscritto", "sottoscritta", "sottoscritti",
+    "signor", "signora", "signori", "nome", "cognome",
+}
+CONTESTO_RUOLO = {
+    "avvocato", "avvocatessa", "dottore", "dottoressa", "difeso", "difesa",
+    "rappresentato", "rappresentata", "assistito", "assistita", "teste", "testimone",
+    "giudice", "notaio", "perito", "curatore", "erede", "coniuge", "figlio", "figlia",
+    "padre", "madre", "intestatario", "intestataria", "titolare", "beneficiario",
+    "beneficiaria", "dipendente", "lavoratore", "lavoratrice", "paziente", "alunno",
+    "alunna", "studente", "studentessa", "cliente", "contraente", "assicurato",
+    "assicurata", "delegato", "delegata", "richiedente", "denunciante", "querelante",
+}
+TITLES_L = {t.lower() for t in TITLES}
+# le ABBREVIAZIONI di titolo ("Sig.", "Avv.", "Dott.") stanno solo davanti a un nome, e
+# restano forti; le stesse parole per esteso sono nomi di ruolo e possono essere seguite da
+# un qualificatore ("il Dottore Commercialista"), quindi valgono come ruolo
+CONTESTO_FORTE = (CONTESTO_FORTE | TITLES_L) - CONTESTO_RUOLO
+
+# teste di denominazione istituzionale: "<istituzione> di <Maiuscola>" e' il nome
+# dell'UFFICIO, non una persona -- "Giudice di Pace", "Corte dei Conti", "Corte di
+# Cassazione". Serve perche' diversi cognomi italiani sono anche parole comuni (Pace,
+# Conti, Costa, Villa, Monti) e il solo lessico li leggerebbe come persone: "Giudice di
+# Pace" era 11 dei 12 falsi positivi rimasti su 237 template. Restano invece segnalati
+# "l'avvocato di Bianchi" e "la firma di Rossi": chi introduce non e' un'istituzione.
+ISTITUZIONI = {
+    "giudice", "corte", "tribunale", "procura", "ministero", "agenzia", "commissione",
+    "sezione", "ufficio", "camera", "consiglio", "collegio", "autorita", "direzione",
+    "servizio", "istituto", "azienda", "comune", "provincia", "regione", "prefettura",
+}
+PREPOSIZIONI = {"di", "del", "dello", "della", "dei", "degli", "delle", "d"}
+
+# I segnaposto vanno TOLTI prima di cercare i nomi, ma non lasciando un buco: se al loro
+# posto resta uno spazio, chi introduce scavalca il segnaposto e si attacca alla parola
+# dopo -- in "corrisposta dal Sig. {FULLNAME} al Venditore" il titolo "Sig." finisce a
+# introdurre "Venditore" e il template viene scartato per un nome che invece era gia' un
+# segnaposto. Un segno tutto maiuscolo al loro posto fa da barriera (e _cap lo ignora,
+# perche' gli acronimi non sono nomi).
+SEGNO_SLOT = "SEGNAPOSTO"
+
+# parole di servizio che stanno fra chi introduce e il nome ("nato a", "difeso dal"):
+# vanno saltate quando si cerca chi introduce, altrimenti la ricerca si ferma su di loro
+FUNZIONALI = {
+    "a", "ad", "al", "allo", "alla", "ai", "agli", "alle", "da", "dal", "dallo", "dalla",
+    "dai", "dagli", "dalle", "di", "del", "dello", "della", "dei", "degli", "delle",
+    "in", "nel", "nello", "nella", "nei", "negli", "nelle", "con", "e", "ed", "il", "lo",
+    "la", "i", "gli", "le", "un", "una", "uno", "sig", "sigra", "che", "il/la",
+} - CONTESTO_FORTE
+
+_LESSICO_PERSONE = None
 
 
-# titoli che, seguiti da una maiuscola, segnalano un nome scritto inline
-TITLES = {"Sig", "Sig.ra", "Sigg", "Signor", "Signora", "Dott", "Dottor", "Dottore",
-          "Dssa", "Avv", "Egr", "Egregio", "Spett", "Ill", "Onorevole", "Spettabile"}
+def _lessico_persone():
+    """Nomi propri e cognomi noti al progetto (minuscoli).
+
+    Sono le stesse liste con cui generate_synthetic_pii INIETTA le persone: se il modello
+    scrive un nome inline, quasi sempre pesca da questo stesso repertorio di nomi comuni
+    italiani. Riusarle qui evita di mantenere un secondo elenco a mano.
+
+    Import pigro e stato del generatore casuale ripristinato: importare
+    generate_synthetic_pii esegue random.seed(42) a import-time, e questo script pesca a
+    caso i tipi di documento -- l'import non deve rendere deterministica quella scelta."""
+    global _LESSICO_PERSONE
+    if _LESSICO_PERSONE is None:
+        import random as _r
+        stato = _r.getstate()
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import generate_synthetic_pii as _g
+            _LESSICO_PERSONE = {w.lower() for w in
+                                _g.MALE_NAMES + _g.FEMALE_NAMES + _g.SURNAMES}
+        except Exception as e:                       # pragma: no cover
+            print(f"  (lessico dei nomi non caricato: {e}) -> guardia solo per contesto")
+            _LESSICO_PERSONE = set()
+        finally:
+            _r.setstate(stato)
+    return _LESSICO_PERSONE
 
 
-def _is_name_cap(w):
-    """True se la parola e' una maiuscola 'da nome': iniziale maiuscola, non tutta
-    maiuscola (no acronimi), e non un termine giuridico noto. Gestisce le elisioni
-    (es. 'dell'Avv' -> valuta 'Avv')."""
+def _cap(w):
+    """La parola senza punto/elisione se ha l'iniziale maiuscola e non e' tutta maiuscola
+    (gli acronimi non sono nomi di persona), altrimenti None. 'dell'Avv.' -> 'Avv'."""
     seg = w.split("'")[-1].strip(".")
-    return bool(seg) and seg[0].isupper() and not seg.isupper() and seg not in LEGAL_CAPITALIZED
+    return seg if seg and seg[0].isupper() and not seg.isupper() else None
+
+
+def _confrontabile(w):
+    """(parola confrontabile, chiude_la_frase). Toglie l'elisione ("L'intestatario" ->
+    "intestatario", altrimenti chi introduce non si riconosce) e la punteggiatura finale.
+    Un punto finale e' un confine di frase, tranne nelle abbreviazioni di titolo: dopo un
+    confine la maiuscola e' solo l'inizio della frase nuova ("assistito. Nonostante")."""
+    seg = w.split("'")[-1]
+    nudo = seg.rstrip(".:;!?,").lower()
+    chiude = seg[-1:] in ".:;!?" and nudo not in TITLES_L
+    return nudo, chiude
+
+
+def _introduce(words, i):
+    """Chi introduce la maiuscola in posizione i: la prima parola non funzionale nelle 3
+    precedenti ("nato a X" -> "nato", "difeso dal X" -> "difeso"). None se prima c'e' un
+    confine di frase, un segnaposto, o non si trova nulla."""
+    for k in range(i - 1, max(-1, i - 4), -1):
+        nudo, chiude = _confrontabile(words[k])
+        if chiude or nudo == SEGNO_SLOT.lower():
+            return None
+        if nudo and nudo not in FUNZIONALI:
+            return nudo
+    return None
 
 
 def find_stray_names(text):
-    """Segnala SOLO i pattern che indicano un vero nome proprio scritto inline:
-    due maiuscole 'da nome' consecutive (Nome Cognome) o titolo + maiuscola (Sig. Rossi).
-    Le singole parole giuridiche maiuscole sono testo normale e NON vengono toccate."""
-    masked = re.sub(r"\{\w+\}", " ", text)          # togli i segnaposto
+    """Segnala i nomi di PERSONA scritti inline (PII non taggata -> template da scartare).
+
+    La versione precedente considerava nome proprio qualunque coppia di maiuscole assente
+    da un lessico giuridico scritto a mano (LEGAL_CAPITALIZED). Regge dentro il tribunale
+    e crolla fuori: "Risorse Umane", "Ufficio Protocollo", "Servizio Clienti" vengono
+    scartati come se fossero persone, cioe' si perdono i template buoni proprio nei domini
+    nuovi -- e allungare quella lista a ogni dominio e' una rincorsa senza fine.
+
+    Qui i segnali sono due, entrambi indipendenti dal dominio:
+      1. LESSICO -- una delle parole e' un nome o un cognome noto al progetto;
+      2. CONTESTO -- la corsa di maiuscole sta dove va una persona: da sola se la introduce
+         un contesto forte, in coppia (Nome + Cognome) se la introduce un nome di ruolo.
+
+    Si ragiona su CORSE di maiuscole consecutive, non su coppie: e' la corsa intera a
+    essere un nome o una denominazione, e chi la introduce sta prima della corsa -- non fra
+    le sue parole."""
+    masked = re.sub(r"\{\w+\}", f" {SEGNO_SLOT} ", text)      # i segnaposto fanno barriera
     words = re.findall(r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'.]*", masked)
+    lessico = _lessico_persone()
     stray = []
-    for a, b in zip(words, words[1:]):
-        if a and a[-1] in ".:;!?":                              # confine di frase: non e' un nome
+    i = 0
+    while i < len(words):
+        if not _cap(words[i]):
+            i += 1
             continue
-        if _is_name_cap(a) and _is_name_cap(b):                 # "Mario Rossi"
-            stray.append(f"{a} {b}")
-        elif a.rstrip(".") in TITLES and _is_name_cap(b):       # "Sig. Bianchi"
-            stray.append(f"{a} {b}")
+        j = i
+        # la corsa non attraversa un confine di frase: in "assistito dal Cancelliere. La
+        # causa..." Cancelliere e La sono due frasi diverse, non un nome di due parole
+        while (j + 1 < len(words) and _cap(words[j + 1])
+                and not _confrontabile(words[j])[1]):
+            j += 1
+        corsa = words[i:j + 1]
+        intro = _introduce(words, i)
+        # una corsa fatta solo di titoli e nomi di ruolo e' vocabolario, non un nome: in
+        # "il sottoscritto Sig. {FULLNAME}" il nome e' il segnaposto, non "Sig."
+        if all(_cap(w).lower() in CONTESTO_FORTE | CONTESTO_RUOLO for w in corsa):
+            i = j + 1
+            continue
+        # denominazione di un ufficio: "Giudice di Pace", non una persona di nome Pace
+        prec = _confrontabile(words[i - 1])[0] if i else ""
+        if len(corsa) == 1 and prec in PREPOSIZIONI and intro in ISTITUZIONI:
+            i = j + 1
+            continue
+        if any(_cap(w).lower() in lessico for w in corsa):        # "Mario Rossi"
+            stray.append(" ".join(corsa))
+        elif intro in CONTESTO_FORTE:                             # "sottoscritto Sferrazza"
+            stray.append(f"{intro} {' '.join(corsa)}")
+        elif intro in CONTESTO_RUOLO and len(corsa) >= 2:         # "intestatario L. Marinetti"
+            stray.append(f"{intro} {' '.join(corsa)}")
+        i = j + 1
     return stray
 
 
@@ -283,6 +398,29 @@ def normalizza_escape(text):
     return text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
 
 
+# --- codici e date scritti inline -----------------------------------------------------
+# Un CF/IBAN/telefono/data scritto nel testo invece che come segnaposto e' un'entita' che
+# esiste nel testo ma NON nelle label: il modello impara a NON taggarla. La guardia sui
+# nomi non lo vede (non sono parole). Serve soprattutto nei domini fuori dal tribunale,
+# dove la prosa e' piena di numeri (bollette, referti, cedolini) e il modello e' piu'
+# tentato di inventare un codice.
+CIFRE_LUNGHE_RE = re.compile(r"\d{9,}")                       # telefoni, IBAN, carte
+CODICE_MISTO_RE = re.compile(r"\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{11,}\b")
+DATA_INLINE_RE = re.compile(r"\b\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}\b")
+# Le citazioni di norme ("196/2003", "art. 2043 c.c.") sono numeri legittimi, non PII:
+# nessuno dei pattern sopra le prende (due soli gruppi, cifre sotto la soglia).
+
+
+def inline_code(text):
+    """Primo codice o data scritto inline, se presente."""
+    masked = re.sub(r"\{\w+\}", " ", text)
+    for rx in (CIFRE_LUNGHE_RE, CODICE_MISTO_RE, DATA_INLINE_RE):
+        m = rx.search(masked)
+        if m:
+            return m.group(0)
+    return None
+
+
 def clean_and_validate(text):
     """Pulisce il markdown, verifica i segnaposto e scarta i template con PII inline
     o con caratteri non latini."""
@@ -303,6 +441,11 @@ def clean_and_validate(text):
     bad = non_latin_char(text)
     if bad:
         print(f"  scartato: carattere non latino {bad!r} (artefatto del modello)")
+        return None
+    codice = inline_code(text)
+    if codice:
+        print(f"  scartato: codice o data scritti inline invece che come segnaposto "
+              f"({codice!r})")
         return None
     return text
 
