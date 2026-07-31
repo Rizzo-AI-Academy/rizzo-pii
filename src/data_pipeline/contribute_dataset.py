@@ -45,6 +45,7 @@ Uso
 """
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -239,8 +240,48 @@ def gen_new_templates(per_type, boost):
     return out
 
 
-def generate(n, seed, handle, per_type, offline, boost, out_path=None):
-    """Genera n esempi sintetici. Con Gemini usa template NUOVI scritti al volo.
+def skeleton_key(rec):
+    """Impronta della STRUTTURA della riga: il testo con ogni entita' sostituita dalla sua
+    label, normalizzato negli spazi. Due righe con lo stesso scheletro sono la stessa frase
+    con dentro valori diversi.
+
+    E' un'impronta a 8 byte e non lo scheletro intero: su centinaia di migliaia di righe
+    l'insieme degli scheletri per esteso non starebbe in memoria, e cio' che serve e' solo
+    sapere se una struttura e' gia' passata."""
+    st = rec["source_text"]
+    pezzi, pos = [], 0
+    for e in sorted(rec["entities"], key=lambda e: e["start"]):
+        if e["start"] < pos:                     # entita' sovrapposte: la prima vince
+            continue
+        pezzi.append(st[pos:e["start"]])
+        pezzi.append("{" + e["label"] + "}")
+        pos = e["end"]
+    pezzi.append(st[pos:])
+    scheletro = " ".join("".join(pezzi).split())
+    return hashlib.blake2b(scheletro.encode(), digest_size=8).digest()
+
+
+# tentativi consecutivi senza una struttura nuova dopo i quali si considera esaurita la
+# banca di template. La generazione e' rapidissima (decine di migliaia di righe al
+# secondo), quindi conviene una soglia larga: e' preferibile spendere qualche secondo in
+# piu' che fermarsi presto e consegnare meno strutture di quelle disponibili.
+STOP_SATURAZIONE = 50_000
+
+
+def generate(n, seed, handle, per_type, offline, boost, out_path=None,
+             max_per_skeleton=1):
+    """Genera esempi sintetici fino ad averne n con struttura DISTINTA.
+
+    Perche' non semplicemente n righe: il testo di ogni riga e' unico (i valori cambiano
+    sempre), quindi "0 duplicati" non dice niente sulla varieta'. Cio' che il modello vede
+    e' lo SCHELETRO -- il testo con le entita' sostituite dalle label -- e su 200.000 righe
+    da un pool di 273 template gli scheletri distinti misurati erano 57.093: il 71% del
+    file ripeteva una struttura gia' presente, cioe' era volume, non informazione. Con
+    max_per_skeleton=1 ogni struttura entra una volta sola e il file contiene solo cio' che
+    aggiunge qualcosa; alzandolo si ammettono piu' valori sulla stessa struttura.
+
+    Se la banca di template si esaurisce prima di arrivare a n, la generazione si ferma e
+    lo dichiara: il numero di righe consegnabili e' un RISULTATO della banca, non una scelta.
 
     Con out_path le righe vengono SCRITTE MANO A MANO invece di essere accumulate in
     memoria. Serve: MAX_N e' 200.000 e con template lunghi (documenti interi, non frasi)
@@ -271,11 +312,14 @@ def generate(n, seed, handle, per_type, offline, boost, out_path=None):
     n_new = len(new_templates)
     rows, label_counts, bad = ([] if out_path is None else None), {}, 0
     n_ok = n_da_nuovi = 0
+    visti = {}                     # impronta della struttura -> quante volte gia' scritta
+    ripetute = tentativi = a_vuoto = 0
     out = None
     if out_path is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out = open(out_path, "w", encoding="utf-8")
-    for _ in range(n):
+    while n_ok < n and a_vuoto < STOP_SATURAZIONE:
+        tentativi += 1
         tid = random.choices(idx_pool, weights=weights, k=1)[0]
         text, entities = gen.build_example(tid, templates)
         tokens, bio = gen.to_bio(text, entities)
@@ -295,7 +339,15 @@ def generate(n, seed, handle, per_type, offline, boost, out_path=None):
         err = _validate_record(rec)
         if err:
             bad += 1
+            a_vuoto += 1
             continue
+        impronta = skeleton_key(rec)
+        if visti.get(impronta, 0) >= max_per_skeleton:
+            ripetute += 1
+            a_vuoto += 1
+            continue
+        visti[impronta] = visti.get(impronta, 0) + 1
+        a_vuoto = 0
         for e in entities:
             label_counts[e["label"]] = label_counts.get(e["label"], 0) + 1
         n_ok += 1
@@ -311,6 +363,14 @@ def generate(n, seed, handle, per_type, offline, boost, out_path=None):
 
     if bad:
         print(f"  scartati {bad} esempi non validi (self-check)")
+    print(f"  strutture distinte scritte: {n_ok} su {tentativi} tentativi "
+          f"({100 * n_ok / max(1, tentativi):.1f}%); {ripetute} righe scartate perche' "
+          f"ripetevano una struttura gia' presente")
+    if n_ok < n:
+        print(f"  BANCA ESAURITA: chieste {n} righe a struttura distinta, ottenute {n_ok}. "
+              f"{STOP_SATURAZIONE} tentativi di fila non hanno prodotto una struttura "
+              f"nuova.\n  Per averne di piu' serve allargare la banca di template "
+              f"(llm_template_bank.py), non alzare --n.")
     return rows, label_counts, n_new, n_ok, n_da_nuovi
 
 
@@ -370,6 +430,11 @@ def main():
                     help="genera solo in locale, non apre la PR")
     ap.add_argument("--upload-file", metavar="PATH",
                     help="non rigenerare: carica un .jsonl gia' prodotto (push veloce, niente Gemini)")
+    ap.add_argument("--max-per-skeleton", type=int, default=1, metavar="K",
+                    help="quante righe al massimo possono condividere la stessa STRUTTURA "
+                         "(default 1: nessuna struttura ripetuta). Il testo di ogni riga e' "
+                         "sempre unico, ma su 200.000 righe da 273 template il 71% "
+                         "ripeteva uno scheletro gia' presente: volume, non informazione")
     ap.add_argument("--repo", default=REPO_ID, help="dataset di destinazione (override)")
     args = ap.parse_args()
 
@@ -406,7 +471,8 @@ def main():
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     tmp_path = ROOT / "dataset" / "contributions" / f".{handle}-{stamp}.parziale.jsonl"
     _, counts, n_new, n_ok, from_new = generate(
-        args.n, seed, handle, args.per_type, args.offline, boost, out_path=tmp_path)
+        args.n, seed, handle, args.per_type, args.offline, boost, out_path=tmp_path,
+        max_per_skeleton=args.max_per_skeleton)
     if n_new:
         print(f"\n{from_new}/{n_ok} esempi da template NUOVI di Gemini.")
     print(f"Generati {n_ok} esempi validi. Entita' per label:")
