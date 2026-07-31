@@ -434,6 +434,14 @@ DATA_INLINE_RE = re.compile(r"\b\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}\b")
 # nessuno dei pattern sopra le prende (due soli gruppi, cifre sotto la soglia).
 
 
+# Due segnaposto separati da soli spazi: iniettando i valori le due entita' finiscono
+# adiacenti senza un token 'O' fra loro, e in BIO si fondono in una sola. L'idea e' della
+# PR #15 di @Darkfog81, che la applica ai template scritti da un agente di coding; vale
+# identica per quelli scritti da un LLM, che questa forma la produce spesso negli
+# elenchi ("{CITY} {DATE}", "{FULLNAME} {CF}").
+SLOT_ADIACENTI_RE = re.compile(r"\}[ \t]*\{")
+
+
 def inline_code(text):
     """Primo codice o data scritto inline, se presente."""
     masked = re.sub(r"\{\w+\}", " ", text)
@@ -469,6 +477,9 @@ def clean_and_validate(text):
     if codice:
         print(f"  scartato: codice o data scritti inline invece che come segnaposto "
               f"({codice!r})")
+        return None
+    if SLOT_ADIACENTI_RE.search(text):
+        print("  scartato: due segnaposto senza testo in mezzo (le entita' si fondono)")
         return None
     return text
 
