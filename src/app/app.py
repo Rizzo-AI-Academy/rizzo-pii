@@ -31,6 +31,7 @@ import torch
 from flask import (Flask, jsonify, render_template_string, request,
                    send_from_directory)
 
+import detectors_cyber
 import server_config
 from transformers import pipeline
 
@@ -190,10 +191,73 @@ DETECTORS = [
 ]
 
 
+# --------------------------------------------------------------------------- #
+# Pacchetti di detector OPZIONALI (opt-in).
+#
+# Il core qui sopra resta il default: con i pacchetti spenti il comportamento sui
+# documenti legali e' identico a prima — un numero di repertorio non deve diventare
+# un IP. Attivazione: env PII_DETECTORS=cyber, oppure --detectors cyber.
+#
+# Ogni pacchetto porta i propri detector e la propria KEEPLIST (riferimenti pubblici
+# da non mascherare mai).
+# --------------------------------------------------------------------------- #
+DETECTOR_PACKS = {
+    "cyber": (detectors_cyber.DETECTORS, detectors_cyber.KEEP_PATTERNS),
+}
+ACTIVE_DETECTORS = list(DETECTORS)
+ACTIVE_KEEP = []
+ACTIVE_PACKS = []
+
+
+def parse_packs(raw):
+    """Nomi dei pacchetti da una stringa "cyber,altro" o da una lista."""
+    if not raw:
+        return []
+    items = raw.replace(";", ",").split(",") if isinstance(raw, str) else list(raw)
+    return [str(i).strip().lower() for i in items if str(i).strip()]
+
+
+def enable_packs(names):
+    """Ricompone i detector attivi = core + pacchetti richiesti. Ritorna quelli attivati."""
+    global ACTIVE_DETECTORS, ACTIVE_KEEP, ACTIVE_PACKS
+    unknown = [n for n in names if n not in DETECTOR_PACKS]
+    if unknown:
+        print(f"ATTENZIONE: pacchetti di detector sconosciuti, ignorati: {', '.join(unknown)} "
+              f"(disponibili: {', '.join(sorted(DETECTOR_PACKS))})")
+    active = [n for n in names if n in DETECTOR_PACKS]
+    ACTIVE_DETECTORS, ACTIVE_KEEP = list(DETECTORS), []
+    for name in active:
+        pack_detectors, pack_keep = DETECTOR_PACKS[name]
+        ACTIVE_DETECTORS += pack_detectors
+        ACTIVE_KEEP += pack_keep
+    ACTIVE_PACKS = active
+    return active
+
+
+enable_packs(parse_packs(os.environ.get("PII_DETECTORS")))
+
+
+def drop_protected(cands, text):
+    """Scarta le entita' che toccano un riferimento pubblico della keeplist.
+
+    Vale anche per le entita' del MODELLO: mascherare 'CVE-2024-3094' o 'T1059.001'
+    renderebbe la frase incomprensibile all'LLM a cui la si manda, senza proteggere
+    nessuno (sono identificatori pubblici, non dati di una persona)."""
+    if not ACTIVE_KEEP:
+        return cands
+    protected = []
+    for rx in ACTIVE_KEEP:
+        protected.extend((m.start(), m.end()) for m in rx.finditer(text))
+    if not protected:
+        return cands
+    return [c for c in cands
+            if all(c["end"] <= start or c["start"] >= end for start, end in protected)]
+
+
 def detect_regex(text):
     """Entita' della rete regex. validated=True solo quando il checksum passa."""
     ents = []
-    for label, rx, validator, strict in DETECTORS:
+    for label, rx, validator, strict in ACTIVE_DETECTORS:
         for m in rx.finditer(text):
             ok = validator(m.group(0)) if validator else False
             if validator and strict and not ok:
@@ -286,6 +350,7 @@ def _norm(s):
 def analyze(text):
     model_ents, n_chunks = detect_model(text)
     cands = model_ents + detect_regex(text)
+    cands = drop_protected(cands, text)      # keeplist: i riferimenti pubblici restano
     kept = _merge(cands, text)
 
     # ID reversibili: stesso (label, valore-normalizzato) -> stesso placeholder.
@@ -1144,7 +1209,14 @@ if __name__ == "__main__":
     _p = _ap.ArgumentParser(description="Rizzo PII — server locale di anonimizzazione.")
     _p.add_argument("--host", default=None, help="indirizzo su cui ascoltare (default da config/env/127.0.0.1)")
     _p.add_argument("--port", type=int, default=None, help="porta su cui ascoltare (default da config/env/5005)")
+    _p.add_argument("--detectors", default=None,
+                    help=f"pacchetti di detector opzionali, es. \"cyber\" "
+                         f"(disponibili: {', '.join(sorted(DETECTOR_PACKS))}; default: solo core)")
     _args = _p.parse_args()
+
+    if _args.detectors:
+        enable_packs(parse_packs(_args.detectors))
+    print("Detector attivi: core" + (f" + {', '.join(ACTIVE_PACKS)}" if ACTIVE_PACKS else ""))
 
     _host, _port = server_config.resolve(cli_host=_args.host, cli_port=_args.port)
 
