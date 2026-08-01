@@ -31,6 +31,7 @@ import torch
 from flask import (Flask, jsonify, render_template_string, request,
                    send_from_directory)
 
+import policy
 import server_config
 from transformers import pipeline
 
@@ -190,6 +191,20 @@ DETECTORS = [
 ]
 
 
+def known_tags():
+    """Tassonomia valida per la policy: i tipi base delle label del modello (senza il
+    prefisso BIO) piu' le label della rete regex. Presa dal modello caricato, non da un
+    elenco scritto a mano che invecchierebbe."""
+    cfg = getattr(getattr(nlp, "model", None), "config", None)
+    labels = set(getattr(cfg, "label2id", None) or ())
+    return {l.split("-", 1)[1] for l in labels if "-" in l} | {d[0] for d in DETECTORS}
+
+
+# Policy attiva: cosa mascherare e cosa lasciare in chiaro (env / policy.json).
+# In __main__ viene ricaricata con gli eventuali argomenti da riga di comando.
+POLICY = policy.load_policy(known_tags=known_tags())
+
+
 def detect_regex(text):
     """Entita' della rete regex. validated=True solo quando il checksum passa."""
     ents = []
@@ -289,9 +304,15 @@ def analyze(text):
     kept = _merge(cands, text)
 
     # ID reversibili: stesso (label, valore-normalizzato) -> stesso placeholder.
+    # I tag che la policy lascia in chiaro non ricevono un placeholder e restano fuori
+    # dal dizionario: non c'e' nulla da ripristinare.
     counters, seen, mapping = {}, {}, {}
     for e in kept:
         val = text[e["start"]:e["end"]]
+        e["action"] = POLICY.action(e["label"])
+        if e["action"] == policy.ACTION_KEEP:
+            e["preservation_reason"] = policy.REASON_CONFIG
+            continue
         key = (e["label"], _norm(val))
         if key in seen:
             e["ph"] = seen[key]
@@ -304,18 +325,27 @@ def analyze(text):
 
     # segmenti per la preview + testo anonimizzato + statistiche
     segments, anon, by_label, by_source, pos = [], [], {}, {}, 0
+    n_kept = 0
     for e in kept:
+        val = text[e["start"]:e["end"]]
         if e["start"] > pos:
             segments.append({"t": text[pos:e["start"]]})
             anon.append(text[pos:e["start"]])
-        segments.append({
-            "t": text[e["start"]:e["end"]],
+        seg = {
+            "t": val,
             "label": e["label"],
-            "ph": e["ph"],
+            "ph": e.get("ph"),
             "src": e["source"],
             "validated": e["validated"],
-        })
-        anon.append(e["ph"])
+            "action": e["action"],
+        }
+        if e["action"] == policy.ACTION_KEEP:
+            seg["preservation_reason"] = e["preservation_reason"]
+            anon.append(val)          # entita' rilevata ma lasciata in chiaro
+            n_kept += 1
+        else:
+            anon.append(e["ph"])
+        segments.append(seg)
         by_label[e["label"]] = by_label.get(e["label"], 0) + 1
         by_source[e["source"]] = by_source.get(e["source"], 0) + 1
         pos = e["end"]
@@ -330,7 +360,9 @@ def analyze(text):
         "n_chunks": n_chunks,
         "n_chars": len(text),
         "n_entities": len(kept),
+        "n_kept": n_kept,
         "n_unique": len(mapping),
+        "policy": POLICY.as_dict(),
         "by_label": dict(sorted(by_label.items(), key=lambda x: -x[1])),
         "by_source": by_source,
     }
@@ -409,6 +441,38 @@ def config_post():
         return jsonify({"error": "La porta deve essere tra 1024 e 65535."}), 400
     server_config.save_config(host, port)
     return jsonify({"ok": True, "host": host, "port": port})
+
+
+# --------------------------------------------------------------------------- #
+# Policy di anonimizzazione (GET = leggi, POST = salva e applica SUBITO)
+# --------------------------------------------------------------------------- #
+@app.route("/policy", methods=["GET"])
+def policy_get():
+    return jsonify({
+        **POLICY.as_dict(),
+        "profiles": {name: sorted(tags) for name, tags in policy.PROFILES.items()},
+        "known_tags": sorted(known_tags()),
+        "high_risk_tags": sorted(policy.HIGH_RISK_TAGS),
+        "policy_path": str(policy.policy_path()),
+    })
+
+
+@app.route("/policy", methods=["POST"])
+def policy_post():
+    global POLICY
+    data = request.get_json(silent=True) or {}
+    profile = str(data.get("profile", policy.DEFAULT_PROFILE)).strip().lower()
+    if profile not in policy.PROFILES:
+        return jsonify({"error": f"Profilo sconosciuto: {profile}"}), 400
+    keep = policy.parse_tags(data.get("keep_tags"))
+    unknown = sorted(set(keep) - known_tags())
+    if unknown:
+        return jsonify({"error": "Tag non riconosciuti: " + ", ".join(unknown)}), 400
+    policy.save_file(profile, keep)
+    # a differenza di host/porta, la policy non richiede un riavvio: si applica alla
+    # prossima analisi.
+    POLICY = policy.Policy(keep_tags=keep, profile=profile)
+    return jsonify({"ok": True, **POLICY.as_dict()})
 
 
 @app.route("/port-check")
@@ -553,6 +617,8 @@ PAGE = r"""
       transition:.12s}
   .ph .ck{font-size:10px;opacity:.8;margin-left:3px}
   .ph.dim{opacity:.25;filter:grayscale(.6)}
+  /* entita' rilevata ma lasciata in chiaro dalla policy: bordo tratteggiato, valore vero */
+  .ph.keep{border-style:dashed;font-weight:500}
   .empty{color:var(--soft);display:flex;flex-direction:column;align-items:center;justify-content:center;
          height:100%;gap:9px;text-align:center;font-size:14px}
   .empty .big{font-size:34px;opacity:.6}
@@ -641,9 +707,11 @@ PAGE = r"""
   .cfg-row{display:flex;flex-direction:column;gap:5px;margin-bottom:14px}
   .cfg-row label{font-size:12.5px;font-weight:600;color:var(--muted);text-transform:uppercase;
                  letter-spacing:.04em}
-  .cfg-row input{border:1px solid var(--line);border-radius:9px;padding:9px 12px;font:inherit;
-                 font-size:14px;color:var(--ink);background:#fcfcfe}
-  .cfg-row input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(124,58,158,.13)}
+  .cfg-row input,.cfg-row select{border:1px solid var(--line);border-radius:9px;padding:9px 12px;
+                 font:inherit;font-size:14px;color:var(--ink);background:#fcfcfe}
+  .cfg-row input:focus,.cfg-row select:focus{outline:none;border-color:var(--brand);
+                 box-shadow:0 0 0 3px rgba(124,58,158,.13)}
+  .cfg-row .sub{font-size:11.5px;color:var(--soft);font-weight:400;text-transform:none;letter-spacing:0}
   .cfg-status{font-size:12.5px;font-weight:600;padding:7px 11px;border-radius:8px;margin-bottom:14px;
               display:none}
   .cfg-status.ok{display:block;background:#eaf7ef;color:var(--ok)}
@@ -809,6 +877,15 @@ PAGE = r"""
       <label data-i18n="cfg_port">Porta</label>
       <input id="cfgPort" type="number" min="1024" max="65535" value="5005">
     </div>
+    <div class="cfg-row">
+      <label data-i18n="cfg_profile">Profilo di anonimizzazione</label>
+      <select id="cfgProfile"></select>
+    </div>
+    <div class="cfg-row">
+      <label data-i18n="cfg_keep">Tag lasciati in chiaro</label>
+      <input id="cfgKeep" type="text" placeholder="AGE,GENDER" spellcheck="false">
+      <span class="sub" data-i18n="cfg_keep_note">Elenco separato da virgole; vuoto = maschera tutto.</span>
+    </div>
     <div class="cfg-status" id="cfgStatus"></div>
     <div class="cfg-btns">
       <button class="btn" id="cfgSave" onclick="saveConfig()">💾 <span data-i18n="cfg_save">Salva</span></button>
@@ -849,6 +926,7 @@ const T = {
   empty_rout:"Il testo con i valori reali apparirà qui.", rcopy:"Copia testo ripristinato",
   st_ent:"entità", st_uniq:"valori unici", st_model:"dal modello",
   st_regex:"da regex/checksum", st_chars:"caratteri", analyzing:"Analizzo…",
+  st_kept:"lasciate in chiaro", kept_tip:"rilevata e lasciata in chiaro dalla policy",
   t_need_input:"Inserisci del testo o un PDF", t_error:"Errore",
   t_copied:"Testo anonimizzato copiato", t_need_anon:"Prima anonimizza un testo",
   t_nothing_dl:"Niente da scaricare", t_dl_ok:"Dizionario scaricato",
@@ -865,8 +943,10 @@ const T = {
   cfg_title:"Configurazione server", cfg_host:"Indirizzo", cfg_port:"Porta",
   cfg_check:"Verifica porta", cfg_save:"Salva", cfg_cancel:"Annulla",
   cfg_available:"Porta disponibile ✓", cfg_in_use:"Porta occupata ✗",
-  cfg_saved:"Configurazione salvata (riavvia per applicare)",
-  cfg_restart_note:"Le modifiche avranno effetto al prossimo avvio.",
+  cfg_saved:"Configurazione salvata",
+  cfg_restart_note:"Indirizzo e porta valgono dal prossimo avvio; la policy si applica subito.",
+  cfg_profile:"Profilo di anonimizzazione", cfg_keep:"Tag lasciati in chiaro",
+  cfg_keep_note:"Elenco separato da virgole; vuoto = maschera tutto.",
  },
  en:{
   tagline:"local model on CPU · GDPR compliant", badge:"100% local",
@@ -889,6 +969,7 @@ const T = {
   empty_rout:"The text with the real values will appear here.", rcopy:"Copy restored text",
   st_ent:"entities", st_uniq:"unique values", st_model:"from the model",
   st_regex:"from regex/checksum", st_chars:"characters", analyzing:"Analyzing…",
+  st_kept:"left in clear", kept_tip:"detected and left in clear by the policy",
   t_need_input:"Enter some text or a PDF", t_error:"Error",
   t_copied:"Anonymized text copied", t_need_anon:"Anonymize a text first",
   t_nothing_dl:"Nothing to download", t_dl_ok:"Dictionary downloaded",
@@ -905,8 +986,10 @@ const T = {
   cfg_title:"Server configuration", cfg_host:"Host", cfg_port:"Port",
   cfg_check:"Check port", cfg_save:"Save", cfg_cancel:"Cancel",
   cfg_available:"Port available ✓", cfg_in_use:"Port in use ✗",
-  cfg_saved:"Config saved (restart to apply)",
-  cfg_restart_note:"Changes take effect on next startup.",
+  cfg_saved:"Config saved",
+  cfg_restart_note:"Host and port apply on next startup; the policy applies immediately.",
+  cfg_profile:"Anonymization profile", cfg_keep:"Tags left in clear",
+  cfg_keep_note:"Comma-separated list; empty = mask everything.",
  }
 };
 const tt=k=>T[L][k];
@@ -986,10 +1069,13 @@ function render(){
   for(const s of d.segments){
     if(s.label){
       const c=colors(s.label);const sp=document.createElement('span');
-      sp.className='ph'+(off.has(s.label)?' dim':'');
-      sp.style.background=c.bg;sp.style.borderColor=c.bd;sp.style.color=c.tx;
-      sp.title=`${s.t}\n(${s.src}${s.validated?' · checksum ✓':''})`;
-      sp.innerHTML=s.ph.replace(/[\[\]]/g,'')+(s.validated?'<span class="ck">✓</span>':'');
+      const keep=s.action==='keep';                 // rilevata ma non mascherata
+      sp.className='ph'+(keep?' keep':'')+(off.has(s.label)?' dim':'');
+      sp.style.background=keep?'transparent':c.bg;sp.style.borderColor=c.bd;sp.style.color=c.tx;
+      sp.title=keep?`${s.label} · ${tt('kept_tip')}`
+                   :`${s.t}\n(${s.src}${s.validated?' · checksum ✓':''})`;
+      sp.innerHTML=keep?escapeHtml(s.t)
+                       :s.ph.replace(/[\[\]]/g,'')+(s.validated?'<span class="ck">✓</span>':'');
       prev.appendChild(sp);
     }else prev.appendChild(document.createTextNode(s.t));
   }
@@ -999,6 +1085,7 @@ function render(){
   $('meta').innerHTML=
     `<span class="stat"><b>${d.n_entities}</b> ${tt('st_ent')}</span>`+
     `<span class="stat"><b>${d.n_unique}</b> ${tt('st_uniq')}</span>`+
+    (d.n_kept?`<span class="stat"><b>${d.n_kept}</b> ${tt('st_kept')}</span>`:'')+
     `<span class="stat"><b>${(d.by_source.modello||0)}</b> ${tt('st_model')}</span>`+
     `<span class="stat"><b>${(d.by_source.regex||0)}</b> ${tt('st_regex')}</span>`+
     `<span class="stat"><b>${T[L].chars(d.n_chars)}</b> ${tt('st_chars')}</span>`;
@@ -1109,6 +1196,20 @@ async function openConfig(){
   const r=await fetch('/config');const d=await r.json();
   $('cfgHost').value=d.host||'127.0.0.1';
   $('cfgPort').value=d.port||5005;
+  try{
+    const p=await (await fetch('/policy')).json();
+    const sel=$('cfgProfile');sel.innerHTML='';
+    for(const name of Object.keys(p.profiles||{})){
+      const o=document.createElement('option');o.value=name;
+      o.textContent=name+(p.profiles[name].length?' ('+p.profiles[name].join(', ')+')':'');
+      sel.appendChild(o);}
+    sel.value=p.profile;
+    // cambiando profilo il campo torna ai tag di quel profilo: cosi' e' chiaro
+    // quali tag arrivano dal profilo e quali sono stati aggiunti a mano
+    sel.onchange=()=>{$('cfgKeep').value=(p.profiles[sel.value]||[]).join(',');};
+    $('cfgKeep').value=(p.keep_tags||[]).join(',');
+    $('cfgKeep').title=(p.known_tags||[]).join(', ');
+  }catch{}
   $('cfgStatus').className='cfg-status';$('cfgStatus').textContent='';
   $('cfgOverlay').classList.add('open');
 }
@@ -1127,6 +1228,12 @@ async function saveConfig(){
   if(!p||p<1024||p>65535){toast(tt('cfg_in_use'),false);return;}
   await fetch('/config',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({host:h,port:p})});
+  const pr=await fetch('/policy',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({profile:$('cfgProfile').value,keep_tags:$('cfgKeep').value})});
+  const pd=await pr.json();
+  if(!pr.ok){                                  // tag inesistente: resta aperto, mostra l'errore
+    $('cfgStatus').className='cfg-status fail';$('cfgStatus').textContent=pd.error||tt('t_error');
+    return;}
   toast(tt('cfg_saved'));
   closeConfig();
 }
@@ -1144,7 +1251,17 @@ if __name__ == "__main__":
     _p = _ap.ArgumentParser(description="Rizzo PII — server locale di anonimizzazione.")
     _p.add_argument("--host", default=None, help="indirizzo su cui ascoltare (default da config/env/127.0.0.1)")
     _p.add_argument("--port", type=int, default=None, help="porta su cui ascoltare (default da config/env/5005)")
+    _p.add_argument("--keep-tags", default=None,
+                    help="tag da lasciare IN CHIARO, es. \"AGE,GENDER\" (default: si maschera tutto)")
+    _p.add_argument("--profile", default=None,
+                    help=f"profilo di anonimizzazione: {', '.join(sorted(policy.PROFILES))}")
     _args = _p.parse_args()
+
+    POLICY = policy.load_policy(cli_keep_tags=_args.keep_tags, cli_profile=_args.profile,
+                                known_tags=known_tags())
+    if POLICY.keep_tags:
+        print(f"Policy: profilo '{POLICY.profile}' | lasciati in chiaro: "
+              f"{', '.join(sorted(POLICY.keep_tags))}")
 
     _host, _port = server_config.resolve(cli_host=_args.host, cli_port=_args.port)
 
