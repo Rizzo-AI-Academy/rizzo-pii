@@ -187,6 +187,35 @@ DETECTORS = [
     ("TARGA",
      re.compile(r"\b[A-Za-z]{2}\s?\d{3}\s?[A-Za-z]{2}\b"),
      None, True),
+    # --- SEGRETI / CREDENZIALI (2026-08-01) ------------------------------- #
+    # Prima non erano coperti: password e seed phrase passavano al 100% in
+    # chiaro, chiavi API all'80%. Il gruppo (?P<v>...) delimita il SOLO valore
+    # da mascherare (detect_regex usa lo span del gruppo, se presente).
+    ("APIKEY",
+     re.compile(r"\b(?:(?:sk|pk|rk|gsk|xai)-(?:[A-Za-z0-9]{2,12}-)?[A-Za-z0-9_\-]{16,}"
+                r"|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"
+                r"|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|AIza[0-9A-Za-z_\-]{30,}"
+                r"|xox[baprs]-[A-Za-z0-9\-]{10,})"),
+     None, True),
+    ("TOKEN",
+     re.compile(r"\b\d{8,10}:[A-Za-z0-9_\-]{30,45}\b"                       # bot Telegram
+                r"|\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{6,}\b"),  # JWT
+     None, True),
+    ("SECRET",
+     re.compile(r"(?i:\b(?:password|passwd|pwd|passphrase|credenziali|otp"
+                r"|chiave\s+api|api[\s_\-]?key|token|client[\s_\-]?secret"
+                r"|secret[\s_\-]?key|recovery\s+code|codice\s+di\s+recupero)\b)"
+                r"[^\n:=]{0,40}[:=][ \t]*(?P<v>\S{4,}?)(?=[.,;!?]?(?:\s|$))"),
+     None, True),
+    ("SEEDPHRASE",
+     re.compile(r"(?i:\b(?:seed(?:\s+phrase)?|mnemonic|frase\s+(?:di\s+)?recupero"
+                r"|recovery\s+phrase)\b)[^\n:]{0,40}:[ \t]*"
+                r"(?P<v>[a-z]+(?:[ \t]+[a-z]+){11,23})"),
+     None, True),
+    ("PRIVATEKEY",
+     re.compile(r"-----BEGIN [A-Z ]{0,24}PRIVATE KEY-----"
+                r"[\s\S]{40,6000}?-----END [A-Z ]{0,24}PRIVATE KEY-----"),
+     None, True),
 ]
 
 
@@ -194,14 +223,16 @@ def detect_regex(text):
     """Entita' della rete regex. validated=True solo quando il checksum passa."""
     ents = []
     for label, rx, validator, strict in DETECTORS:
+        has_v = "v" in rx.groupindex   # gruppo (?P<v>...) = solo il valore da mascherare
         for m in rx.finditer(text):
-            ok = validator(m.group(0)) if validator else False
+            s, e = m.span("v") if has_v else m.span()
+            ok = validator(text[s:e]) if validator else False
             if validator and strict and not ok:
                 continue
             ents.append({
                 "label": label,
-                "start": m.start(),
-                "end": m.end(),
+                "start": s,
+                "end": e,
                 "score": 1.0 if ok else 0.9,
                 "validated": ok,
                 "source": "regex",
@@ -283,16 +314,98 @@ def _norm(s):
     return re.sub(r"\s+", " ", s.strip()).casefold()
 
 
+# Parole di intestazione dei documenti che il modello a volte scambia per
+# nomi/enti (visto sul campo: "BOZZA" -> FULLNAME). Solo MAIUSCOLE esatte.
+_STOPWORDS_DOC = {
+    "BOZZA", "ATTO", "CONTRATTO", "CONTRATTI", "PREVENTIVO", "FATTURA",
+    "REPERTORIO", "ALLEGATO", "VERBALE", "OGGETTO", "PREMESSO", "PREMESSA",
+    "NOTE", "INTERNE", "PARTE", "PARTI", "PRIMA", "SECONDA", "TERZA",
+    "QUARTA", "QUINTA", "TITOLO", "ARTICOLO", "CAPITOLATO",
+}
+
+
+def _prefilter(ents, text):
+    """Scarta i falsi positivi grossolani del modello PRIMA della fusione:
+    span senza alcun alfanumerico ('.' -> ORG) e parole di intestazione
+    scambiate per nomi/enti. I frammenti CORTI ma alfanumerici NON si
+    scartano: servono alla guardia anti-frammento per capire che la parola
+    va mascherata per intero (scartarli = lasciare il valore in chiaro)."""
+    out = []
+    for e in ents:
+        val = text[e["start"]:e["end"]].strip()
+        if not any(ch.isalnum() for ch in val):
+            continue
+        if (e["label"] in ("FULLNAME", "ORG", "CITY")
+                and val in _STOPWORDS_DOC):
+            continue
+        out.append(e)
+    return out
+
+
+def _fragment_guard(text, kept):
+    """Rete di sicurezza anti-frammento (fail-closed).
+
+    Se un'entita' copre solo una PARTE di una sequenza continua di caratteri
+    (una "parola"), il resto resterebbe in chiaro attaccato al placeholder:
+    un segreto puo' SEMBRARE mascherato restando leggibile
+    (es. [X]-live-[Y]83...). Qui si maschera l'INTERA sequenza, con
+    l'etichetta dell'entita' piu' lunga che vi ricade."""
+    if not kept:
+        return kept
+    spans = []
+    for m in re.finditer(r"\S+", text):
+        rs, re_ = m.span()
+        inside = [e for e in kept if e["start"] < re_ and e["end"] > rs]
+        if not inside:
+            continue
+        # margini ammessi: elisione iniziale (l', sull'...) e punteggiatura ai bordi
+        i0, i1 = rs, re_
+        el = re.match(r"[A-Za-zÀ-ÿ]{1,4}'", m.group(0))
+        if el:
+            i0 = rs + el.end()
+        while i0 < i1 and text[i0] in "(«\"'“[":
+            i0 += 1
+        while i1 > i0 and text[i1 - 1] in ".,;:!?)»\"'”]…":
+            i1 -= 1
+        scoperto = any(
+            not any(e["start"] <= i < e["end"] for e in inside)
+            for i in range(i0, i1))
+        if scoperto:
+            lo = min([i0] + [e["start"] for e in inside])
+            hi = max([i1] + [e["end"] for e in inside])
+            lab = max(inside, key=lambda e: e["end"] - e["start"])["label"]
+            spans.append([lo, hi, lab])
+    if not spans:
+        return kept
+    # fondi i blocchi sovrapposti (entita' a cavallo di due parole)
+    spans.sort()
+    fusi = [spans[0]]
+    for lo, hi, lab in spans[1:]:
+        if lo <= fusi[-1][1]:
+            fusi[-1][1] = max(fusi[-1][1], hi)
+        else:
+            fusi.append([lo, hi, lab])
+    out = [e for e in kept
+           if not any(lo < e["end"] and hi > e["start"] for lo, hi, _ in fusi)]
+    out += [{"label": lab, "start": lo, "end": hi, "score": 1.0,
+             "validated": False, "source": "guardia"} for lo, hi, lab in fusi]
+    return sorted(out, key=lambda e: e["start"])
+
+
 def analyze(text):
     model_ents, n_chunks = detect_model(text)
-    cands = model_ents + detect_regex(text)
-    kept = _merge(cands, text)
+    cands = _prefilter(model_ents, text) + detect_regex(text)
+    kept = _fragment_guard(text, _merge(cands, text))
 
-    # ID reversibili: stesso (label, valore-normalizzato) -> stesso placeholder.
+    # ID reversibili. La chiave usa il valore ESATTO (niente _norm): due
+    # varianti di spaziatura/maiuscole ("San Lorenzo" vs "San\nLorenzo",
+    # frequente nei PDF) devono avere placeholder DIVERSI, altrimenti il
+    # ripristino restituisce per entrambe la prima forma incontrata e il
+    # testo ricostruito non e' piu' byte-identico all'originale.
     counters, seen, mapping = {}, {}, {}
     for e in kept:
         val = text[e["start"]:e["end"]]
-        key = (e["label"], _norm(val))
+        key = (e["label"], val)
         if key in seen:
             e["ph"] = seen[key]
         else:
