@@ -9,5 +9,5 @@ txt = ("Il sottoscritto Mario Rossi, C.F. RSSMRA85M01H501Z, residente in Via Rom
 r = app.analyze(txt)
 print("chunk:", r["n_chunks"], "| entita':", r["n_entities"], "| char:", r["n_chars"])
 print("by_label:", r["by_label"])
-print("\nESTRATTO CENSURATO:")
-print(r["censored_text"][:400])
+print("\nESTRATTO ANONIMIZZATO:")
+print(r["anonymized_text"][:400])
