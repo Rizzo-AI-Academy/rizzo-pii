@@ -91,6 +91,13 @@ non chiedendolo alla token-classification.
   diretti**; in un atto spesso servono. Politica di mascheramento da decidere a valle,
   non necessariamente "sempre".
 
+**La politica è configurabile** (`src/app/policy.py`): per ogni tag si sceglie `mask`
+(placeholder reversibile, default) o `keep` (resta in chiaro), via profilo
+(`full` / `clinical` / `compare-amounts`), `--keep-tags`, env `PII_KEEP_TAGS` o `policy.json`.
+Non tocca né il modello né il training: **la tassonomia resta questa**, cambia solo cosa ne fa
+l'app a valle. Le entità lasciate in chiaro vengono comunque rilevate e riportate
+(`action: "keep"`), ma non entrano nel dizionario reversibile.
+
 ---
 
 ## Fonti dei dati e validation

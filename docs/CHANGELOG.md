@@ -5,6 +5,43 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-08-02 — Policy di anonimizzazione: scegliere quali tag lasciare in chiaro
+
+Fino a oggi ogni entità rilevata veniva mascherata, senza eccezioni. Per alcuni compiti questo
+rende il documento inutilizzabile: se si chiede al modello di frontiera di verificare la coerenza
+fra due importi, `[AMOUNT_1]` e `[AMOUNT_2]` non sono confrontabili (#31); in ambito clinico età e
+sesso sono spesso l'oggetto dello studio, non l'identificatore da togliere (#41).
+
+Nuovo modulo **`src/app/policy.py`** (puro: nessun import di torch/flask). Per ogni tag decide
+`mask` (placeholder reversibile, default) o `keep` (resta in chiaro), con la stessa catena di
+precedenza di `server_config`: **CLI > env (`PII_PROFILE`/`PII_KEEP_TAGS`) > `policy.json` > default**.
+
+- **Default invariato**: senza configurazione si maschera tutto, esattamente come prima.
+- **Profili**: `full` (default), `clinical` (AGE/GENDER/DATE/TIME), `compare-amounts` (AMOUNT).
+  I tag indicati esplicitamente si **aggiungono** a quelli del profilo.
+- **`policy.json` è un file separato da `config.json`**: quest'ultimo è riscritto anche dall'app
+  Tauri dal lato Rust come `{host, port}`, e cancellerebbe una chiave estranea.
+- **Le entità tenute in chiaro restano visibili**: escono con `action: "keep"` e
+  `preservation_reason: "excluded_by_config"`, contano in `n_kept` e nella legenda, ma **non
+  entrano nel dizionario** (non c'è nulla da ripristinare).
+- **Validazione**: i tag sono confrontati con la tassonomia presa dal modello caricato
+  (`label2id`, senza prefisso BIO) più le label della rete regex — non da un elenco scritto a mano
+  che invecchierebbe. I tag sconosciuti vengono segnalati e ignorati. Lasciare in chiaro un
+  identificatore diretto (FULLNAME/CF/PIVA/IBAN/carta/ID_DOC/EMAIL/telefono) produce un avviso
+  esplicito: è una scelta legittima, ma va vista.
+- **UI**: profilo e tag in chiaro nel modale ⚙️ (si applicano **subito**, senza riavvio, a
+  differenza di host/porta); nell'anteprima le entità lasciate in chiaro hanno il bordo
+  tratteggiato e mostrano il valore vero.
+- **CLI**: `--profile` e `--keep-tags` su `src/app/app.py` e `src/training/test_pii.py`.
+- **Test**: prima suite del repo in `tests/`, con `unittest` della stdlib (nessuna nuova
+  dipendenza) — `python -m unittest discover -s tests`. Il modello è sostituito da uno stub,
+  quindi girano senza torch/transformers e senza checkpoint; rete regex, merge, assegnazione dei
+  placeholder ed endpoint sono reali.
+
+Nessun impatto sul training: la policy agisce **solo in inferenza**, la tassonomia non cambia.
+
+---
+
 ## 2026-06-30 — Porta del backend 5000 → 5005 (conflitto AirPlay su macOS)
 
 Gli utenti macOS vedevano una **pagina bianca**: la porta **5000** è occupata di default

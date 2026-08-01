@@ -200,6 +200,28 @@ The five Italian-legal tags (`CF`, `PIVA`, `CATASTO`, `DOCID`, `PROVINCE`) are t
 rizzo-pii exists: they do not appear as labeled data in any public corpus, so they are created
 through synthesis with mathematically valid checksums.
 
+### Choosing what to mask: profiles and policy
+
+Masking every category is the right default, but not always the right answer. A task that asks the
+frontier model to cross-check two amounts cannot work on `[AMOUNT_1]` vs `[AMOUNT_2]`; in a clinical
+setting, age and sex are often the object of the study rather than the identifier to remove. A
+**policy** decides, per tag, whether an entity is masked (reversible placeholder — the default) or
+left in clear, resolved through the same chain used for host/port:
+**CLI > env > `policy.json` > default**.
+
+```bash
+python src/app/app.py --profile clinical               # AGE, GENDER, DATE, TIME stay readable
+python src/app/app.py --keep-tags AMOUNT               # amounts stay comparable
+PII_KEEP_TAGS=AGE,GENDER python src/app/app.py         # same, from the environment
+python src/training/test_pii.py --profile clinical "…"
+```
+
+Entities left in clear are still **detected and reported** (`action: "keep"`,
+`preservation_reason: "excluded_by_config"`, counted in `n_kept`); they simply never enter the
+reversible dictionary, because there is nothing to restore. Profile and tags are also editable from
+the ⚙️ dialog in the app and apply immediately, with no restart. Keeping a direct identifier
+(`FULLNAME`, `CF`, `IBAN`…) in clear is allowed, and warned about.
+
 ---
 
 ## Dataset & training

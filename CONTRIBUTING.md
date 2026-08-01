@@ -54,6 +54,14 @@ python src/data_pipeline/build_subset.py
 python src/training/train_pii.py --type subset     # ~3 min
 ```
 
+Run the test suite — stdlib `unittest`, **no extra dependency and no model needed** (the
+token-classification pipeline is stubbed, so the regex/checksum net and the merge are exercised
+for real):
+
+```bash
+python -m unittest discover -s tests
+```
+
 ## Pull request workflow
 
 1. Create a topic branch: `git checkout -b fix/short-description`.

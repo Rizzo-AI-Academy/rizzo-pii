@@ -74,6 +74,14 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   codice di uscita `EXIT_PORT_CONFLICT = 76`: i 3 entry point escono con 76 se la porta è occupata
   **prima di caricare il modello** (evita secondi sprecati). Tauri riconosce il codice 76 e mostra
   il form di configurazione nello splash screen.
+- `policy.py` — **policy di anonimizzazione**: per ogni tag decide `mask` (placeholder reversibile,
+  default) o `keep` (resta in chiaro). Catena di precedenza: **CLI `--profile`/`--keep-tags` > env
+  `PII_PROFILE`/`PII_KEEP_TAGS` > `policy.json` > default**. Profili: `full`, `clinical`,
+  `compare-amounts`; i tag espliciti si sommano a quelli del profilo. `policy.json` sta nella stessa
+  directory di `config.json` ma è un **file separato** (Tauri riscrive `config.json` dal lato Rust e
+  cancellerebbe una chiave estranea). Modulo **puro** (niente torch/flask) → testabile senza modello.
+  Le entità tenute in chiaro escono con `action: "keep"` + `preservation_reason` e **non** entrano nel
+  dizionario. Endpoint `GET/POST /policy`: si applica subito, senza riavvio.
 - `app.py` — server Flask + **UI**: testo o PDF, chunking con overlap, offset globali + dedup.
   Anonimizzazione **reversibile** (ogni PII → `[FULLNAME_1]`/`[IBAN_1]`… + dizionario locale; tab
   "Ripristina"). Affianca al modello una **rete regex/checksum** (EMAIL/TELEFONO/IBAN/CF/PIVA/carta/
