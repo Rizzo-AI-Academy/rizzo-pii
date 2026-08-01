@@ -187,6 +187,20 @@ DETECTORS = [
     ("TARGA",
      re.compile(r"\b[A-Za-z]{2}\s?\d{3}\s?[A-Za-z]{2}\b"),
      None, True),
+    ("DATE",
+     # date numeriche (12/06/2025, 12-06-25, 12.06.2025) e letterali (12 giugno 2025)
+     re.compile(r"\b\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}\b"
+                r"|\b\d{1,2}\s+(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto"
+                r"|settembre|ottobre|novembre|dicembre)\s+\d{2,4}\b",
+                re.IGNORECASE),
+     None, True),
+    ("DOCID",
+     # R.G. 1234/2024, RG 1234/2024, R.G.N.R. 123/2023, Prot. 123/2024, repertorio 45
+     re.compile(r"\b(?:R\.?G\.?\s*N\.?R\.?|R\.?G\.?|RG)\s*\d{1,8}(?:[/\-]\d{2,4})?\b"
+                r"|\b(?:Prot\.?|protocollo(?:\s*(?:n\.?|num\.?))?|Rep\.?|repertorio)"
+                r"\s*\d{1,8}(?:[/\-]\d{2,4})?\b",
+                re.IGNORECASE),
+     None, True),
 ]
 
 

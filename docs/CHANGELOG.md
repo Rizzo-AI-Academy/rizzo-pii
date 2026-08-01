@@ -5,6 +5,21 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-07-31 — Detector regex DATE e DOCID nell'app (niente più frammentazione)
+
+Il modello da solo frammentava date e numeri di registro in più span, lasciando
+**caratteri in chiaro** nel testo anonimizzato (es. `12/06/2025` → `[DATE_1][DATE_2]2[DATE_3]`,
+`R.G. 1234/2024` → quattro frammenti + `4` finale scoperta) e corrompendo il ripristino
+(`1234/202` al posto di `1234/2024`). Aggiunti in `src/app/app.py` due detector
+deterministici alla rete regex+checksum (stesso meccanismo di CF/IBAN, priorità sul modello):
+
+- **`DATE`**: date numeriche (`12/06/2025`, `12-06-25`, `12.06.2025`) e letterali (`12 giugno 2025`)
+- **`DOCID`**: `R.G.`/`RG`/`R.G.N.R.`, `Prot.`/`protocollo`, `Rep.`/`repertorio` + numero (con anno opzionale)
+
+Nessun impatto su training e pipeline dati.
+
+---
+
 ## 2026-06-30 — Porta del backend 5000 → 5005 (conflitto AirPlay su macOS)
 
 Gli utenti macOS vedevano una **pagina bianca**: la porta **5000** è occupata di default
