@@ -200,6 +200,27 @@ The five Italian-legal tags (`CF`, `PIVA`, `CATASTO`, `DOCID`, `PROVINCE`) are t
 rizzo-pii exists: they do not appear as labeled data in any public corpus, so they are created
 through synthesis with mathematically valid checksums.
 
+### Security documents: the optional `cyber` detector pack
+
+Security work — assessment reports, forensic timelines, incident tickets, log extracts — has the
+same need, plus an NDA on top of the GDPR. Its identifiers are not in the 22 tags, though: IP
+addresses and CIDR ranges, domains, URLs, MACs, hashes, wallets, cloud identifiers, paths that
+embed a username, domain accounts, ASNs. They are all **structured**, so they are covered by an
+**opt-in pack of deterministic detectors** — regex plus validators, no retraining, no new
+dependency (`ipaddress` from the stdlib for IP/CIDR, Base58Check via `hashlib` for Bitcoin):
+
+```bash
+python src/app/app.py --detectors cyber      # or: PII_DETECTORS=cyber
+```
+
+It also recognizes **defanged** indicators (`203[.]0[.]113[.]42`, `evil(.)com`, `hxxps://`) — the
+form these values usually take in a report — and ships a **keeplist** so that public references
+(`CVE-…`, `CWE-…`, ATT&CK techniques, `RFC …`) are never masked: replacing `CVE-2024-3094` with a
+placeholder would make the sentence unreadable for the frontier model while protecting nobody.
+
+With the pack disabled — the default — behaviour on legal documents is unchanged: a court docket
+number must never turn into an IP address.
+
 ---
 
 ## Dataset & training

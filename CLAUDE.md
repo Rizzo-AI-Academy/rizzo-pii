@@ -74,6 +74,12 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   codice di uscita `EXIT_PORT_CONFLICT = 76`: i 3 entry point escono con 76 se la porta è occupata
   **prima di caricare il modello** (evita secondi sprecati). Tauri riconosce il codice 76 e mostra
   il form di configurazione nello splash screen.
+- `detectors_cyber.py` — **pacchetto di detector opt-in per documenti di sicurezza**: IP/CIDR
+  (validati con `ipaddress`), DOMAIN, URL, MAC, HASH, WALLET (Base58Check), CLOUDID, PATH, USER,
+  ASN, **anche in forma defanged** (`203[.]0[.]113[.]42`, `hxxps://`). Porta anche una **keeplist**
+  (CVE/CWE/CAPEC/RFC/ATT&CK) di riferimenti pubblici da non mascherare mai. Si attiva con
+  `--detectors cyber` o `PII_DETECTORS=cyber`; spento, il comportamento sui documenti legali è
+  invariato. Modulo puro (solo `re`, `ipaddress`, `hashlib`) → testabile senza modello.
 - `app.py` — server Flask + **UI**: testo o PDF, chunking con overlap, offset globali + dedup.
   Anonimizzazione **reversibile** (ogni PII → `[FULLNAME_1]`/`[IBAN_1]`… + dizionario locale; tab
   "Ripristina"). Affianca al modello una **rete regex/checksum** (EMAIL/TELEFONO/IBAN/CF/PIVA/carta/

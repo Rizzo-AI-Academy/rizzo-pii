@@ -5,6 +5,37 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-08-02 — Pacchetto di detector "cyber" (opt-in) + keeplist dei riferimenti pubblici
+
+Chi scrive documenti di sicurezza — report di assessment, timeline forensi, ticket di incidente,
+estratti di log — ha lo stesso problema degli studi legali, con in più un NDA. Ma i suoi
+identificatori non sono nei 22 tag: **IP, CIDR, domini, URL, MAC, hash, wallet, identificativi
+cloud, percorsi con lo username, account di dominio, ASN oggi restano in chiaro al 100%**.
+
+Sono tutti dati a forma specifica: nuovo modulo `src/app/detectors_cyber.py` con regex +
+validatori, **nessun riaddestramento**, nessuna nuova dipendenza (IP e CIDR validati con
+`ipaddress` della stdlib, Bitcoin con Base58Check via `hashlib`).
+
+- **Opt-in**: `--detectors cyber` o `PII_DETECTORS=cyber`. Con il pacchetto spento il
+  comportamento sui documenti legali è **identico**: un numero di repertorio non deve diventare un
+  IP. C'è un test che verifica l'assenza di falsi positivi cyber su prosa legale col pacchetto
+  **acceso**.
+- **Forme defanged riconosciute direttamente** (`203[.]0[.]113[.]42`, `evil(.)com`, `hxxps://`):
+  normalizzare il testo prima sfaserebbe gli offset, e un indicatore defangato non mascherato è
+  comunque un leak.
+- **Keeplist**: i riferimenti pubblici (CVE, CWE, CAPEC, RFC, tecniche ATT&CK) non vengono mai
+  mascherati, nemmeno se li propone il modello — mascherare `CVE-2024-3094` rende la frase
+  incomprensibile all'LLM senza proteggere nessuno. È volutamente **stretta**: in una keeplist un
+  falso positivo non produce una parola illeggibile, produce un dato sensibile lasciato in chiaro.
+- **Non include `SECRET`** (password, API key, JWT, chiavi PEM, seed): lo copre già la PR #37.
+- Bug evitato in fase di scrittura, degno di nota: con un lookahead `(?![\w.])` un indirizzo a
+  **fine frase** («il C2 è 203.0.113.42.») non veniva rilevato. Falso negativo, cioè un leak; ora
+  c'è un test di regressione.
+
+Nessun impatto sul training: sono detector deterministici, la tassonomia del modello non cambia.
+
+---
+
 ## 2026-06-30 — Porta del backend 5000 → 5005 (conflitto AirPlay su macOS)
 
 Gli utenti macOS vedevano una **pagina bianca**: la porta **5000** è occupata di default
