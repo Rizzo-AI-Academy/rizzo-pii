@@ -2,8 +2,10 @@
 
 Guida per Claude Code (claude.ai/code) quando lavora in questa repo. Panoramica e struttura
 delle cartelle in **[README.md](README.md)**. Documenti di dettaglio:
-**[docs/TASSONOMIA_TAG.md](docs/TASSONOMIA_TAG.md)** (i 22 tag) e
-**[docs/DATASET.md](docs/DATASET.md)** (composizione completa di train/validation).
+**[docs/TASSONOMIA_TAG.md](docs/TASSONOMIA_TAG.md)** (i 22 tag),
+**[docs/DATASET.md](docs/DATASET.md)** (composizione completa di train/validation) e
+**[docs/TRAINING.md](docs/TRAINING.md)** (unione dei due dataset HF, accortezze sui tag,
+iperparametri).
 
 ## Cos'è questo progetto
 

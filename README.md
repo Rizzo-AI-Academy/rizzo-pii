@@ -577,6 +577,7 @@ Vincoli: SOLO dati sintetici (mai PII reali). Se Gemini non è disponibile, ferm
 |---|---|
 | [CLAUDE.md](CLAUDE.md) | Environment constraints, repo map, architectural decisions, commands |
 | [docs/DATASET.md](docs/DATASET.md) | Full composition of train (~745k) and validation (7k) |
+| [docs/TRAINING.md](docs/TRAINING.md) | Training run: union of both HF datasets, subword-label handling, hyperparameters |
 | [docs/TASSONOMIA_TAG.md](docs/TASSONOMIA_TAG.md) | The 22 final tags and the merges (`TAG_MAP`) |
 | [docs/FORMATO_DATI.md](docs/FORMATO_DATI.md) | Exact dataset row format for contributing data (JSONL/BIO/checksums) |
 | [docs/BUILD.md](docs/BUILD.md) | Desktop executable build (CPU, Windows) |

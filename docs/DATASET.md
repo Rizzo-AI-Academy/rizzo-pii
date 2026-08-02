@@ -5,6 +5,13 @@ da dove vengono, come sono stati creati, quanto è sintetico, quante lingue, e l
 distribuzione per lingua e per tag. È la fonte di verità sui dati quando si riprende
 il progetto. Per la **tassonomia dei 22 tag** vedi [TASSONOMIA_TAG.md](TASSONOMIA_TAG.md).
 
+> ℹ️ **Questo documento descrive il pool storico** (~745k train + 7k validation), quello
+> del dataset [`rizzo-pii-it-dataset`](https://huggingface.co/datasets/rizzoaiacademy/rizzo-pii-it-dataset).
+> Dalla v1.3.0 il training usa **l'unione** di quel dataset con
+> [`anonimizzazione-testi-italiano-clean`](https://huggingface.co/datasets/rizzoaiacademy/anonimizzazione-testi-italiano-clean)
+> (1,43M train + 29,3k validation): unione dei train per il training, unione delle
+> validation per la validation. Procedura in **[TRAINING.md](TRAINING.md)**.
+
 Tutti i numeri sono calcolati sui file reali, **dopo** la normalizzazione `TAG_MAP`
 (cioè sui 22 tag finali, come li vede il modello). `LANG = None` → training **multilingue**.
 

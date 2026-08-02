@@ -15,6 +15,7 @@ import os
 import random
 import sys
 import time
+from collections import Counter
 
 # Riduce la frammentazione VRAM (blocchi espandibili): evita il thrashing
 # dell'allocatore quando le lunghezze di sequenza variano vicino al tetto dei 16 GB.
@@ -29,6 +30,7 @@ from transformers import (
     AutoModelForTokenClassification,
     AutoTokenizer,
     DataCollatorForTokenClassification,
+    EarlyStoppingCallback,
     Trainer,
     TrainingArguments,
 )
@@ -75,7 +77,10 @@ LANG = None            # None = tutte le lingue (multilingue); "it" = solo itali
 MAX_LEN = 768          # copre i sintetici (max 771 subword) e DeepMount (660); tronca
                        # solo poche centinaia di Ai4 estremi. Padding dinamico: i batch
                        # corti (media ~112 subword) non rallentano.
-EPOCHS = 1
+EPOCHS = 2             # la eval_loss del run v1.2.0 era ANCORA in discesa a fine epoca 1 e
+                       # test_loss ~ eval_loss (nessun divario): c'era capacita' inutilizzata.
+                       # La 2a epoca ripassa pero' su dati in gran parte sintetici -> il vero
+                       # freno e' l'early stopping su macro-F1, non questo numero.
 BATCH = 14             # run grande a MAX_LEN 768 su 16 GB CONDIVISI col desktop: 16 tiene il picco
                        # di attivazioni a ~8-9 GB (24 arrivava a ridosso del tetto -> thrashing sui
                        # batch lunghi). Con GRAD_ACCUM=2 il batch EFFETTIVO resta 32 (vedi sotto).
@@ -316,6 +321,13 @@ label_set = set()
 for recs in (train_recs, val_recs):
     for _, labs in recs:
         label_set.update(labs)
+# Ogni B-X deve avere il suo I-X anche se nei dati non compare mai: i tag di una sola
+# parola (CF, PIVA, ZIPCODE, PROVINCE, CONTO...) hanno solo B- perche' l'entita' non
+# supera mai il token, ma i loro subword interni vengono etichettati I-X (vedi
+# LABEL_ALL_SUBWORDS). Senza questa riga label2id.get("I-CF") non esisterebbe e
+# quelle posizioni cadrebbero in silenzio su O, insegnando che l'interno di un
+# codice fiscale non e' niente.
+label_set |= {"I-" + l[2:] for l in list(label_set) if l.startswith("B-")}
 label_list = sorted(label_set)
 label2id = {l: i for i, l in enumerate(label_list)}
 id2label = {i: l for l, i in label2id.items()}
@@ -327,6 +339,24 @@ print(f"Numero di label (BIO): {len(label_list)}")
 # --------------------------------------------------------------------------- #
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
+# Il tokenizer spezza ogni parola in subword: 'Mario' resta 1 pezzo, ma un codice
+# fiscale 'MNTCRL58D07H163B' ne fa 13 e un IBAN 26. La label del dataset e' UNA per
+# parola, quindi va distribuita su quei pezzi. Etichettare solo il primo e mettere
+# -100 sugli altri li esclude dalla loss: quelle posizioni non vengono MAI addestrate,
+# ma in inferenza la pipeline (aggregation_strategy="simple") le legge lo stesso e il
+# modello risponde a caso con score ~1.0 -> lo span degli identificatori lunghi si
+# frantuma ('RCC' + 'M' + 'RT60T58H7' + 'I' con tag diversi). Effetto misurato sulla
+# validation di anonimizzazione-testi-italiano-clean: CF/PIVA/IBAN a F1 0.000 mentre
+# FULLNAME (1 parola = 1 subword) sta a 0.987.
+# Con la propagazione ogni posizione letta in inferenza e' supervisionata: il subword
+# interno eredita la label come continuazione (B-X -> I-X, O e I-X restano invariati).
+LABEL_ALL_SUBWORDS = True
+
+
+def _continuation(label):
+    """B-X -> I-X: il subword interno continua l'entita' aperta dal primo pezzo."""
+    return "I-" + label[2:] if label.startswith("B-") else label
+
 
 def encode(tokens, labels):
     enc = tokenizer(tokens, is_split_into_words=True, truncation=True, max_length=MAX_LEN)
@@ -337,6 +367,8 @@ def encode(tokens, labels):
             aligned.append(-100)
         elif wid != prev:
             aligned.append(label2id.get(labels[wid], O_ID))
+        elif LABEL_ALL_SUBWORDS:
+            aligned.append(label2id.get(_continuation(labels[wid]), O_ID))
         else:
             aligned.append(-100)
         prev = wid
@@ -368,14 +400,78 @@ print(f"Modello: {MODEL_NAME} | parametri: {sum(p.numel() for p in model.paramet
 
 collator = DataCollatorForTokenClassification(tokenizer)
 
+
+def spans(tags):
+    out, cur = [], None
+    for i, t in enumerate(tags + ["O"]):
+        if t == "O" or t.startswith("B-") or (cur and t[2:] != cur[0]):
+            if cur:
+                out.append((cur[0], cur[1], i)); cur = None
+        if t.startswith("B-") or (t.startswith("I-") and cur is None):
+            cur = (t[2:], i)
+    return set(out)
+
+
+def preprocess_logits_for_metrics(logits, labels):
+    """argmax SUBITO, sulla GPU. Senza questo il Trainer accumulerebbe i logit interi
+    della validation (36k righe x 768 token x ~50 classi = svariati GB in RAM) prima di
+    chiamare compute_metrics: OOM garantito sull'unione delle due validation."""
+    return logits.argmax(dim=-1)
+
+
+# Tag da tenere d'occhio: erano a F1 0.000 per il bug dei subword (vedi
+# LABEL_ALL_SUBWORDS). Se dopo il fix restano a zero, la propagazione non e' attiva.
+WATCH_TAGS = ("CF", "PIVA", "IBAN", "ZIPCODE", "ID_DOC")
+
+
+def compute_metrics(eval_pred):
+    """Metriche entity-level a OGNI eval, non solo alla fine.
+
+    La sola eval_loss non basta per decidere: >90% dei token e' O, quindi la loss e'
+    dominata dalla classe facile e puo' scendere mentre i tag rari stanno fermi (e'
+    esattamente come il bug dei subword ha attraversato un'epoca intera senza dare
+    segnale). La micro-F1 e' a sua volta dominata da FULLNAME/CITY: la metrica che si
+    muove sui tag rari e' la MACRO-F1 (media delle F1 per tag), usata infatti come
+    metric_for_best_model.
+    """
+    preds, gold = eval_pred.predictions, eval_pred.label_ids
+    tp = Counter(); fp = Counter(); fn = Counter()
+    tok_ok = tok_tot = 0
+    for p_row, g_row in zip(preds, gold):
+        p_tags, g_tags = [], []
+        for p, g in zip(p_row, g_row):
+            if g == -100:
+                continue
+            p_tags.append(id2label[int(p)]); g_tags.append(id2label[int(g)])
+            tok_tot += 1; tok_ok += int(p == g)
+        gs, ps = spans(g_tags), spans(p_tags)
+        for typ, _, _ in (gs & ps): tp[typ] += 1
+        for typ, _, _ in (ps - gs): fp[typ] += 1
+        for typ, _, _ in (gs - ps): fn[typ] += 1
+
+    def prf(t, f_p, f_n):
+        p = t / (t + f_p) if t + f_p else 0.0
+        r = t / (t + f_n) if t + f_n else 0.0
+        return p, r, (2 * p * r / (p + r) if p + r else 0.0)
+
+    P, R, F = prf(sum(tp.values()), sum(fp.values()), sum(fn.values()))
+    per_tag = {t: prf(tp[t], fp[t], fn[t])[2] for t in (set(tp) | set(fn))}
+    out = {"precision": P, "recall": R, "f1_micro": F,
+           "f1_macro": (sum(per_tag.values()) / len(per_tag)) if per_tag else 0.0,
+           "token_acc": tok_ok / tok_tot if tok_tot else 0.0}
+    out.update({f"f1_{t}": per_tag.get(t, 0.0) for t in WATCH_TAGS})
+    return out
+
+
 microbatches = len(train_ds) // BATCH + (len(train_ds) % BATCH > 0)
 steps_per_epoch = max(1, microbatches // GRAD_ACCUM)   # step OTTIMIZZATORE (con accumulo gradiente)
-# Eval intermedia LEGGERA: ~4 valutazioni (solo eval_loss) durante l'epoca, per vedere su
-# W&B la curva train-vs-val e cogliere overfit/anomalie prima della fine del run lungo.
-# Le metriche P/R/F1 entity-level restano calcolate ALLA FINE (sezione 6).
-EVAL_EVERY = max(1, steps_per_epoch // 4)
+# Eval periodica con metriche complete. Con ~4 valutazioni per run (il vecchio
+# steps_per_epoch // 4) l'overfitting non e' osservabile: quando lo vedi il training e'
+# gia' finito. EVAL_EVERY fisso a 2000 step -> ~13 punti per epoca sul pool grande;
+# sul subset resta proporzionale, altrimenti lo smoke test non valuterebbe mai.
+EVAL_EVERY = max(1, min(2000, steps_per_epoch // 4))
 print(f"Step ottimizzatore/epoca: ~{steps_per_epoch} (microbatch {microbatches}, accum {GRAD_ACCUM}) | "
-      f"eval_loss ogni {EVAL_EVERY} step | P/R/F1 ALLA FINE")
+      f"eval ogni {EVAL_EVERY} step (loss + P/R/F1 micro/macro + tag critici)")
 
 args = TrainingArguments(
     output_dir=os.path.join(RUN_DIR, "out"),
@@ -388,21 +484,36 @@ args = TrainingArguments(
     warmup_ratio=0.05,               # ~5% warmup: stabilizza i primi step (testa nuova a LR pieno)
     bf16=True,
     logging_steps=1,                 # train loss a OGNI step (per il plot e per W&B)
-    eval_strategy="steps",           # eval_loss periodica durante il training
+    eval_strategy="steps",           # eval periodica durante il training
     eval_steps=EVAL_EVERY,
     report_to=(["wandb"] if USE_WANDB else []),
     run_name=WANDB_RUN_NAME,         # versionato sul run grande (rizzo-pii:0.3B-v{VERSION})
-    save_strategy="no",
-    dataloader_num_workers=0,        # Windows
+    # Checkpoint: prima era "no", cioe' un run lungo che degenerava a meta' era da buttare
+    # per intero. Ora si salva a ogni eval e si tiene il MIGLIORE per macro-F1 (non per
+    # loss: vedi compute_metrics). save_steps deve coincidere con eval_steps, altrimenti
+    # load_best_model_at_end non trova il checkpoint corrispondente all'eval migliore.
+    save_strategy="steps",
+    save_steps=EVAL_EVERY,
+    save_total_limit=2,              # best + ultimo: i checkpoint di mmBERT pesano ~1.2 GB
+    load_best_model_at_end=True,
+    metric_for_best_model="f1_macro",
+    greater_is_better=True,
+    dataloader_num_workers=0,        # Windows (su Linux si puo' alzare a 4-8)
     group_by_length=(not SUBSET),    # run grande: raggruppa per lunghezza (meno padding/VRAM)
 )
 
 # Lunghezze (conteggio parole) per group_by_length, gia' disponibili senza tokenizzare.
 train_lengths = [len(t) for t, _ in train_recs] if not SUBSET else None
 
-trainer = LengthGroupedTrainer(model=model, args=args, train_dataset=train_ds,
-                               eval_dataset=eval_ds, data_collator=collator,
-                               tokenizer=tokenizer, train_lengths=train_lengths)
+trainer = LengthGroupedTrainer(
+    model=model, args=args, train_dataset=train_ds, eval_dataset=eval_ds,
+    data_collator=collator, tokenizer=tokenizer, train_lengths=train_lengths,
+    compute_metrics=compute_metrics,
+    preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+    # patience su EVAL_EVERY step: con eval frequente costa nulla e su piu' epoche evita
+    # di proseguire quando la macro-F1 ha smesso di salire.
+    callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
+)
 
 # --------------------------------------------------------------------------- #
 # 4) Training
@@ -443,20 +554,13 @@ if train_pts:
 # --------------------------------------------------------------------------- #
 # 6) Valutazione finale: loss + metriche su TRAIN e VALIDATION
 # --------------------------------------------------------------------------- #
-def spans(tags):
-    out, cur = [], None
-    for i, t in enumerate(tags + ["O"]):
-        if t == "O" or t.startswith("B-") or (cur and t[2:] != cur[0]):
-            if cur:
-                out.append((cur[0], cur[1], i)); cur = None
-        if t.startswith("B-") or (t.startswith("I-") and cur is None):
-            cur = (t[2:], i)
-    return set(out)
-
-
 def evaluate_metrics(ds):
     pred = trainer.predict(ds)
-    preds = np.argmax(pred.predictions, axis=-1)
+    # preprocess_logits_for_metrics fa gia' l'argmax sulla GPU: qui arrivano gli id delle
+    # classi, non i logit. Un secondo np.argmax collasserebbe l'asse dei token.
+    preds = pred.predictions
+    if preds.ndim == 3:                      # difesa se il preprocess venisse rimosso
+        preds = np.argmax(preds, axis=-1)
     gold = pred.label_ids
     tp = fp = fn = tok_ok = tok_tot = 0
     for p_row, g_row in zip(preds, gold):

@@ -16,6 +16,8 @@ dataset/processed/
 dataset/validation/
 dataset/subsets/
 dataset/contributions/
+# anonimizzazione-testi-italiano-clean scaricato da HF (parquet, ~1 GB)
+dataset/clean/
 
 # ─── Desktop app build — PyInstaller ───
 build/
