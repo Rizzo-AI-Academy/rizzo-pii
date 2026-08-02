@@ -54,7 +54,7 @@ In pratica: **ogni sequenza alfanumerica è un token**; **ogni carattere di punt
 Ogni entità è:
 
 ```json
-{ "value": "RSSMRA85H12F205Z", "label": "CF", "start": 34, "end": 50 }
+{ "value": "RSSMRA85H12F205Y", "label": "CF", "start": 34, "end": 50 }
 ```
 
 - `start`/`end` sono **offset di carattere** in `source_text` (slice Python: `source_text[start:end] == value`).
@@ -110,21 +110,21 @@ mano, validali prima di inviarli.
 `source_text`:
 
 ```
-Il sottoscritto Mario Rossi, C.F. RSSMRA85H12F205Z, residente in Via Roma 10.
+Il sottoscritto Mario Rossi, C.F. RSSMRA85H12F205Y, residente in Via Roma 10.
 ```
 
 Riga JSONL corrispondente (formattata su più righe per leggibilità — nel file è **una sola riga**):
 
 ```json
 {
-  "source_text": "Il sottoscritto Mario Rossi, C.F. RSSMRA85H12F205Z, residente in Via Roma 10.",
+  "source_text": "Il sottoscritto Mario Rossi, C.F. RSSMRA85H12F205Y, residente in Via Roma 10.",
   "language": "it",
-  "tokens": ["Il","sottoscritto","Mario","Rossi",",","C",".","F",".","RSSMRA85H12F205Z",",","residente","in","Via","Roma","10","."],
+  "tokens": ["Il","sottoscritto","Mario","Rossi",",","C",".","F",".","RSSMRA85H12F205Y",",","residente","in","Via","Roma","10","."],
   "bio_labels": ["O","O","B-GIVENNAME","B-SURNAME","O","O","O","O","O","B-CF","O","O","O","B-STREET","I-STREET","B-BUILDINGNUM","O"],
   "entities": [
     {"value":"Mario","label":"GIVENNAME","start":16,"end":21},
     {"value":"Rossi","label":"SURNAME","start":22,"end":27},
-    {"value":"RSSMRA85H12F205Z","label":"CF","start":34,"end":50},
+    {"value":"RSSMRA85H12F205Y","label":"CF","start":34,"end":50},
     {"value":"Via Roma","label":"STREET","start":65,"end":73},
     {"value":"10","label":"BUILDINGNUM","start":74,"end":76}
   ],

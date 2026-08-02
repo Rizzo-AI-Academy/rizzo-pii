@@ -27,8 +27,8 @@ riconoscere. È la **fonte di verità** quando si riprende il progetto: descrive
 | `PROVINCE` | Sigla provincia | `MI` | sintetico |
 | `EMAIL` | Email (inclusa la PEC) | `m.rossi@studio.it` | reale + sintetico |
 | `TELEPHONENUM` | Numero di telefono | `+39 333 1234567` | reale + sintetico |
-| `CF` | Codice fiscale (persona fisica) | `RSSMRA85H12F205Z` | sintetico |
-| `PIVA` | Partita IVA (impresa / VAT) | `12345678901` | reale + sintetico |
+| `CF` | Codice fiscale (persona fisica) | `RSSMRA85H12F205Y` | sintetico |
+| `PIVA` | Partita IVA (impresa / VAT) | `12345678903` | reale + sintetico |
 | `ID_DOC` | Numero di un documento d'identità personale (carta d'identità, passaporto, patente, n. previdenziale) | `CA12345AB` | reale + sintetico |
 | `IBAN` | IBAN / numero di conto corrente | `IT60X0542811101000000123456` | sintetico |
 | `CREDITCARDNUMBER` | Numero di carta di credito | `4111 1111 1111 1111` | reale |
