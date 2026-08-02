@@ -66,7 +66,8 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
 - `inspect_ai4privacy.py` (conteggi lingue/tag), `inspect_lengths.py` (lunghezze), `inspect_no_iban.py`.
 
 **App di anonimizzazione locale — `src/app/` (+ packaging in `docs/BUILD.md`):**
-- `server_config.py` — **configurazione host/porta** condivisa tra tutti gli entry point e con Tauri.
+- `server_config.py` — **configurazione host/porta** (+ `prefs.json` con tag esclusi e stato del
+  dizionario) condivisa tra tutti gli entry point e con Tauri.
   Catena di precedenza: **CLI `--host`/`--port` > env `PII_HOST`/`PII_PORT` > `config.json` > default
   `127.0.0.1:5005`**. Il config.json è in `%LOCALAPPDATA%\rizzo-pii\` (Windows) /
   `~/.local/share/rizzo-pii/` (Linux) / `~/Library/Application Support/rizzo-pii/` (macOS), lo
@@ -74,12 +75,56 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   codice di uscita `EXIT_PORT_CONFLICT = 76`: i 3 entry point escono con 76 se la porta è occupata
   **prima di caricare il modello** (evita secondi sprecati). Tauri riconosce il codice 76 e mostra
   il form di configurazione nello splash screen.
-- `app.py` — server Flask + **UI**: testo o PDF, chunking con overlap, offset globali + dedup.
-  Anonimizzazione **reversibile** (ogni PII → `[FULLNAME_1]`/`[IBAN_1]`… + dizionario locale; tab
-  "Ripristina"). Affianca al modello una **rete regex/checksum** (EMAIL/TELEFONO/IBAN/CF/PIVA/carta/
-  importo/targa; IBAN/CF/PIVA/carta validati con checksum, che ha priorità sul modello). `APP_VERSION`.
-  Endpoint `GET/POST /config` e `GET /port-check` per la configurazione host/porta dall'UI (⚙️
-  gear icon nell'header); `--host`/`--port` come argomenti CLI.
+- `app.py` — server Flask + **UI**: testo, PDF o file `.md`/`.txt`, chunking con overlap, offset
+  globali + dedup. Anonimizzazione **reversibile** (ogni PII → `[FULLNAME_1]`/`[IBAN_1]`… +
+  dizionario locale; tab "Ripristina"). Affianca al modello una **rete regex/checksum** (EMAIL/
+  TELEFONO/IBAN/CF/PIVA/carta/importo/targa/**URL**; IBAN/CF/PIVA/carta validati con checksum, che ha
+  priorità sul modello). `URL` è un **23° tag solo-regex**: il modello non lo conosce; matcha schema,
+  `www.` e domini nudi solo su una **lista chiusa di TLD** (senza, `p.iva`/`S.r.l.` diventerebbero
+  domini). `APP_VERSION`. Endpoint: `GET /health` (readiness senza inference, 200/503),
+  `POST /analyze`, `POST /pdf`, `GET/POST /settings` (alias storico `/tags`), `GET/POST /config`,
+  `GET /port-check`; CLI `--host`/`--port`/`--exclude-tags`/`--no-mapping`.
+- **Preferenze di anonimizzazione** → `prefs.json` nella config dir (`EXCLUDED_TAGS`,
+  `MAPPING_ENABLED`). File **separato da `config.json`** perché Tauri riscrive quest'ultimo per
+  intero quando si cambia porta dallo splash. Precedenza: campo nella richiesta > CLI > env > file.
+- **Tag disattivabili**: i tag deselezionati vengono rilevati ma **non** sostituiti (restano in
+  chiaro) — serve a confrontare gli importi o a tenere età/sesso in un caso clinico. Env
+  `PII_EXCLUDE_TAGS`, campo `exclude_tags`. UI: icona 🏷️ nell'header → legenda dei 23 tag con
+  toggle. La legenda (descrizioni IT/EN + esempi) vive in `TAGS` in cima a `app.py`.
+- **Dizionario reversibile on/off** (`MAPPING_ENABLED`, default **on**; env `PII_MAPPING=0`, campo
+  `include_mapping`): con off l'anonimizzazione è **definitiva**. Non è cosmetico — `analyze()` non
+  costruisce la mappa, la risposta non ha `mapping`, e i segmenti-entità **perdono il campo `t`**
+  (altrimenti il dizionario si ricostruirebbe dal payload); l'UI non scrive `pii_map` in
+  localStorage e nasconde il download. La **numerazione resta** (`[FULLNAME_1]` due volte = stesso
+  soggetto): è utile all'LLM e da sola non riporta al valore. UI: switch nella card di input, ambra
+  quando è off. `source_text` continua a tornare — è il documento che hai appena mandato tu, non una
+  chiave di ripristino.
+- `pdf_export.py` + endpoint **`POST /pdf`** — **download del PDF anonimizzato** (issue #7, punto 1),
+  bottone "📄 Scarica PDF anonimizzato" nella card Risultato. Due modalità: se l'input era un **PDF**
+  si fa **redazione vera** del documento originale (`apply_redactions()`: il testo esce dal content
+  stream, non ci si disegna sopra un rettangolo) con i placeholder al posto delle PII e il layout
+  intatto; altrimenti (testo incollato, `.md`/`.txt`) si **ricostruisce** un PDF impaginando da zero
+  il solo testo anonimizzato.
+  **Il dizionario non viaggia sulla rete in nessuna direzione**: `/pdf` prende lo stesso input di
+  `/analyze`, richiama `analyze(..., mapping_enabled=True)` internamente e la mappa muore con la
+  richiesta. Per questo il bottone funziona identico anche con il **dizionario reversibile
+  disattivato**, dove il client non ne ha nessuno (il costo è una seconda inferenza).
+  Matching **char-preciso** con confini di parola (indice per carattere da `rawdict` + regex ancorate
+  `(?<!\w)…(?!\w)`), tollerante alla **sillabazione a fine riga** e agli spazi tra token: "DE" non
+  viene redatto dentro "CORDELLA". Unica eccezione alle ancore: se il valore ha **punteggiatura ai
+  bordi** il modello ha tagliato a metà una parola spezzata a fine riga (su "Fran-\ncesco Cordella"
+  etichetta `-\ncesco Cordella`) — lì il confine di parola è proprio ciò che impedirebbe di trovarlo,
+  quindi si toglie, ma **solo** se il resto ha ≥ 4 caratteri alfanumerici (altrimenti `.it`
+  matcherebbe "it" dentro ogni parola).
+  Oltre al testo di pagina ripulisce ciò che `apply_redactions()` **non** tocca e in cui la PII
+  sopravviverebbe: metadati + XMP, contenuto delle **annotazioni**, valore dei **campi modulo**,
+  titoli dei **segnalibri**; gli **allegati incorporati** vengono rimossi in blocco.
+  **Due casi in cui un valore resta in chiaro, entrambi segnalati con un avviso nell'UI** (header
+  `X-PII-Residual` e `X-PII-Skipped`): (a) *residui* = valore ancora leggibile nell'output alla
+  verifica finale; (b) *saltati* = valori con < 2 caratteri alfanumerici o di 2 sole cifre (es. "45"),
+  non cercabili senza devastare il documento. Se in tutto il PDF non si trova **nessuna** occorrenza
+  → `422`, non un PDF "anonimizzato" che non lo è (caso tipico: scansione, serve OCR → punti 2-4
+  della issue). Nessuna dipendenza dal modello: `pdf_export.py` è testabile in isolamento.
 - `serve.py` — entry **headless** (solo Flask, niente browser): è il backend dell'app Tauri; log su
   `%LOCALAPPDATA%\rizzo-pii\backend.log`. Pre-check porta + `sys.exit(76)` se occupata.
   `desktop_app.py` — entry PyInstaller legacy (apre il browser); stesso pre-check.

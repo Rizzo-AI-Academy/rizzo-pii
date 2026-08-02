@@ -13,12 +13,28 @@ Flusso d'uso:
 Tutto in locale: il testo e il dizionario {placeholder -> valore} non lasciano la macchina.
 
 Il modello e' affiancato da una rete REGEX + CHECKSUM (EMAIL, TELEFONO, IBAN, CF, PIVA,
-carta di credito, importi, targhe). Le entita' validate matematicamente (IBAN/CF/PIVA/
-carta) hanno priorita' sul modello in caso di sovrapposizione.
+carta di credito, importi, targhe, URL). Le entita' validate matematicamente (IBAN/CF/
+PIVA/carta) hanno priorita' sul modello in caso di sovrapposizione.
+
+Il dizionario di ripristino si puo' DISATTIVARE (switch nell'UI, --no-mapping, PII_MAPPING=0):
+l'anonimizzazione diventa definitiva, nessuna chiave placeholder->valore viene costruita.
+
+Endpoint HTTP:
+  GET  /health    liveness/readiness senza inference (200 = modello caricato, 503 = no)
+  POST /analyze   {"text": ...} oppure multipart con un file (.pdf/.md/.txt); campi
+                  opzionali "exclude_tags" e "include_mapping" per override per-richiesta
+  POST /pdf       stesso input di /analyze -> scarica il PDF ANONIMIZZATO (redazione
+                  vera del PDF caricato, oppure PDF ricostruito dal testo)
+  GET  /settings  legenda dei 23 tag, tag esclusi, stato del dizionario reversibile
+  POST /settings  {"excluded_tags": [...], "mapping_enabled": bool} -> salva in prefs.json
+                  (/tags e' un alias storico degli stessi due endpoint)
+  GET  /config, POST /config, GET /port-check   host/porta del server
 
 Avvio:  python app.py   ->   http://127.0.0.1:5005
 Configurazione host/porta (precedenza): CLI --host/--port > env PII_HOST/PII_PORT >
   config.json (vedi server_config.py) > default 127.0.0.1:5005
+Preferenze di anonimizzazione (precedenza): campo nella richiesta > CLI --exclude-tags/
+  --no-mapping > env PII_EXCLUDE_TAGS/PII_MAPPING > prefs.json > default
 """
 
 import os
@@ -31,6 +47,7 @@ import torch
 from flask import (Flask, jsonify, render_template_string, request,
                    send_from_directory)
 
+import pdf_export
 import server_config
 from transformers import pipeline
 
@@ -41,9 +58,12 @@ def _resource_path(rel):
     return os.path.join(base, rel)
 
 
-# VERSIONE del modello usata dall'app -> models/rizzo-pii-0.3B-v{APP_MODEL_VERSION}/.
-# Metti None per usare AUTOMATICAMENTE l'ultima versione disponibile.
-APP_MODEL_VERSION = "1.2.0"
+# MODELLO usato dall'app. Accetta tre forme, provate in quest'ordine:
+#   "1.2.0"  -> models/rizzo-pii-0.3B-v1.2.0/   (versione di un run di training)
+#   "main"   -> models/rizzo-pii-0.3B-main/     (revision scaricata da HF, senza numero)
+#   percorso -> usato tal quale (assoluto o relativo alla root della repo)
+# Metti None per usare AUTOMATICAMENTE l'ultima versione `-v*` disponibile.
+APP_MODEL_VERSION = "main"
 
 # Dentro l'exe il modello e' impacchettato come "pii_model" (vedi build.spec).
 # In sviluppo: pin sopra -> auto-ultima versione -> vecchio non versionato -> legacy.
@@ -55,9 +75,15 @@ elif os.environ.get("PII_MODEL_DIR"):
 else:
     import re
     _models = Path(__file__).resolve().parents[2] / "models"
-    _pinned = _models / f"rizzo-pii-0.3B-v{APP_MODEL_VERSION}" if APP_MODEL_VERSION else None
+    _cands = []
+    if APP_MODEL_VERSION:
+        _cands = [_models / f"rizzo-pii-0.3B-v{APP_MODEL_VERSION}",
+                  _models / f"rizzo-pii-0.3B-{APP_MODEL_VERSION}"]
+        if os.sep in APP_MODEL_VERSION or "/" in APP_MODEL_VERSION:   # e' un percorso
+            _cands += [Path(APP_MODEL_VERSION), _models.parent / APP_MODEL_VERSION]
+    _pinned = next((p for p in _cands if p.is_dir()), None)
     _versioned = [p for p in _models.glob("rizzo-pii-0.3B-v*") if p.is_dir()]
-    if _pinned and _pinned.is_dir():
+    if _pinned:
         MODEL_DIR = str(_pinned)
     elif _versioned:
         MODEL_DIR = str(max(_versioned, key=lambda p: tuple(
@@ -67,7 +93,7 @@ else:
         MODEL_DIR = str(_prod if _prod.exists() else _models / "pii_model_legacy")
 
 ASSETS_DIR = _resource_path("assets")   # mascotte / icone (servite su /assets/<file>)
-APP_VERSION = "1.0.0"                    # versione mostrata nell'UI (allineata a tauri.conf.json)
+APP_VERSION = "1.2.0"                    # versione mostrata nell'UI (allineata a tauri.conf.json)
 MAX_WORDS = 120      # parole per chunk (~180 subword, sotto i 512 del training)
 OVERLAP = 20         # parole di sovrapposizione tra chunk consecutivi
 
@@ -87,6 +113,66 @@ print("Modello pronto.")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
+
+# Estensioni accettate dall'upload (il PDF passa da PyMuPDF, il resto e' testo puro).
+TEXT_EXTS = {".md", ".markdown", ".txt", ".text"}
+
+
+# --------------------------------------------------------------------------- #
+# Legenda dei tag + tag esclusi dall'anonimizzazione
+#
+# I 22 tag del modello (docs/TASSONOMIA_TAG.md) + URL, che e' solo-regex: il modello
+# non e' stato addestrato su di esso, lo trova la rete regex.
+# L'utente puo' DESELEZIONARE un tag: le entita' di quel tipo vengono rilevate ma non
+# sostituite (restano in chiaro). Serve a chi deve confrontare gli importi (AMOUNT) o
+# tenere eta'/sesso in un caso clinico.
+# --------------------------------------------------------------------------- #
+TAGS = [
+    ("FULLNAME", "Nome di persona (anche ruoli legali: giudice, avvocato, parti, teste)",
+     "Person name (legal roles included: judge, lawyer, parties, witness)", "Mario Rossi"),
+    ("AGE", "Età", "Age", "45 anni"),
+    ("GENDER", "Sesso / genere", "Sex / gender", "Femmina"),
+    ("DATE", "Data di calendario", "Calendar date", "12/06/1985"),
+    ("TIME", "Ora", "Time of day", "ore 15:30"),
+    ("STREET", "Via / piazza / corso", "Street / square", "Via Garibaldi"),
+    ("BUILDINGNUM", "Numero civico", "Building number", "24"),
+    ("ZIPCODE", "CAP", "ZIP / postal code", "00185"),
+    ("CITY", "Città", "City", "Milano"),
+    ("PROVINCE", "Sigla della provincia", "Province code", "MI"),
+    ("EMAIL", "Email, PEC inclusa", "Email, certified mail included", "m.rossi@studio.it"),
+    ("TELEPHONENUM", "Numero di telefono", "Phone number", "+39 333 1234567"),
+    ("CF", "Codice fiscale (checksum verificato)", "Italian tax code (checksum verified)",
+     "RSSMRA85H12F205Z"),
+    ("PIVA", "Partita IVA (checksum verificato)", "VAT number (checksum verified)", "12345678901"),
+    ("ID_DOC", "Numero di documento d'identità (carta, passaporto, patente)",
+     "Identity document number (ID card, passport, driving licence)", "CA12345AB"),
+    ("IBAN", "IBAN / numero di conto (checksum verificato)",
+     "IBAN / account number (checksum verified)", "IT60X0542811101000000123456"),
+    ("CREDITCARDNUMBER", "Numero di carta di credito (Luhn verificato)",
+     "Credit card number (Luhn verified)", "4111 1111 1111 1111"),
+    ("AMOUNT", "Importo in denaro", "Money amount", "€ 12.500,00"),
+    ("TARGA", "Targa di veicolo", "Vehicle plate", "AB 123 CD"),
+    ("ORG", "Ragione sociale privata: società, studio legale, banca",
+     "Private organization: company, law firm, bank", "Edilnord S.r.l."),
+    ("DOCID", "Codice di un atto: ruolo generale, protocollo, repertorio, sentenza",
+     "Document code: case number, protocol, repertoire, judgment", "1234/2024"),
+    ("CATASTO", "Dati catastali: foglio, particella, subalterno",
+     "Land registry data: sheet, parcel, subordinate", "Foglio 12, part. 345, sub. 6"),
+    ("URL", "Indirizzo web (rilevato solo dalla rete regex, non dal modello)",
+     "Web address (regex net only, not from the model)", "https://www.studiorossi.it"),
+]
+TAG_NAMES = [t[0] for t in TAGS]
+
+# Preferenze di default del server (env > prefs.json). Gli argomenti CLI le sovrascrivono
+# all'avvio; ogni singola richiesta puo' comunque passare le proprie.
+#
+# MAPPING_ENABLED = False -> l'anonimizzazione e' DEFINITIVA: nessun dizionario
+# placeholder->valore viene costruito, restituito o salvato, e la risposta non contiene
+# piu' il testo originale delle entita' (nemmeno dentro `segments`). Serve a chi non
+# vuole che una chiave di ripristino esista, da nessuna parte.
+_prefs = server_config.load_prefs()
+EXCLUDED_TAGS = _prefs["excluded_tags"]
+MAPPING_ENABLED = _prefs["mapping_enabled"]
 
 
 # --------------------------------------------------------------------------- #
@@ -187,7 +273,25 @@ DETECTORS = [
     ("TARGA",
      re.compile(r"\b[A-Za-z]{2}\s?\d{3}\s?[A-Za-z]{2}\b"),
      None, True),
+    # URL: tre forme, dalla piu' esplicita alla piu' rischiosa.
+    #   1) con schema (http/https/ftp)     -> sempre un URL
+    #   2) www.<dominio>                   -> sempre un URL
+    #   3) dominio nudo, ma SOLO con un TLD della lista chiusa qui sotto.
+    # Il dominio nudo generico (r"\w+\.\w{2,}") non si puo' usare: nel legalese
+    # italiano prenderebbe "p.iva", "n.ro", "S.r.l." e simili. Con la lista chiusa
+    # "p.iva" non matcha ("iva" non e' un TLD) e i falsi positivi crollano.
+    # Prezzo del compromesso: un dominio con TLD esotico resta in chiaro.
+    ("URL",
+     re.compile(r"(?:https?|ftp)://[^\s<>\"']+"
+                r"|www\.[A-Za-z0-9\-._~%]+\.[A-Za-z]{2,}(?:/[^\s<>\"']*)?"
+                r"|\b(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+"
+                r"(?:it|com|net|org|eu|info|io|dev|app|gov|edu|cloud|online|site|blog)"
+                r"\b(?:/[^\s<>\"']*)?", re.IGNORECASE),
+     None, True),
 ]
+
+# Punteggiatura che chiude la frase e non fa parte dell'URL: "vedi https://x.it/pagina."
+_URL_TRAIL = ".,;:!?)]}»\"'"
 
 
 def detect_regex(text):
@@ -195,13 +299,19 @@ def detect_regex(text):
     ents = []
     for label, rx, validator, strict in DETECTORS:
         for m in rx.finditer(text):
+            start, end = m.start(), m.end()
+            if label == "URL":
+                while end > start and text[end - 1] in _URL_TRAIL:
+                    end -= 1
+                if end <= start:
+                    continue
             ok = validator(m.group(0)) if validator else False
             if validator and strict and not ok:
                 continue
             ents.append({
                 "label": label,
-                "start": m.start(),
-                "end": m.end(),
+                "start": start,
+                "end": end,
                 "score": 1.0 if ok else 0.9,
                 "validated": ok,
                 "source": "regex",
@@ -283,9 +393,20 @@ def _norm(s):
     return re.sub(r"\s+", " ", s.strip()).casefold()
 
 
-def analyze(text):
+def analyze(text, excluded=None, mapping_enabled=True):
+    """excluded = tag da NON anonimizzare: le entita' di quel tipo vengono scartate
+    prima della fusione, quindi il valore resta in chiaro nel testo di output.
+
+    mapping_enabled=False -> anonimizzazione DEFINITIVA: nessun dizionario
+    placeholder->valore, e i segmenti-entita' non riportano il testo originale
+    (che altrimenti permetterebbe di ricostruire il dizionario dalla risposta).
+    La numerazione dei placeholder resta: dice che due occorrenze sono lo stesso
+    soggetto, ma da sola non fa risalire al valore."""
+    excluded = set(excluded or ())
     model_ents, n_chunks = detect_model(text)
     cands = model_ents + detect_regex(text)
+    if excluded:
+        cands = [e for e in cands if e["label"] not in excluded]
     kept = _merge(cands, text)
 
     # ID reversibili: stesso (label, valore-normalizzato) -> stesso placeholder.
@@ -299,7 +420,8 @@ def analyze(text):
             counters[e["label"]] = counters.get(e["label"], 0) + 1
             ph = f"[{e['label']}_{counters[e['label']]}]"
             seen[key] = ph
-            mapping[ph] = val
+            if mapping_enabled:
+                mapping[ph] = val
             e["ph"] = ph
 
     # segmenti per la preview + testo anonimizzato + statistiche
@@ -308,13 +430,15 @@ def analyze(text):
         if e["start"] > pos:
             segments.append({"t": text[pos:e["start"]]})
             anon.append(text[pos:e["start"]])
-        segments.append({
-            "t": text[e["start"]:e["end"]],
+        seg = {
             "label": e["label"],
             "ph": e["ph"],
             "src": e["source"],
             "validated": e["validated"],
-        })
+        }
+        if mapping_enabled:                       # senza dizionario niente valore originale
+            seg["t"] = text[e["start"]:e["end"]]
+        segments.append(seg)
         anon.append(e["ph"])
         by_label[e["label"]] = by_label.get(e["label"], 0) + 1
         by_source[e["source"]] = by_source.get(e["source"], 0) + 1
@@ -327,12 +451,14 @@ def analyze(text):
         "segments": segments,
         "anonymized_text": "".join(anon),
         "mapping": mapping,
+        "mapping_enabled": mapping_enabled,
         "n_chunks": n_chunks,
         "n_chars": len(text),
         "n_entities": len(kept),
-        "n_unique": len(mapping),
+        "n_unique": len(seen),
         "by_label": dict(sorted(by_label.items(), key=lambda x: -x[1])),
         "by_source": by_source,
+        "excluded_tags": sorted(excluded),
     }
 
 
@@ -367,21 +493,208 @@ def not_found(_e):
     return _page()
 
 
+@app.route("/health")
+@app.route("/healthz")
+def health():
+    """Liveness/readiness SENZA inference: sonda economica per orchestratori e sidecar.
+    200 = modello caricato e pronto; 503 = server su ma modello non disponibile."""
+    ready = nlp is not None
+    body = {
+        "status": "ok" if ready else "loading",
+        "model_loaded": ready,
+        "model": os.path.basename(str(MODEL_DIR).rstrip("/\\")),
+        "model_version": APP_MODEL_VERSION,
+        "app_version": APP_VERSION,
+        "device": "cuda" if device == 0 else "cpu",
+        "tags": len(TAG_NAMES),
+        "excluded_tags": EXCLUDED_TAGS,
+        "mapping_enabled": MAPPING_ENABLED,
+    }
+    return jsonify(body), (200 if ready else 503)
+
+
+def _is_pdf(name, data):
+    return os.path.splitext((name or "").lower())[1] == ".pdf" or data[:5] == b"%PDF-"
+
+
+def _text_from_bytes(name, data):
+    """Testo dai bytes di un upload: PDF via PyMuPDF, .md/.txt come testo puro."""
+    name = (name or "").lower()
+    ext = os.path.splitext(name)[1]
+    if _is_pdf(name, data):
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            return "\n".join(page.get_text() for page in doc)
+    if ext in TEXT_EXTS or not ext:
+        for enc in ("utf-8-sig", "utf-16", "latin-1"):
+            try:
+                return data.decode(enc)
+            except UnicodeDecodeError:
+                continue
+    raise ValueError(
+        f"Formato non supportato: {ext or name or 'sconosciuto'}. "
+        "Accetto .pdf, .md, .txt oppure testo incollato."
+    )
+
+
+def _extract_upload(fs):
+    """Testo da un file caricato (consuma lo stream)."""
+    return _text_from_bytes(fs.filename, fs.read())
+
+
+def _uploaded_file():
+    """Il file dell'upload, se c'e'. "pdf" e' il nome storico del campo (l'UI lo
+    usa ancora), "file" e' l'alias nuovo."""
+    return next((request.files[k] for k in ("pdf", "file")
+                 if k in request.files and request.files[k].filename), None)
+
+
 @app.route("/analyze", methods=["POST"])
 def analyze_route():
-    text = ""
-    if "pdf" in request.files and request.files["pdf"].filename:
-        data = request.files["pdf"].read()
-        with fitz.open(stream=data, filetype="pdf") as doc:
-            text = "\n".join(page.get_text() for page in doc)
+    up = _uploaded_file()
+    if up is not None:
+        try:
+            text = _extract_upload(up)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:                       # PDF corrotto / protetto
+            return jsonify({"error": f"Impossibile leggere il file: {e}"}), 400
+        raw_excl = request.form.get("exclude_tags")
+        raw_map = request.form.get("include_mapping")
     else:
-        text = (request.get_json(silent=True) or {}).get("text", "")
-    text = text.strip()
+        payload = request.get_json(silent=True) or {}
+        text = payload.get("text", "")
+        raw_excl = payload.get("exclude_tags")
+        raw_map = payload.get("include_mapping")
+
+    text = (text or "").strip()
     if not text:
         return jsonify({"error": "Nessun testo da analizzare."}), 400
-    out = analyze(text)
+
+    # override per-richiesta; senza override vale la configurazione del server
+    excl = server_config.parse_tag_list(raw_excl) if raw_excl is not None else EXCLUDED_TAGS
+    keep_map = (server_config.parse_bool(raw_map, MAPPING_ENABLED)
+                if raw_map is not None else MAPPING_ENABLED)
+    out = analyze(text, excl, keep_map)
     out["source_text"] = text
     return jsonify(out)
+
+
+# --------------------------------------------------------------------------- #
+# PDF anonimizzato da scaricare (issue #7, punto 1)
+# --------------------------------------------------------------------------- #
+def _pdf_response(data, report, redactions):
+    """Risposta binaria + intestazioni diagnostiche. X-PII-Residual e
+    X-PII-Skipped sono le due che l'UI trasforma in AVVISO: valori del documento
+    che, per motivi diversi, sono rimasti in chiaro."""
+    resp = app.response_class(data, mimetype="application/pdf")
+    resp.headers["Content-Disposition"] = \
+        "attachment; filename=documento_anonimizzato.pdf"
+    resp.headers["X-PII-Redactions"] = str(redactions)
+    resp.headers["X-PII-Residual"] = str(len(report.get("residual", [])))
+    resp.headers["X-PII-Skipped"] = str(len(report.get("skipped", [])))
+    resp.headers["X-PII-Notfound"] = str(len(report.get("not_found", [])))
+    return resp
+
+
+@app.route("/pdf", methods=["POST"])
+def pdf_route():
+    """Scarica il documento ANONIMIZZATO in PDF. Stesso input di /analyze:
+
+    - multipart con un file .pdf  -> REDAZIONE VERA del documento originale: le
+      PII sono rimosse dal content stream e sostituite dai placeholder, il layout
+      resta quello di partenza (piu' metadati/annotazioni/campi modulo/segnalibri
+      ripuliti e allegati rimossi);
+    - multipart con .md/.txt oppure {"text": ...} -> PDF ricostruito impaginando
+      da zero il solo testo anonimizzato.
+
+    Il dizionario placeholder->valore NON viaggia sulla rete in nessuna delle due
+    direzioni: viene ricostruito qui, serve solo a localizzare le PII nel PDF e
+    muore con la richiesta. Per questo l'endpoint funziona identico anche con il
+    dizionario reversibile disattivato (MAPPING_ENABLED=False), dove il client
+    non ne ha nessuno.
+    """
+    up = _uploaded_file()
+    if up is not None:
+        name, data = up.filename, up.read()
+        try:
+            text = _text_from_bytes(name, data)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:                       # PDF corrotto / protetto
+            return jsonify({"error": f"Impossibile leggere il file: {e}"}), 400
+        raw_excl = request.form.get("exclude_tags")
+    else:
+        payload = request.get_json(silent=True) or {}
+        name, data, text = "", b"", payload.get("text", "")
+        raw_excl = payload.get("exclude_tags")
+
+    text = (text or "").strip()
+    if not text:
+        return jsonify({"error": "Nessun testo da anonimizzare."}), 400
+
+    excl = server_config.parse_tag_list(raw_excl) if raw_excl is not None else EXCLUDED_TAGS
+    # mapping_enabled=True e' interno: il risultato non esce da questa funzione.
+    res = analyze(text, excl, mapping_enabled=True)
+    if not res["mapping"]:
+        return jsonify({"error": "Nessuna PII trovata: non c'e' niente da "
+                                 "anonimizzare in questo documento."}), 422
+
+    if data and _is_pdf(name, data):
+        try:
+            out, report = pdf_export.redact_pdf(data, res["mapping"])
+        except pdf_export.PdfError as e:
+            return jsonify({"error": str(e)}), 400
+        if report["occurrences"] == 0:
+            return jsonify({"error": "Nessuna occorrenza trovata nel PDF: se il "
+                                     "documento e' una scansione (testo dentro "
+                                     "un'immagine) la redazione del layer "
+                                     "testuale non puo' agire."}), 422
+        return _pdf_response(out, report, report["occurrences"])
+
+    try:
+        out = pdf_export.text_to_pdf(res["anonymized_text"])
+    except pdf_export.PdfError as e:
+        return jsonify({"error": str(e)}), 400
+    # testo reimpaginato da zero: nell'output c'e' solo il testo anonimizzato,
+    # quindi niente residui e niente valori saltati da segnalare.
+    return _pdf_response(out, {}, res["n_entities"])
+
+
+# --------------------------------------------------------------------------- #
+# Impostazioni: legenda dei tag, tag esclusi, dizionario reversibile on/off
+# (/tags resta come alias storico dello stesso endpoint)
+# --------------------------------------------------------------------------- #
+@app.route("/settings", methods=["GET"])
+@app.route("/tags", methods=["GET"])
+def settings_get():
+    return jsonify({
+        "tags": [{"tag": t, "it": it, "en": en, "example": ex} for t, it, en, ex in TAGS],
+        "excluded_tags": EXCLUDED_TAGS,
+        "mapping_enabled": MAPPING_ENABLED,
+        "config_path": str(server_config.prefs_path()),
+        "env_override": "PII_EXCLUDE_TAGS" in os.environ or "PII_MAPPING" in os.environ,
+    })
+
+
+@app.route("/settings", methods=["POST"])
+@app.route("/tags", methods=["POST"])
+def settings_post():
+    global EXCLUDED_TAGS, MAPPING_ENABLED
+    data = request.get_json(silent=True) or {}
+    tags = None
+    if "excluded_tags" in data:
+        tags = server_config.parse_tag_list(data["excluded_tags"])
+        unknown = [t for t in tags if t not in TAG_NAMES]
+        if unknown:
+            return jsonify({"error": f"Tag sconosciuti: {', '.join(unknown)}"}), 400
+    mapping = data.get("mapping_enabled")
+    if tags is None and mapping is None:
+        return jsonify({"error": "Niente da salvare: passa excluded_tags e/o mapping_enabled."}), 400
+    saved = server_config.save_prefs(excluded_tags=tags, mapping_enabled=mapping)
+    EXCLUDED_TAGS = saved["excluded_tags"]
+    MAPPING_ENABLED = saved["mapping_enabled"]
+    return jsonify({"ok": True, "excluded_tags": EXCLUDED_TAGS,
+                    "mapping_enabled": MAPPING_ENABLED})
 
 
 # --------------------------------------------------------------------------- #
@@ -517,6 +830,7 @@ PAGE = r"""
   button:disabled{opacity:.55;cursor:default}
   .spin{width:15px;height:15px;border:2px solid rgba(255,255,255,.45);border-top-color:#fff;
         border-radius:50%;animation:sp .7s linear infinite}
+  .ghost .spin{border-color:rgba(124,58,158,.25);border-top-color:var(--brand)}
   @keyframes sp{to{transform:rotate(360deg)}}
   .hint{color:var(--soft);font-size:12.5px;margin-left:auto}
 
@@ -654,6 +968,48 @@ PAGE = r"""
         display:grid;place-items:center;font-size:15px;padding:0;cursor:pointer;transition:.12s;
         margin-left:6px;flex:none}
   .gear:hover{border-color:#cfd5e0;background:#fafbfd}
+
+  /* switch "Dizionario reversibile" (sotto la dropzone, nella card di input).
+     OFF non e' uno stato di errore ma una modalita' piu' stretta -> ambra, non grigio. */
+  .mapsw{display:flex;align-items:flex-start;gap:12px;margin-top:11px;padding:11px 13px;
+         border:1px solid var(--line);border-radius:11px;background:#fcfcfe;transition:.15s}
+  .mapsw.off{background:#fff7ed;border-color:#fde6c8}
+  /* .tsw e non .sw: .sw e' gia' il quadratino-colore dei chip nella legenda */
+  .tsw{position:relative;width:42px;height:24px;border-radius:999px;background:var(--brand);
+       border:0;padding:0;flex:none;cursor:pointer;transition:.18s;margin-top:1px}
+  .tsw:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+  .tsw .knob{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;
+             background:#fff;transition:.18s;box-shadow:0 1px 3px rgba(0,0,0,.28)}
+  .tsw.off{background:#c2410c}
+  .tsw.off .knob{transform:translateX(18px)}
+  .mapsw .ttl{font-size:13.5px;font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .mapsw .st{font-size:11px;font-weight:800;letter-spacing:.05em;border-radius:999px;
+             padding:2px 8px;background:#f1e9f7;color:var(--brand-dk)}
+  .mapsw.off .st{background:#ffedd5;color:#9a3412}
+  .mapsw .sub{font-size:12.5px;color:var(--muted);line-height:1.45;margin-top:2px}
+  .mapsw.off .sub{color:#7a4d12}
+
+  /* modale "Tag da anonimizzare": legenda dei 23 tag con toggle per tipo */
+  .cfg-card.wide{width:600px}
+  .tg-sub{font-size:12.5px;color:var(--muted);margin:-8px 0 14px;line-height:1.5}
+  .tg-bar{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+  .tg-bar .mini{background:#fff;color:var(--muted);border:1px solid var(--line);
+                border-radius:8px;padding:5px 10px;font-size:12.5px;font-weight:600}
+  .tg-bar .mini:hover{border-color:#cfd5e0;color:var(--ink)}
+  .tg-bar .count{margin-left:auto;font-size:12.5px;color:var(--soft);font-weight:600}
+  .tg-list{max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:11px;
+           padding:5px;background:#fcfcfe}
+  .tg-row{display:flex;align-items:flex-start;gap:10px;padding:8px 9px;border-radius:9px;
+          cursor:pointer;user-select:none;transition:.12s}
+  .tg-row:hover{background:#f4f2f9}
+  .tg-row input{margin:3px 0 0;accent-color:var(--brand);width:15px;height:15px;flex:none;cursor:pointer}
+  .tg-row .sw{width:10px;height:10px;border-radius:3px;margin-top:5px;flex:none}
+  .tg-row .txt{min-width:0}
+  .tg-row .nm{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;font-weight:700}
+  .tg-row .ds{font-size:12.5px;color:var(--muted);line-height:1.45}
+  .tg-row .ex{font-size:11.5px;color:var(--soft)}
+  .tg-row.off{opacity:.55}
+  .tg-row.off .nm{text-decoration:line-through}
 </style>
 </head>
 <body>
@@ -671,6 +1027,7 @@ PAGE = r"""
         <option value="it">🇮🇹 Italiano</option>
         <option value="en">🇬🇧 English</option>
       </select>
+      <button class="gear" id="tagsBtn" title="Tag da anonimizzare" aria-label="PII tags" onclick="openTags()">🏷️</button>
       <button class="gear" id="gearBtn" title="Configurazione server" aria-label="Server config" onclick="openConfig()">⚙️</button>
       <span class="info" id="infoBtn" tabindex="0" role="button" aria-label="Avviso / info">⚠️<span class="tip" data-i18n="notice"></span></span>
     </div>
@@ -691,14 +1048,23 @@ PAGE = r"""
       <!-- input -->
       <div class="card">
         <div class="hd"><h2 data-i18n="in_title">① Il tuo documento</h2>
-          <div class="right hint" data-i18n="in_hint">incolla testo o trascina un PDF</div></div>
+          <div class="right hint" data-i18n="in_hint">incolla testo o trascina un PDF / .md</div></div>
         <div class="bd">
           <textarea id="src" data-i18n-ph="src_ph" placeholder="Incolla qui il testo dell'atto, del contratto o della sentenza…&#10;&#10;Oppure trascina un PDF nell'area qui sotto."></textarea>
           <label class="drop" id="drop">
             <span class="ic">📄</span>
-            <span id="dropTxt">Trascina un <b>PDF</b> qui, oppure <b>scegli un file</b></span>
-            <input type="file" id="pdf" accept="application/pdf" hidden>
+            <span id="dropTxt">Trascina un <b>PDF</b> o un <b>.md</b> qui, oppure <b>scegli un file</b></span>
+            <input type="file" id="pdf" accept=".pdf,.md,.markdown,.txt,application/pdf,text/markdown,text/plain" hidden>
           </label>
+          <div class="mapsw" id="mapSw">
+            <button class="tsw" id="mapToggle" role="switch" aria-checked="true"
+                    aria-labelledby="mapTtl" onclick="toggleMapping()"><span class="knob"></span></button>
+            <div>
+              <div class="ttl" id="mapTtl"><span data-i18n="map_ttl">Dizionario reversibile</span>
+                <span class="st" id="mapState">ATTIVO</span></div>
+              <div class="sub" id="mapSub">Ogni PII riceve un ID: potrai ripristinare i valori veri dalla risposta dell'LLM.</div>
+            </div>
+          </div>
           <div class="row">
             <button class="btn lg" id="go">🛡️ <span data-i18n="go">Anonimizza</span></button>
             <button class="ghost" id="clear" data-i18n="clear">Pulisci</button>
@@ -730,6 +1096,7 @@ PAGE = r"""
                     data-i18n-ph="anon_ph" placeholder="Il testo anonimizzato apparirà qui."></textarea>
           <div class="row">
             <button class="btn" id="copy">📋 <span data-i18n="copy">Copia per ChatGPT</span></button>
+            <button class="ghost" id="dlpdf">📄 <span data-i18n="dlpdf">Scarica PDF anonimizzato</span></button>
             <button class="ghost" id="dl">⬇️ <span data-i18n="dl">Scarica dizionario</span></button>
             <span class="hint" id="ulock"></span>
           </div>
@@ -741,11 +1108,14 @@ PAGE = r"""
     <div class="card dict" id="dictCard" style="display:none">
       <div class="hd">
         <h2 data-i18n="dict_title">Dizionario reversibile</h2>
-        <div class="right hint" data-i18n="dict_hint">resta solo qui, in locale</div>
+        <div class="right hint" id="dictHint" data-i18n="dict_hint">resta solo qui, in locale</div>
       </div>
       <div class="bd">
         <div class="meta" id="meta"></div>
         <div class="legend" id="legend"></div>
+        <div class="callout" id="dictNone" style="display:none;margin:0 16px 14px">
+          <span class="ic">🔒</span><div data-i18n="dict_off">Nessun dizionario: l'anonimizzazione di questo testo è <b>definitiva</b>.</div>
+        </div>
         <div class="tablewrap" id="tablewrap">
           <table><thead><tr><th data-i18n="th_id">ID</th><th data-i18n="th_val">Valore originale</th><th data-i18n="th_type">Tipo</th></tr></thead>
           <tbody id="maprows"></tbody></table>
@@ -756,6 +1126,12 @@ PAGE = r"""
 
   <!-- ============ PANE 2: RIPRISTINA ============ -->
   <div class="pane" id="pane2">
+    <div class="callout" id="rOff" style="display:none">
+      <span class="ic">🔒</span>
+      <div data-i18n="r_off">Lo switch <b>Dizionario reversibile</b> è su DISATTIVO: le nuove
+      anonimizzazioni non producono chiavi. Qui puoi comunque ripristinare con un dizionario
+      <b>.json salvato in precedenza</b>.</div>
+    </div>
     <div class="callout">
       <span class="ic">💡</span>
       <div data-i18n="callout">Incolla qui la <b>risposta dell'LLM</b> (che contiene i placeholder come
@@ -819,12 +1195,36 @@ PAGE = r"""
   </div>
 </div>
 
+<!-- tags modal: legenda + selezione dei tag da anonimizzare -->
+<div class="cfg-overlay" id="tagsOverlay">
+  <div class="cfg-card wide">
+    <h3>🏷️ <span data-i18n="tg_title">Tag da anonimizzare</span></h3>
+    <div class="tg-sub" data-i18n="tg_sub">Deseleziona i tipi che vuoi <b>lasciare in chiaro</b>: verranno comunque rilevati, ma non sostituiti da un placeholder.</div>
+    <div class="tg-bar">
+      <button class="mini" onclick="setAllTags(true)" data-i18n="tg_all">Seleziona tutti</button>
+      <button class="mini" onclick="setAllTags(false)" data-i18n="tg_none">Nessuno</button>
+      <span class="count" id="tgCount"></span>
+    </div>
+    <div class="tg-list" id="tgList"></div>
+    <div class="cfg-status" id="tgStatus"></div>
+    <div class="cfg-btns" style="margin-top:14px">
+      <button class="btn" onclick="saveTags()">💾 <span data-i18n="cfg_save">Salva</span></button>
+      <button class="ghost" onclick="closeTags()" data-i18n="cfg_cancel">Annulla</button>
+    </div>
+    <div class="cfg-note" id="tgNote"></div>
+  </div>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
 let DATA = null;            // ultimo risultato analyze
 let MAP = {};              // {placeholder -> valore} sessione corrente
 const off = new Set();     // label nascoste nella preview
 let L = 'it';              // lingua UI corrente
+let TAGS = [];             // legenda dei tag servita da /settings
+let EXCL = new Set();      // tag da NON anonimizzare (scelta corrente)
+let TAGS_LOADED = false;   // /settings ha risposto -> possiamo mandare gli override
+let MAPPING = true;        // dizionario reversibile on/off (switch nella card di input)
 
 /* ---- i18n (IT default, EN opzionale) ---- */
 const T = {
@@ -832,14 +1232,19 @@ const T = {
   tagline:"modello locale su CPU · GDPR compliant", badge:"100% in locale",
   notice:"<b>Versione in sviluppo.</b> Il modello AI non è perfetto e può commettere errori: verifica sempre il risultato prima di usarlo. Queste sono le prime versioni e il progetto è completamente <b>open source</b>. Se ti è utile, <b>lascia una ⭐ alla repo</b> e contribuisci a migliorarlo: <a href=\"https://github.com/Rizzo-AI-Academy/rizzo-pii\" target=\"_blank\" rel=\"noopener\">apri la repo su GitHub ↗</a>",
   tab1:"Anonimizza", tab2:"Ripristina la risposta",
-  in_title:"① Il tuo documento", in_hint:"incolla testo o trascina un PDF",
-  src_ph:"Incolla qui il testo dell'atto, del contratto o della sentenza…\n\nOppure trascina un PDF nell'area qui sotto.",
-  drop:"Trascina un <b>PDF</b> qui, oppure <b>scegli un file</b>",
+  in_title:"① Il tuo documento", in_hint:"incolla testo o trascina un PDF / .md",
+  src_ph:"Incolla qui il testo dell'atto, del contratto o della sentenza…\n\nOppure trascina un PDF o un file .md nell'area qui sotto.",
+  drop:"Trascina un <b>PDF</b> o un <b>.md</b> qui, oppure <b>scegli un file</b>",
   go:"Anonimizza", clear:"Pulisci",
   out_title:"② Risultato", v_prev:"Anteprima", v_text:"Testo da copiare",
   empty_prev:"L'anteprima con le PII evidenziate apparirà qui.",
   anon_ph:"Il testo anonimizzato apparirà qui.",
-  copy:"Copia per ChatGPT", dl:"Scarica dizionario",
+  copy:"Copia per ChatGPT", dl:"Scarica dizionario", dlpdf:"Scarica PDF anonimizzato",
+  t_pdf_making:"Genero il PDF…", t_pdf_ok:"PDF anonimizzato scaricato",
+  t_pdf_err:"Errore nella creazione del PDF",
+  t_pdf_warn:(r,s)=>"PDF scaricato · ATTENZIONE: "+(r+s)+" valori sono rimasti in chiaro"
+    +" ("+r+" non redatti, "+s+" troppo corti per essere cercati): controlla il file"
+    +" prima di condividerlo",
   dict_title:"Dizionario reversibile", dict_hint:"resta solo qui, in locale",
   th_id:"ID", th_val:"Valore originale", th_type:"Tipo",
   callout:"Incolla qui la <b>risposta dell'LLM</b> (che contiene i placeholder come <span class=\"kbd\">[FULLNAME_1]</span>): l'app rimette i valori veri usando il dizionario di questa sessione. Se hai chiuso e riaperto l'app, <b>carica il dizionario .json</b> che avevi salvato.",
@@ -856,7 +1261,7 @@ const T = {
   t_no_dict:"Nessun dizionario: caricane uno .json", t_restored:"Valori ripristinati",
   t_nothing_copy:"Niente da copiare", t_restored_copied:"Testo ripristinato copiato",
   t_dict_loaded:"Dizionario caricato", t_json_invalid:"JSON non valido",
-  t_drag_pdf:"Trascina un file PDF",
+  t_drag_pdf:"Formato non supportato: usa PDF, .md o .txt",
   pii_found:(n,u)=>n+" PII trovate · "+u+" valori unici",
   dict_n:n=>n+" ID nel dizionario",
   dict_loaded_n:n=>"dizionario caricato · "+n+" ID",
@@ -867,19 +1272,39 @@ const T = {
   cfg_available:"Porta disponibile ✓", cfg_in_use:"Porta occupata ✗",
   cfg_saved:"Configurazione salvata (riavvia per applicare)",
   cfg_restart_note:"Le modifiche avranno effetto al prossimo avvio.",
+  tg_title:"Tag da anonimizzare",
+  tg_sub:"Deseleziona i tipi che vuoi <b>lasciare in chiaro</b>: verranno comunque rilevati, ma non sostituiti da un placeholder.",
+  tg_all:"Seleziona tutti", tg_none:"Nessuno",
+  tg_saved:"Selezione salvata", tg_err:"Salvataggio non riuscito",
+  tg_note:p=>"Salvato in "+p+" · vale anche per l'API /analyze.",
+  tg_env:"⚠️ La variabile d'ambiente PII_EXCLUDE_TAGS ha la precedenza al prossimo avvio.",
+  tg_count:(on,tot)=>on+" di "+tot+" tag anonimizzati",
+  st_excl:"tag esclusi",
+  map_ttl:"Dizionario reversibile", map_on:"ATTIVO", map_off:"DISATTIVO",
+  map_sub_on:"Ogni PII riceve un ID: potrai ripristinare i valori veri dalla risposta dell'LLM.",
+  map_sub_off:"Anonimizzazione <b>definitiva</b>: nessuna chiave placeholder → valore viene creata, salvata o scaricabile. Il ripristino non sarà possibile.",
+  t_map_on:"Dizionario reversibile attivo", t_map_off:"Dizionario disattivato: anonimizzazione definitiva",
+  dict_off:"Nessun dizionario: l'anonimizzazione di questo testo è <b>definitiva</b>.",
+  dict_off_hint:"lo switch è su DISATTIVO",
+  r_off:"Lo switch <b>Dizionario reversibile</b> è su DISATTIVO: le nuove anonimizzazioni non producono chiavi. Qui puoi comunque ripristinare con un dizionario <b>.json salvato in precedenza</b>.",
  },
  en:{
   tagline:"local model on CPU · GDPR compliant", badge:"100% local",
   notice:"<b>Work in progress.</b> The AI model isn't perfect and can make mistakes: always double-check the result before relying on it. These are the very first versions and the project is fully <b>open source</b>. If you find it useful, <b>leave a ⭐ on the repo</b> and help improve it: <a href=\"https://github.com/Rizzo-AI-Academy/rizzo-pii\" target=\"_blank\" rel=\"noopener\">open the repo on GitHub ↗</a>",
   tab1:"Anonymize", tab2:"Restore the answer",
-  in_title:"① Your document", in_hint:"paste text or drop a PDF",
-  src_ph:"Paste here the text of the deed, contract or judgment…\n\nOr drop a PDF onto the area below.",
-  drop:"Drop a <b>PDF</b> here, or <b>choose a file</b>",
+  in_title:"① Your document", in_hint:"paste text or drop a PDF / .md",
+  src_ph:"Paste here the text of the deed, contract or judgment…\n\nOr drop a PDF or a .md file onto the area below.",
+  drop:"Drop a <b>PDF</b> or a <b>.md</b> here, or <b>choose a file</b>",
   go:"Anonymize", clear:"Clear",
   out_title:"② Result", v_prev:"Preview", v_text:"Text to copy",
   empty_prev:"The preview with highlighted PII will appear here.",
   anon_ph:"The anonymized text will appear here.",
-  copy:"Copy for ChatGPT", dl:"Download dictionary",
+  copy:"Copy for ChatGPT", dl:"Download dictionary", dlpdf:"Download anonymized PDF",
+  t_pdf_making:"Building the PDF…", t_pdf_ok:"Anonymized PDF downloaded",
+  t_pdf_err:"Error while creating the PDF",
+  t_pdf_warn:(r,s)=>"PDF downloaded · WARNING: "+(r+s)+" values were left in clear"
+    +" ("+r+" not redacted, "+s+" too short to be searched safely): check the file"
+    +" before sharing it",
   dict_title:"Reversible dictionary", dict_hint:"stays here only, locally",
   th_id:"ID", th_val:"Original value", th_type:"Type",
   callout:"Paste here the <b>LLM's answer</b> (containing placeholders like <span class=\"kbd\">[FULLNAME_1]</span>): the app puts the real values back using this session's dictionary. If you closed and reopened the app, <b>load the .json dictionary</b> you saved.",
@@ -896,7 +1321,7 @@ const T = {
   t_no_dict:"No dictionary: load a .json one", t_restored:"Values restored",
   t_nothing_copy:"Nothing to copy", t_restored_copied:"Restored text copied",
   t_dict_loaded:"Dictionary loaded", t_json_invalid:"Invalid JSON",
-  t_drag_pdf:"Drop a PDF file",
+  t_drag_pdf:"Unsupported format: use PDF, .md or .txt",
   pii_found:(n,u)=>n+" PII found · "+u+" unique values",
   dict_n:n=>n+" IDs in the dictionary",
   dict_loaded_n:n=>"dictionary loaded · "+n+" IDs",
@@ -907,6 +1332,21 @@ const T = {
   cfg_available:"Port available ✓", cfg_in_use:"Port in use ✗",
   cfg_saved:"Config saved (restart to apply)",
   cfg_restart_note:"Changes take effect on next startup.",
+  tg_title:"Tags to anonymize",
+  tg_sub:"Untick the types you want to <b>leave in clear text</b>: they are still detected, but not replaced by a placeholder.",
+  tg_all:"Select all", tg_none:"None",
+  tg_saved:"Selection saved", tg_err:"Could not save",
+  tg_note:p=>"Saved to "+p+" · also applies to the /analyze API.",
+  tg_env:"⚠️ The PII_EXCLUDE_TAGS environment variable takes precedence on next startup.",
+  tg_count:(on,tot)=>on+" of "+tot+" tags anonymized",
+  st_excl:"excluded tags",
+  map_ttl:"Reversible dictionary", map_on:"ON", map_off:"OFF",
+  map_sub_on:"Every PII gets an ID: you will be able to restore the real values from the LLM's answer.",
+  map_sub_off:"<b>Irreversible</b> anonymization: no placeholder → value key is created, stored or downloadable. Restoring will not be possible.",
+  t_map_on:"Reversible dictionary on", t_map_off:"Dictionary off: anonymization is irreversible",
+  dict_off:"No dictionary: anonymization of this text is <b>irreversible</b>.",
+  dict_off_hint:"the switch is OFF",
+  r_off:"The <b>Reversible dictionary</b> switch is OFF: new anonymizations produce no keys. You can still restore here using a <b>.json dictionary saved earlier</b>.",
  }
 };
 const tt=k=>T[L][k];
@@ -925,6 +1365,8 @@ function applyLang(l){
     const v=T[L][el.getAttribute('data-i18n-ph')]; if(v!=null) el.placeholder=v;});
   if(!$('pdf').files.length) $('dropTxt').innerHTML=tt('drop');   // dropzone: solo se nessun file
   if(!$('rout')._raw) $('rout').innerHTML=routEmpty();
+  renderMapping();
+  if(TAGS.length && $('tagsOverlay').classList.contains('open')) renderTags();
   if(DATA) render();
 }
 
@@ -945,8 +1387,8 @@ function hue(s){let h=0;for(const c of s)h=(h*31+c.charCodeAt(0))%360;return h;}
 function colors(label){const h=hue(label);
   return {bg:`hsl(${h} 56% 96%)`,bd:`hsl(${h} 42% 81%)`,tx:`hsl(${h} 40% 38%)`};}
 
-function toast(msg,ok=true){const t=$('toast');t.textContent=msg;t.className='show'+(ok?' ok':'');
-  clearTimeout(t._t);t._t=setTimeout(()=>t.className='',1800);}
+function toast(msg,ok=true,ms=1800){const t=$('toast');t.textContent=msg;t.className='show'+(ok?' ok':'');
+  clearTimeout(t._t);t._t=setTimeout(()=>t.className='',ms);}
 
 /* ---- tabs ---- */
 function showTab(n){
@@ -962,15 +1404,20 @@ async function run(){
   $('go').innerHTML='<span class="spin"></span> '+tt('analyzing');
   try{
     let resp;
+    // override della UI. Se /settings non ha risposto non mandiamo nulla: comanda il server.
+    const excl=TAGS_LOADED?[...EXCL]:null;
     if(file){const fd=new FormData();fd.append('pdf',file);
+      if(excl){fd.append('exclude_tags',excl.join(','));fd.append('include_mapping',MAPPING?'1':'0');}
       resp=await fetch('/analyze',{method:'POST',body:fd});}
-    else resp=await fetch('/analyze',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({text})});
+    else{const body={text};if(excl){body.exclude_tags=excl;body.include_mapping=MAPPING;}
+      resp=await fetch('/analyze',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(body)});}
     const d=await resp.json();
     if(!resp.ok){toast(d.error||tt('t_error'),false);return;}
     if(d.source_text&&file)$('src').value=d.source_text;
-    DATA=d;MAP=d.mapping;off.clear();
-    localStorage.setItem('pii_map',JSON.stringify(MAP));
+    DATA=d;off.clear();
+    // senza dizionario non tocchiamo MAP ne' il localStorage: nessuna chiave nuova nasce
+    if(d.mapping_enabled!==false){MAP=d.mapping;localStorage.setItem('pii_map',JSON.stringify(MAP));}
     render();
     toast(T[L].pii_found(d.n_entities,d.n_unique));
   }catch(e){toast(tt('t_error')+': '+e.message,false);}
@@ -988,7 +1435,8 @@ function render(){
       const c=colors(s.label);const sp=document.createElement('span');
       sp.className='ph'+(off.has(s.label)?' dim':'');
       sp.style.background=c.bg;sp.style.borderColor=c.bd;sp.style.color=c.tx;
-      sp.title=`${s.t}\n(${s.src}${s.validated?' · checksum ✓':''})`;
+      // senza dizionario il server non manda il valore originale: niente da mostrare al passaggio
+      sp.title=(s.t?s.t+'\n':'')+`(${s.src}${s.validated?' · checksum ✓':''})`;
       sp.innerHTML=s.ph.replace(/[\[\]]/g,'')+(s.validated?'<span class="ck">✓</span>':'');
       prev.appendChild(sp);
     }else prev.appendChild(document.createTextNode(s.t));
@@ -1001,7 +1449,9 @@ function render(){
     `<span class="stat"><b>${d.n_unique}</b> ${tt('st_uniq')}</span>`+
     `<span class="stat"><b>${(d.by_source.modello||0)}</b> ${tt('st_model')}</span>`+
     `<span class="stat"><b>${(d.by_source.regex||0)}</b> ${tt('st_regex')}</span>`+
-    `<span class="stat"><b>${T[L].chars(d.n_chars)}</b> ${tt('st_chars')}</span>`;
+    `<span class="stat"><b>${T[L].chars(d.n_chars)}</b> ${tt('st_chars')}</span>`+
+    ((d.excluded_tags&&d.excluded_tags.length)
+      ? `<span class="stat" title="${d.excluded_tags.join(', ')}"><b>${d.excluded_tags.length}</b> ${tt('st_excl')}</span>` : '');
   // legenda cliccabile (toggle highlight)
   const lg=$('legend');lg.innerHTML='';
   for(const [k,v] of Object.entries(d.by_label)){
@@ -1011,10 +1461,14 @@ function render(){
     el.onclick=()=>{off.has(k)?off.delete(k):off.add(k);render();};
     lg.appendChild(el);
   }
-  // dizionario
+  // dizionario (assente quando lo switch e' su DISATTIVO)
+  const hasMap=d.mapping_enabled!==false;
   const rows=$('maprows');rows.innerHTML='';
-  const keys=Object.keys(d.mapping);
+  const keys=hasMap?Object.keys(d.mapping):[];
   $('tablewrap').style.display=keys.length?'':'none';
+  $('dictNone').style.display=hasMap?'none':'';
+  $('dictHint').innerHTML=hasMap?tt('dict_hint'):tt('dict_off_hint');
+  $('dl').style.display=hasMap?'':'none';
   for(const ph of keys){const lab=ph.slice(1,ph.lastIndexOf('_'));const c=colors(lab);
     const tr=document.createElement('tr');
     tr.innerHTML=`<td class="k" style="color:${c.tx}">${ph}</td>`+
@@ -1042,6 +1496,39 @@ $('dl').onclick=()=>{if(!DATA||!Object.keys(MAP).length){toast(tt('t_nothing_dl'
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
   a.download='dizionario_anonimizzazione.json';a.click();URL.revokeObjectURL(a.href);
   toast(tt('t_dl_ok'));};
+
+/* ---- PDF anonimizzato (issue #7): redazione vera del PDF caricato, oppure PDF
+       ricostruito dal testo anonimizzato quando l'input non era un PDF.
+       Il dizionario NON viene inviato: il server lo ricostruisce internamente,
+       cosi' il bottone funziona anche con lo switch "dizionario" su DISATTIVO. ---- */
+$('dlpdf').onclick=async()=>{
+  const file=$('pdf').files[0];const text=$('src').value.trim();
+  if(!DATA&&!file&&!text){toast(tt('t_need_anon'),false);return;}
+  const btn=$('dlpdf');btn.disabled=true;const old=btn.innerHTML;
+  btn.innerHTML='<span class="spin"></span> '+tt('t_pdf_making');
+  try{
+    const excl=TAGS_LOADED?[...EXCL]:null;
+    let resp;
+    if(file){const fd=new FormData();fd.append('pdf',file);
+      if(excl)fd.append('exclude_tags',excl.join(','));
+      resp=await fetch('/pdf',{method:'POST',body:fd});}
+    else{const body={text};if(excl)body.exclude_tags=excl;
+      resp=await fetch('/pdf',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(body)});}
+    if(!resp.ok){const d=await resp.json().catch(()=>({}));
+      toast(d.error||tt('t_pdf_err'),false);return;}
+    const blob=await resp.blob();
+    const name=(file?file.name.replace(/\.[^.]+$/,''):'documento')+'_anonimizzato.pdf';
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+    a.download=name;a.click();URL.revokeObjectURL(a.href);
+    // residui = valori ancora leggibili nell'output; saltati = valori troppo corti
+    // per essere cercati senza devastare il documento. Entrambi restano IN CHIARO.
+    const res=parseInt(resp.headers.get('X-PII-Residual')||'0',10);
+    const skp=parseInt(resp.headers.get('X-PII-Skipped')||'0',10);
+    if(res+skp>0)toast(T[L].t_pdf_warn(res,skp),false,9000);else toast(tt('t_pdf_ok'));
+  }catch(e){toast(tt('t_pdf_err')+': '+e.message,false);}
+  finally{btn.disabled=false;btn.innerHTML=old;}
+};
 
 /* ---- reverse ---- */
 function reverse(){
@@ -1086,8 +1573,10 @@ const drop=$('drop');
 $('pdf').onchange=e=>{const f=e.target.files[0];if(f)$('dropTxt').innerHTML=`📎 <b>${f.name}</b>`;};
 ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hot');}));
 ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hot');}));
+const OK_EXT=/\.(pdf|md|markdown|txt|text)$/i;
 drop.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];
-  if(f&&f.type==='application/pdf'){const dt=new DataTransfer();dt.items.add(f);$('pdf').files=dt.files;
+  if(f&&(f.type==='application/pdf'||OK_EXT.test(f.name))){
+    const dt=new DataTransfer();dt.items.add(f);$('pdf').files=dt.files;
     $('dropTxt').innerHTML=`📎 <b>${f.name}</b>`;}else toast(tt('t_drag_pdf'),false);});
 
 /* scroll sincronizzato: editor (sx) <-> anteprima e testo (dx) */
@@ -1102,7 +1591,7 @@ applyLang(localStorage.getItem('pii_lang')||'it');
 $('infoBtn').addEventListener('click',e=>{e.stopPropagation();$('infoBtn').classList.toggle('open');});
 $('infoBtn').addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();$('infoBtn').classList.toggle('open');}});
 document.addEventListener('click',e=>{if(!$('infoBtn').contains(e.target))$('infoBtn').classList.remove('open');});
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('infoBtn').classList.remove('open');closeConfig();}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('infoBtn').classList.remove('open');closeConfig();closeTags();}});
 
 /* ---- config modal ---- */
 async function openConfig(){
@@ -1131,6 +1620,83 @@ async function saveConfig(){
   closeConfig();
 }
 
+/* ---- switch "Dizionario reversibile" ---- */
+function renderMapping(){
+  const on=MAPPING;
+  $('mapToggle').classList.toggle('off',!on);
+  $('mapToggle').setAttribute('aria-checked',String(on));
+  $('mapSw').classList.toggle('off',!on);
+  $('mapState').textContent=on?tt('map_on'):tt('map_off');
+  $('mapSub').innerHTML=on?tt('map_sub_on'):tt('map_sub_off');
+  $('rOff').style.display=on?'none':'';
+  $('dl').style.display=on?'':'none';      // niente dizionario -> niente download
+}
+async function toggleMapping(){
+  MAPPING=!MAPPING;
+  renderMapping();
+  toast(MAPPING?tt('t_map_on'):tt('t_map_off'),MAPPING);
+  try{                                 // persiste: vale anche per l'API /analyze
+    await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({mapping_enabled:MAPPING})});
+  }catch(e){}
+}
+
+/* ---- tags modal: legenda + selezione dei tag da anonimizzare ---- */
+let TAGS_META={};
+async function loadTags(){
+  try{
+    const d=await (await fetch('/settings')).json();
+    TAGS=d.tags||[];EXCL=new Set(d.excluded_tags||[]);TAGS_META=d;TAGS_LOADED=true;
+    MAPPING=d.mapping_enabled!==false;renderMapping();
+  }catch(e){/* server vecchio o offline: si continua con il comportamento di default */}
+}
+function renderTags(){
+  const list=$('tgList');list.innerHTML='';
+  for(const t of TAGS){
+    const c=colors(t.tag),on=!EXCL.has(t.tag);
+    const row=document.createElement('label');
+    row.className='tg-row'+(on?'':' off');
+    row.innerHTML=`<input type="checkbox" ${on?'checked':''}>`+
+      `<span class="sw" style="background:${c.bd}"></span>`+
+      `<span class="txt"><span class="nm" style="color:${c.tx}">${t.tag}</span>`+
+      `<div class="ds">${escapeHtml(L==='en'?t.en:t.it)}</div>`+
+      `<div class="ex">${escapeHtml(t.example||'')}</div></span>`;
+    row.querySelector('input').onchange=e=>{
+      e.target.checked?EXCL.delete(t.tag):EXCL.add(t.tag);
+      row.classList.toggle('off',!e.target.checked);tgCount();};
+    list.appendChild(row);
+  }
+  tgCount();
+}
+function tgCount(){$('tgCount').textContent=T[L].tg_count(TAGS.length-EXCL.size,TAGS.length);}
+function setAllTags(on){
+  EXCL=on?new Set():new Set(TAGS.map(t=>t.tag));
+  renderTags();
+}
+async function openTags(){
+  if(!TAGS.length)await loadTags();
+  if(!TAGS.length){toast(tt('t_error'),false);return;}
+  $('tgStatus').className='cfg-status';$('tgStatus').textContent='';
+  $('tgNote').innerHTML=(TAGS_META.env_override?'<b>'+tt('tg_env')+'</b><br>':'')+
+    T[L].tg_note(TAGS_META.config_path||'');
+  renderTags();
+  $('tagsOverlay').classList.add('open');
+}
+function closeTags(){$('tagsOverlay').classList.remove('open');loadTags();}  // ricarica: annulla = scarta
+$('tagsOverlay').addEventListener('click',e=>{if(e.target===$('tagsOverlay'))closeTags();});
+async function saveTags(){
+  try{
+    const r=await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({excluded_tags:[...EXCL]})});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||'');
+    EXCL=new Set(d.excluded_tags||[]);
+    toast(tt('tg_saved'));
+    $('tagsOverlay').classList.remove('open');
+  }catch(e){$('tgStatus').className='cfg-status fail';$('tgStatus').textContent=tt('tg_err');}
+}
+loadTags();
+
 /* recupera dizionario da sessione precedente (dopo applyLang -> testo nella lingua giusta) */
 try{const m=localStorage.getItem('pii_map');if(m){MAP=JSON.parse(m);
   if(Object.keys(MAP).length)$('dictInfo').textContent=T[L].dict_session(Object.keys(MAP).length);}}catch{}
@@ -1144,7 +1710,26 @@ if __name__ == "__main__":
     _p = _ap.ArgumentParser(description="Rizzo PII — server locale di anonimizzazione.")
     _p.add_argument("--host", default=None, help="indirizzo su cui ascoltare (default da config/env/127.0.0.1)")
     _p.add_argument("--port", type=int, default=None, help="porta su cui ascoltare (default da config/env/5005)")
+    _p.add_argument("--exclude-tags", default=None, metavar="TAG,TAG",
+                    help="tag PII da NON anonimizzare, es. AGE,GENDER (default da env/prefs.json)")
+    _p.add_argument("--no-mapping", action="store_true",
+                    help="anonimizzazione definitiva: non costruire il dizionario di ripristino")
     _args = _p.parse_args()
+
+    if _args.exclude_tags is not None:
+        EXCLUDED_TAGS = server_config.parse_tag_list(_args.exclude_tags)
+        _unknown = [t for t in EXCLUDED_TAGS if t not in TAG_NAMES]
+        if _unknown:
+            print(f"ERRORE: tag sconosciuti in --exclude-tags: {', '.join(_unknown)}")
+            print(f"Tag validi: {', '.join(TAG_NAMES)}")
+            sys.exit(2)
+    if _args.no_mapping:
+        MAPPING_ENABLED = False
+    if EXCLUDED_TAGS:
+        print(f"Tag esclusi dall'anonimizzazione: {', '.join(EXCLUDED_TAGS)}")
+    print("Dizionario reversibile: " +
+          ("ATTIVO (si puo' ripristinare)" if MAPPING_ENABLED
+           else "DISATTIVO (anonimizzazione definitiva)"))
 
     _host, _port = server_config.resolve(cli_host=_args.host, cli_port=_args.port)
 

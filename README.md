@@ -200,6 +200,11 @@ The five Italian-legal tags (`CF`, `PIVA`, `CATASTO`, `DOCID`, `PROVINCE`) are t
 rizzo-pii exists: they do not appear as labeled data in any public corpus, so they are created
 through synthesis with mathematically valid checksums.
 
+The app adds a 23rd tag, **`URL`**, handled by the regex net alone — the model is not trained on it.
+It matches `http(s)://…`, `www.…` and bare domains on a closed TLD list; the closed list is what
+keeps Italian legalese (`p.iva`, `n.ro`, `S.r.l.`) from being read as a domain, at the price of
+letting an exotic TLD through.
+
 ---
 
 ## Dataset & training
@@ -352,7 +357,73 @@ python src/app/app.py            # http://127.0.0.1:5005  (paste text or upload 
 
 The web app assigns every PII a **reversible ID** (`[FULLNAME_1]`, `[IBAN_1]`…) plus a local
 dictionary, pairing the model with the regex/checksum net. You copy the anonymized text into an LLM
-and **restore** the real values from the response.
+and **restore** the real values from the response. Input: pasted text, a **PDF**, or a
+**`.md` / `.txt`** file.
+
+### The local HTTP API
+
+The same process is a plain HTTP service, so you can use it as a sidecar in a fail-closed pipeline:
+
+```bash
+curl localhost:5005/health                      # readiness, no inference: 200 = model loaded
+curl -X POST localhost:5005/analyze -H 'Content-Type: application/json' \
+     -d '{"text": "Mario Rossi, IBAN IT60X0542811101000000123456"}'
+curl -F "file=@atto.pdf" localhost:5005/analyze  # .pdf, .md, .txt
+curl -F "file=@atto.pdf" localhost:5005/pdf -o atto_anonimizzato.pdf   # anonymized PDF back
+curl localhost:5005/settings                     # tag legend, excluded tags, dictionary state
+```
+
+### Get the anonymized document back as a PDF
+
+`POST /pdf` takes the same input as `/analyze` and returns a PDF. Upload a **PDF** and you get that
+same document back **truly redacted**: the PII is removed from the content stream (not covered with a
+black box) and replaced in place by its placeholder, so the layout survives — handy for feeding a
+whole stack of documents to an LLM at once. Paste text or upload `.md`/`.txt` and you get a
+freshly typeset PDF of the anonymized text.
+
+The dictionary never crosses the wire in either direction: the server rebuilds it internally to
+locate the PII and drops it when the request ends. That is why the button works unchanged with the
+reversible dictionary switched off.
+
+Two things can leave a value in clear, and both raise a warning in the UI (response headers
+`X-PII-Residual` and `X-PII-Skipped`): a value still readable in the output at the final check, and
+values too short to search safely (under 2 alphanumeric characters, or 2 bare digits like `45`).
+Metadata, XMP, annotations, form-field values and bookmark titles are scrubbed too, and embedded
+attachments are dropped. Text baked into a raster image cannot be redacted at all — if **no**
+occurrence is found anywhere in the PDF the endpoint fails with `422` rather than handing you a file
+that only looks anonymized.
+
+### Reversible or irreversible: your call
+
+By default every PII gets a reversible ID and a **local dictionary**, so you can restore the real
+values from the LLM's answer. Some users want the opposite: anonymize and have **no restore key
+exist at all**. The switch in the input card does that — and it is not cosmetic. With the dictionary
+off the server builds no `placeholder → value` map, returns none, stores none in the browser, offers
+no download, and strips the original text out of the response entirely (the per-entity `t` field
+disappears, so the map cannot be rebuilt from the payload either). The numbering survives —
+`[FULLNAME_1]` twice still means "same person" — but a number alone leads back to nothing.
+
+```bash
+python src/app/app.py --no-mapping                  # CLI
+PII_MAPPING=0 python src/app/serve.py               # env
+curl -X POST localhost:5005/settings -H 'Content-Type: application/json' \
+     -d '{"mapping_enabled": false}'                # persisted to prefs.json
+curl -X POST localhost:5005/analyze -H 'Content-Type: application/json' \
+     -d '{"text": "…", "include_mapping": false}'   # per-request override
+```
+
+**Not every tag has to be masked.** Comparing the amounts in a contract, or keeping age and sex in a
+clinical record, needs those values in clear text. Untick them in the 🏷️ panel (they are still
+detected, just not replaced), or set it outside the UI:
+
+```bash
+python src/app/app.py --exclude-tags AMOUNT,AGE     # CLI
+PII_EXCLUDE_TAGS=AMOUNT,AGE python src/app/serve.py # env
+curl -X POST localhost:5005/settings -H 'Content-Type: application/json' \
+     -d '{"excluded_tags": ["AMOUNT"]}'             # persisted to prefs.json
+curl -X POST localhost:5005/analyze -H 'Content-Type: application/json' \
+     -d '{"text": "…", "exclude_tags": ["AMOUNT"]}' # per-request override
+```
 
 ---
 
@@ -387,6 +458,7 @@ rizzo_pii/
 │   ├─ inspect/                       read-only utilities (counts, lengths, checksums)
 │   └─ app/                           local anonymization app
 │       ├─ app.py                     Flask server: reversible anonymization + regex/checksum net
+│       ├─ pdf_export.py              anonymized-PDF download: true redaction of the uploaded PDF
 │       ├─ serve.py                   headless entry (backend of the Tauri app, no browser)
 │       ├─ desktop_app.py             legacy PyInstaller entry (opens the browser)
 │       └─ assets/                    mascot (the hedgehog) and icons
