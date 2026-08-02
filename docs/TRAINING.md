@@ -194,7 +194,41 @@ più rumorosi a prescindere dagli iperparametri. Con la propagazione dei subword
 di posizioni non-`O` sale, e sale soprattutto sugli identificatori lunghi — cioè proprio
 i tag che erano a zero.
 
-## 4. Cosa guardare nel prossimo run
+## 4. Pubblicazione automatica su Hugging Face
+
+A fine training (solo `--type full`) il modello viene pubblicato da solo su
+[`rizzoaiacademy/rizzo-pii-0.3B`](https://huggingface.co/rizzoaiacademy/rizzo-pii-0.3B),
+**sul branch `v{MODEL_VERSION}`, mai su `main`**.
+
+Perché non su `main`: quel repo è pubblico e scaricato (>1.400 download). Un push
+automatico su `main` sostituirebbe il modello che la gente sta usando con un run che
+nessuno ha ancora guardato. Sul branch il modello è subito provabile e `main` resta
+quello buono finché **non lo promuovi tu**. Il repo ha già un branch `v1.2.0`: la
+convenzione era già in uso.
+
+```python
+# provare la nuova versione senza toccare quella pubblicata
+AutoModelForTokenClassification.from_pretrained("rizzoaiacademy/rizzo-pii-0.3B",
+                                                revision="v1.3.0")
+```
+
+Cosa viene caricato: il contenuto di `SAVE_DIR` (pesi + tokenizer) e, a parte,
+`metrics.json` da `RUN_DIR` — così il branch è autoconsistente, pesi e numeri con cui
+sono stati prodotti stanno insieme. Il messaggio di commit riporta versione, F1 di
+validation, righe di train/val e numero di label.
+
+| | |
+|---|---|
+| Token | `HF_TOKEN` nel `.env` (**gitignorato**). Senza token il push viene saltato con un avviso, il training resta valido |
+| Repo di destinazione | `HF_REPO_ID`, sovrascrivibile con la env `PII_HF_REPO` |
+| Disattivare | `--no-hf-push` |
+| Run subset | mai pubblicato (è uno smoke test) |
+
+Il blocco è **l'ultimo del file** e avvolto in `try/except`: un errore di rete, un token
+scaduto o un permesso mancante stampano come ritentare a mano, ma non fanno sembrare
+fallito un training da ore.
+
+## 5. Cosa guardare nel prossimo run
 
 1. `CF`, `PIVA`, `IBAN`, `ZIPCODE`, `ID_DOC` in F1 entity-level: devono passare da ~0 a
    valori confrontabili con gli altri tag. Se restano a zero, la propagazione non è
@@ -203,5 +237,6 @@ i tag che erano a zero.
    problema lato inferenza con `aggregation_strategy="first"` invece che qui.
 3. `eval/loss` con ~13 punti per epoca: se dopo l'epoca 1 risale, l'early stopping tiene
    il best checkpoint e la seconda epoca costa solo tempo macchina.
-4. Bumpare `MODEL_VERSION` (nel file è ancora `1.1.0` mentre su disco esistono già dei
-   `v1.2.0`), o passare `--version` esplicito, altrimenti il run si autonumera indietro.
+4. `MODEL_VERSION` è a **`1.3.0`**: il run salva in `models/rizzo-pii-0.3B-v1.3.0/`,
+   logga su W&B come `rizzo-pii:0.3B-v1.3.0` e pubblica sul branch `v1.3.0`. Per un run
+   di prova senza sporcare la versione, passare `--version` e/o `--no-hf-push`.

@@ -103,8 +103,18 @@ MODEL_FAMILY = "rizzo-pii-0.3B"
 # completo, niente sovrascrittura) e logga su W&B come rizzo-pii:0.3B-v{VERSION}. Bumpala qui a
 # ogni cambiamento significativo di dati/training, oppure passala con --version sulla CLI.
 # Storia: v1.0.0 = baseline (vecchio models/rizzo-pii-0.3B). v1.1.0 = case-augmentation +
-# ORG vari + template-elenco (nomi/societa' consecutivi).
-MODEL_VERSION = "1.1.0"
+# ORG vari + template-elenco (nomi/societa' consecutivi). v1.3.0 = unione dei due dataset HF
+# + supervisione di TUTTI i subword (LABEL_ALL_SUBWORDS) + metriche entity-level a ogni eval.
+MODEL_VERSION = "1.3.0"
+
+# --- Pubblicazione automatica su Hugging Face a fine training (solo run --type full) ---
+# Il push va su un BRANCH dedicato v{VERSION}, non su main: il repo e' pubblico e usato
+# (>1400 download), quindi il modello che la gente scarica non cambia finche' non si
+# promuove il branch a mano. Per provarlo:
+#     AutoModelForTokenClassification.from_pretrained(HF_REPO_ID, revision="v1.3.0")
+# Il token viene da HF_TOKEN nel .env (gitignorato). Senza token il push viene saltato
+# con un avviso: il training resta valido e il modello e' comunque su disco.
+HF_REPO_ID = os.environ.get("PII_HF_REPO", "rizzoaiacademy/rizzo-pii-0.3B")
 
 # Modalita' del run, scelta da riga di comando:
 #   --type full    (default) -> run grande -> models/rizzo-pii-0.3B-v{VERSION} + experiments/full_run_v{VERSION}
@@ -116,6 +126,8 @@ _ap.add_argument("--type", choices=["full", "subset"], default="full",
                  help="full = run grande su tutto il dataset; subset = smoke test 10k/5k")
 _ap.add_argument("--version", default=None,
                  help=f"versione del modello (default {MODEL_VERSION}); il run grande salva in models/{MODEL_FAMILY}-v<versione>")
+_ap.add_argument("--no-hf-push", action="store_true",
+                 help=f"non pubblicare su Hugging Face a fine training (default: push sul branch v<versione> di {HF_REPO_ID})")
 _args, _ = _ap.parse_known_args()
 SUBSET = (_args.type == "subset") or (os.environ.get("PII_SUBSET") == "1")
 MODEL_VERSION = _args.version or MODEL_VERSION
@@ -677,3 +689,44 @@ if USE_WANDB:
         log.update({f"final/val_{k}": v for k, v in m_va.items() if v is not None})
     wandb.log(log)
     wandb.finish()
+
+# --------------------------------------------------------------------------- #
+# 7) Pubblicazione su Hugging Face (branch v{VERSION}, mai su main)
+# --------------------------------------------------------------------------- #
+# Ultimo blocco del file di proposito: qualunque cosa vada storta qui, il training e'
+# gia' finito, il modello e' su disco e le metriche sono salvate. Nessuna eccezione di
+# rete deve far sembrare fallito un run da ore.
+if not SUBSET and not _args.no_hf_push:
+    hf_token = os.environ.get("HF_TOKEN")          # dal .env, gitignorato
+    if not hf_token:
+        print("\nHF: nessun HF_TOKEN nell'ambiente/.env -> push saltato. "
+              f"Il modello resta in {SAVE_DIR}.")
+    else:
+        branch = f"v{MODEL_VERSION}"
+        try:
+            from huggingface_hub import HfApi
+            api = HfApi(token=hf_token)
+            # exist_ok: il repo c'e' gia', e un re-run della stessa versione riusa il branch.
+            api.create_repo(repo_id=HF_REPO_ID, repo_type="model", exist_ok=True)
+            api.create_branch(repo_id=HF_REPO_ID, branch=branch, exist_ok=True)
+            f1 = (m_va or {}).get("f1")
+            msg = (f"{MODEL_FAMILY} v{MODEL_VERSION}"
+                   + (f" | val F1 {f1:.4f}" if f1 is not None else "")
+                   + f" | {len(train_ds)} train, {len(eval_ds)} val, {len(label_list)} label")
+            print(f"\nHF: push di {SAVE_DIR} su {HF_REPO_ID}@{branch} ...")
+            api.upload_folder(folder_path=SAVE_DIR, repo_id=HF_REPO_ID,
+                              revision=branch, commit_message=msg)
+            # le metriche vivono in RUN_DIR, fuori da SAVE_DIR: si allegano a parte cosi'
+            # il branch e' autoconsistente (pesi + numeri con cui sono stati prodotti).
+            metrics_file = os.path.join(RUN_DIR, "metrics.json")
+            if os.path.exists(metrics_file):
+                api.upload_file(path_or_fileobj=metrics_file, path_in_repo="metrics.json",
+                                repo_id=HF_REPO_ID, revision=branch,
+                                commit_message=f"metriche v{MODEL_VERSION}")
+            print(f"HF: pubblicato -> https://huggingface.co/{HF_REPO_ID}/tree/{branch}\n"
+                  f"    provalo con: from_pretrained('{HF_REPO_ID}', revision='{branch}')\n"
+                  f"    main NON e' stato toccato: promuovi il branch a mano quando i numeri convincono.")
+        except Exception as exc:                    # rete, permessi, token scaduto...
+            print(f"\nHF: push FALLITO ({type(exc).__name__}: {exc}).\n"
+                  f"    Il training e' comunque completo: modello in {SAVE_DIR}.\n"
+                  f"    Ritenta a mano con: hf upload {HF_REPO_ID} {SAVE_DIR} --revision v{MODEL_VERSION}")
