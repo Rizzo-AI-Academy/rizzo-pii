@@ -38,6 +38,12 @@ riconoscere. È la **fonte di verità** quando si riprende il progetto: descrive
 | `DOCID` | Codice identificativo di un atto: n. Ruolo Generale, protocollo, repertorio/raccolta, sentenza | `1234/2024` | sintetico |
 | `CATASTO` | Dati catastali di un immobile (foglio, particella, subalterno) | `Foglio 12, particella 345, sub. 6` | sintetico |
 
+> **Un 23° tag solo nell'app: `URL`.** Non è un tag del modello (non c'è nel training, non compare
+> in `TAG_MAP`): lo trova la sola rete regex di `src/app/app.py`. Sta qui per completezza della
+> legenda mostrata all'utente. Matcha `http(s)://…`, `www.…` e i domini nudi **solo** con un TLD
+> della lista chiusa nel detector: senza quella lista il legalese italiano (`p.iva`, `n.ro`,
+> `S.r.l.`) verrebbe letto come dominio.
+
 Formato BIO: ogni tag esiste come `B-<TAG>` (inizio entità) e `I-<TAG>` (continuazione),
 più `O` (token non sensibile). I token adiacenti dello stesso tipo vengono fusi in una
 sola entità da `normalize_labels()`.
@@ -90,6 +96,13 @@ non chiedendolo alla token-classification.
 - `AGE`, `GENDER`, `DATE`, `TIME` sono dati personali GDPR ma **non identificatori
   diretti**; in un atto spesso servono. Politica di mascheramento da decidere a valle,
   non necessariamente "sempre".
+- Questa decisione "a valle" è **esposta all'utente**: nell'app ogni tag si può deselezionare
+  (icona 🏷️, oppure `--exclude-tags` / `PII_EXCLUDE_TAGS` / `exclude_tags` nella richiesta).
+  Un tag deselezionato viene comunque **rilevato**, ma non sostituito dal placeholder: serve a chi
+  deve far confrontare gli importi a un LLM, o tenere età e sesso in una cartella clinica.
+- Anche la **reversibilità** è una scelta dell'utente, non del modello: lo switch "Dizionario
+  reversibile" (`--no-mapping` / `PII_MAPPING=0` / `include_mapping`) toglie del tutto la mappa
+  placeholder → valore. I tag restano gli stessi: cambia solo se la chiave di ripristino esiste.
 
 ---
 
