@@ -5,6 +5,43 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-07-31 — Contribuire senza chiave Gemini + iniettori per i 4 tag scoperti
+
+Due modifiche alla pipeline dati, entrambe pensate per allargare chi e cosa può contribuire.
+
+**1. Template scritti da un agente di coding** (`contribute_dataset.py`). Nuove opzioni
+`--templates-file` e `--template-author`: la prosa con i segnaposto può arrivare da un file
+scritto da un agente (Claude Code, Cursor, …) invece che da Gemini. Il principio *"LLM autore,
+codice etichettatore"* non cambia — l'LLM scrive solo il testo, il codice inietta i valori e
+ricava le label BIO — quindi il ruolo dell'LLM esterno è sostituibile: **contribuire non
+richiede più una chiave API di terze parti**, che era il principale ostacolo pratico per un
+contributore occasionale.
+
+I template passano per la stessa guardia anti-PII-inline dei template Gemini
+(`valida_template_agente`), con due differenze: il set di segnaposto ammessi è quello degli
+**iniettori** (`gen.SLOTS`, che copre anche `PROVINCE` e gli elenchi, non solo i segnaposto
+proposti a Gemini), e vengono **scartati i template con due segnaposto separati da soli spazi**
+— caso in cui le entità iniettate risulterebbero adiacenti senza un token `O` fra loro e si
+fonderebbero in un'unica sequenza (cfr. `docs/FORMATO_DATI.md`). `meta.template_author`
+registra chi ha scritto il template **di ogni singola riga**: le righe che pescano dai template
+built-in restano marcate `built-in`, così il dato resta vero anche su un pool misto.
+
+**2. Iniettori per `CREDITCARDNUMBER`, `TIME`, `AGE`, `GENDER`** (`generate_synthetic_pii.py`).
+Erano quattro tag della tassonomia che **nessun template poteva produrre**, perché non
+esisteva un generatore: il sintetico non contribuiva a colmarli e restavano appesi alle sole
+fonti esterne — proprio mentre `CREDITCARDNUMBER` è il tag più raro del pool (~66× meno di
+`FULLNAME`), cioè il più esposto allo sbilanciamento di classe già annotato fra i limiti noti.
+
+Il numero di carta è generato con **checksum di Luhn valido**, coerentemente con CF/PIVA/IBAN:
+è la stessa condizione che la rete regex+checksum applica in produzione, quindi un valore senza
+checksum valido non sarebbe stato riconosciuto dal detector deterministico. `TIME` tagga il solo
+orario (`ore` resta contesto, come per il tribunale); `AGE` tagga il numero e lascia `anni` come
+contesto; `GENDER` copre sia le forme estese sia le sigle dei moduli anagrafici. I quattro
+segnaposto sono aggiunti anche ad `ALLOWED_SLOTS`/`SLOT_HINTS` di `llm_template_bank.py`, così
+il percorso Gemini li usa da subito.
+
+---
+
 ## 2026-06-30 — Porta del backend 5000 → 5005 (conflitto AirPlay su macOS)
 
 Gli utenti macOS vedevano una **pagina bianca**: la porta **5000** è occupata di default

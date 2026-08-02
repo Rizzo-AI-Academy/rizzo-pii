@@ -42,6 +42,11 @@ Uso
 
   # senza chiave Gemini: usa solo i template built-in (dati meno "nuovi")
   python src/data_pipeline/contribute_dataset.py --n 5000 --handle iltuonome --offline
+
+  # template scritti dal TUO agente di coding (Claude Code, Cursor, ...) invece che
+  # da Gemini: stesso principio "LLM autore, codice etichettatore", nessuna chiave API
+  python src/data_pipeline/contribute_dataset.py --n 5000 --handle iltuonome \
+      --templates-file dataset/synthetic/legal_templates_claude.json --template-author claude
 """
 
 import argparse
@@ -49,6 +54,7 @@ import io
 import json
 import os
 import random
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -101,6 +107,21 @@ def piva_ok(p):
             x = c * 2
             t += x - 9 if x > 9 else x
     return (10 - t % 10) % 10 == int(p[10])
+
+
+def luhn_ok(c):
+    """Checksum di Luhn: vale per le carte di credito (spazi ignorati)."""
+    cifre = [int(x) for x in c if x.isdigit()]
+    if len(cifre) < 13:
+        return False
+    tot = 0
+    for i, d in enumerate(reversed(cifre)):
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        tot += d
+    return tot % 10 == 0
 
 
 def cf_ok(c):
@@ -193,6 +214,8 @@ def _validate_record(rec):
             return f"PIVA con checksum non valido: {e['value']}"
         if e["label"] == "IBAN" and not iban_ok(e["value"]):
             return f"IBAN con checksum non valido: {e['value']}"
+        if e["label"] == "CREDITCARDNUMBER" and not luhn_ok(e["value"]):
+            return f"carta di credito con checksum non valido: {e['value']}"
     return None
 
 
@@ -239,19 +262,88 @@ def gen_new_templates(per_type, boost):
     return out
 
 
-def generate(n, seed, handle, per_type, offline, boost):
-    """Genera n esempi sintetici. Con Gemini usa template NUOVI scritti al volo.
+def valida_template_agente(text):
+    """Guardia sui template scritti da un agente di coding.
+
+    Stessa sostanza di tb.clean_and_validate (niente markdown, niente PII scritta
+    inline), ma il set di segnaposto ammessi e' quello degli INIETTORI
+    (gen.SLOTS): copre anche PROVINCE e i generatori di elenchi, che
+    build_example() sa espandere ma che non vengono proposti a Gemini.
+    In piu' scarta i template con due segnaposto separati da soli spazi: le entita'
+    iniettate risulterebbero adiacenti senza un token 'O' fra loro e si
+    fonderebbero (cfr. docs/FORMATO_DATI.md)."""
+    if not text:
+        return None
+    text = re.sub(r"^```.*?\n|```$", "", text.strip(), flags=re.MULTILINE).strip()
+    slots = set(gen.SLOT_RE.findall(text))
+    if not slots:
+        return None
+    ignoti = slots - set(gen.SLOTS)
+    if ignoti:
+        print(f"  scartato: segnaposto senza iniettore {sorted(ignoti)}")
+        return None
+    stray = tb.find_stray_names(text)
+    if stray:
+        print(f"  scartato: probabili nomi inline non taggati {sorted(set(stray))[:8]}")
+        return None
+    if re.search(r"\}\s*\{", text):
+        print("  scartato: due segnaposto senza testo in mezzo (entita' che si fondono)")
+        return None
+    return text
+
+
+def load_agent_templates(path):
+    """Carica i template scritti da un agente di coding al posto di Gemini.
+
+    Il file e' lo stesso formato prodotto da llm_template_bank.py
+    ([{"id", "doc_type", "text"}, ...] oppure una lista di stringhe). Serve a chi
+    ha un agente di coding ma non una chiave Gemini: il principio non cambia
+    (l'LLM scrive SOLO la prosa con i segnaposto, il codice inietta i dati e le
+    label), cambia solo quale modello ha scritto il testo."""
+    if not os.path.isfile(path):
+        sys.exit(f"ERRORE: file dei template inesistente: {path}")
+    try:
+        raw = json.load(open(path, encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        sys.exit(f"ERRORE: {path} non e' un JSON valido: {e}")
+    if not isinstance(raw, list):
+        sys.exit(f"ERRORE: {path} deve contenere una lista di template.")
+
+    out, scartati = [], 0
+    for item in raw:
+        text = item.get("text") if isinstance(item, dict) else item
+        clean = valida_template_agente(text)
+        if clean:
+            out.append(clean)
+        else:
+            scartati += 1
+    print(f"Template dal file {os.path.basename(path)}: {len(out)} validi, {scartati} scartati")
+    if not out:
+        sys.exit("ERRORE: nessun template valido nel file indicato.")
+    return out
+
+
+def generate(n, seed, handle, per_type, offline, boost,
+             templates_file=None, template_author=None):
+    """Genera n esempi sintetici. Con Gemini usa template NUOVI scritti al volo;
+    con --templates-file usa quelli scritti dall'agente di coding.
     Ritorna (righe, conteggi, n_template_nuovi)."""
     # IMPORTANTE: ri-seminiamo DOPO l'import (gen imposta seed(42) a import-time).
     # Seed diverso per contributore => valori diversi => no duplicati nel dataset.
     random.seed(seed)
 
-    new_templates = [] if offline else gen_new_templates(per_type, boost)
+    if templates_file:
+        new_templates = load_agent_templates(templates_file)
+    elif offline:
+        new_templates = []
+    else:
+        new_templates = gen_new_templates(per_type, boost)
     # i built-in garantiscono comunque la copertura dei tag rari (CATASTO/DOCID/CONTO...);
     # la NOVITA' del testo viene dai template freschi di Gemini.
     templates = new_templates + gen.TEMPLATES + gen.load_external_templates()
+    origine = f"scritti da {template_author}" if templates_file else "nuovi da Gemini"
     print(f"\nTemplate nel pool: {len(templates)} "
-          f"({len(new_templates)} nuovi da Gemini + {len(gen.TEMPLATES)} built-in + "
+          f"({len(new_templates)} {origine} + {len(gen.TEMPLATES)} built-in + "
           f"{len(templates) - len(new_templates) - len(gen.TEMPLATES)} locali)")
 
     # selezione pesata: i template che coprono i tag potenziati escono piu' spesso
@@ -261,6 +353,8 @@ def generate(n, seed, handle, per_type, offline, boost):
     idx_pool = list(range(len(templates)))
 
     n_new = len(new_templates)
+    # etichetta di provenienza dei template "nuovi" di questo run
+    autore_nuovi = template_author or ("built-in" if offline else "gemini")
     rows, label_counts, bad = [], {}, 0
     for _ in range(n):
         tid = random.choices(idx_pool, weights=weights, k=1)[0]
@@ -276,8 +370,12 @@ def generate(n, seed, handle, per_type, offline, boost):
             # provenienza: sopravvive a merge/split, ignorata dal loader di training
             "meta": {"contributor": handle, "seed": seed,
                      "generator_version": GENERATOR_VERSION, "synthetic": True,
-                     # True se la riga usa un template NUOVO scritto da Gemini in questo run
-                     "new_template": tid < n_new},
+                     # True se la riga usa un template NUOVO (scritto da Gemini in questo
+                     # run, oppure fornito con --templates-file)
+                     "new_template": tid < n_new,
+                     # chi ha scritto la prosa del template USATO DA QUESTA RIGA: le
+                     # righe che pescano dai template built-in restano "built-in"
+                     "template_author": (autore_nuovi if tid < n_new else "built-in")},
         }
         err = _validate_record(rec)
         if err:
@@ -300,8 +398,12 @@ def write_local(rows, out_path):
     return out_path
 
 
-def upload_pr(local_path, path_in_repo, handle, n, seed, repo_id):
-    """Carica il file aprendo una Pull Request sul dataset HF."""
+def upload_pr(local_path, path_in_repo, handle, n, seed, repo_id, descrizione=None):
+    """Carica il file aprendo una Pull Request sul dataset HF.
+
+    'descrizione' e' il corpo della PR: serve a spiegare al maintainer cosa contiene
+    quel lotto (tipi di documento, tag rinforzati, come e' stato verificato). Senza,
+    si usa il testo generico."""
     try:
         from huggingface_hub import HfApi
     except ImportError:
@@ -326,7 +428,7 @@ def upload_pr(local_path, path_in_repo, handle, n, seed, repo_id):
         repo_id=repo_id,
         repo_type="dataset",
         commit_message=commit,
-        commit_description=(
+        commit_description=descrizione or (
             "Dati 100% sintetici generati con src/data_pipeline/contribute_dataset.py "
             "(principio 'LLM autore, codice etichettatore', checksum CF/PIVA/IBAN validi). "
             "Nessuna PII reale."),
@@ -352,12 +454,28 @@ def main():
                     help="rinforza i tag sotto-rappresentati, es. --boost ORG=6 IBAN=4 CF=4")
     ap.add_argument("--offline", action="store_true",
                     help="non usare Gemini: genera dai soli template built-in (dati meno nuovi)")
+    ap.add_argument("--templates-file", metavar="PATH",
+                    help="JSON di template scritti dal tuo agente di coding invece che da "
+                         "Gemini (stesso formato di llm_template_bank.py): nessuna chiave API")
+    ap.add_argument("--template-author", default=None, metavar="NOME",
+                    help="chi ha scritto i template di --templates-file (es. claude, cursor): "
+                         "finisce in meta.template_author per tracciabilita'")
     ap.add_argument("--no-upload", action="store_true",
                     help="genera solo in locale, non apre la PR")
     ap.add_argument("--upload-file", metavar="PATH",
                     help="non rigenerare: carica un .jsonl gia' prodotto (push veloce, niente Gemini)")
     ap.add_argument("--repo", default=REPO_ID, help="dataset di destinazione (override)")
+    ap.add_argument("--pr-description", metavar="PATH",
+                    help="file di testo con il corpo della Pull Request: spiega al "
+                         "maintainer cosa contiene il lotto")
     args = ap.parse_args()
+
+    descrizione = None
+    if args.pr_description:
+        p_desc = Path(args.pr_description)
+        if not p_desc.is_file():
+            sys.exit(f"ERRORE: file di descrizione inesistente: {p_desc}")
+        descrizione = p_desc.read_text(encoding="utf-8")
 
     # scorciatoia: ri-carica un file gia' generato (utile per ritentare il push)
     if args.upload_file:
@@ -366,7 +484,10 @@ def main():
             sys.exit(f"ERRORE: file inesistente: {p}")
         n = sum(1 for _ in open(p, encoding="utf-8"))
         print(f"Carico file esistente ({n} righe): {p}")
-        upload_pr(p, f"contributions/{p.name}", "upload", n, "-", args.repo)
+        # se il contributore passa anche --handle, il commit porta il suo nome invece
+        # del generico "upload" (il file e' gia' stato generato in un run precedente)
+        upload_pr(p, f"contributions/{p.name}", args.handle or "upload", n, "-", args.repo,
+                  descrizione)
         return
 
     if args.n < 1 or args.n > MAX_N:
@@ -384,13 +505,21 @@ def main():
     print("rizzo-pii — contribuzione dati sintetici al dataset community")
     print("⚠️  Solo dati SINTETICI: nessuna PII reale viene prodotta o caricata.")
     print("=" * 70)
-    mode = "built-in (offline)" if args.offline else f"Gemini (--per-type {args.per_type})"
+    if args.templates_file:
+        autore = args.template_author or "agente di coding"
+        mode = f"file ({os.path.basename(args.templates_file)}, autore: {autore})"
+    elif args.offline:
+        mode = "built-in (offline)"
+    else:
+        mode = f"Gemini (--per-type {args.per_type})"
     print(f"handle={handle}  n={args.n}  seed={seed}  template={mode}")
 
-    rows, counts, n_new = generate(args.n, seed, handle, args.per_type, args.offline, boost)
+    rows, counts, n_new = generate(args.n, seed, handle, args.per_type, args.offline, boost,
+                                   args.templates_file, args.template_author)
     if n_new:
         from_new = sum(1 for r in rows if r["meta"]["new_template"])
-        print(f"\n{from_new}/{len(rows)} esempi da template NUOVI di Gemini.")
+        origine = args.template_author or "agente di coding" if args.templates_file else "Gemini"
+        print(f"\n{from_new}/{len(rows)} esempi da template NUOVI di {origine}.")
     print(f"Generati {len(rows)} esempi validi. Entita' per label:")
     for label, c in sorted(counts.items(), key=lambda x: -x[1]):
         print(f"  {label:18s} {c}")
@@ -404,7 +533,8 @@ def main():
         print("\n(--no-upload) Nessun caricamento. Rilancia senza --no-upload per aprire la PR.")
         return
 
-    upload_pr(local_path, f"contributions/{fname}", handle, len(rows), seed, args.repo)
+    upload_pr(local_path, f"contributions/{fname}", handle, len(rows), seed, args.repo,
+              descrizione)
 
 
 if __name__ == "__main__":
