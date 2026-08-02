@@ -783,19 +783,23 @@ regex/checksum safety net.* The two together are stronger than either alone.
 = Dataset contributors
 // =============================================================================
 
-The community dataset
+The data behind rizzo-pii grows with the community. The usual route is the
+contribution script, which generates rows with your own API key and opens a pull
+request on the community dataset
 #link("https://huggingface.co/datasets/rizzoaiacademy/anonimizzazione-testi-italiano")[`rizzoaiacademy/anonimizzazione-testi-italiano`]
-is built by people who ran the generator and opened a pull request on Hugging
-Face. Everyone who has sent data is listed here, in alphabetical order, whether
-their pull request is already merged or still under review:
+— but any dataset pull request counts, including a purpose-built generator
+aimed at a single under-represented tag. Everyone who has sent data is listed
+here, in alphabetical order, whether their pull request is already merged or
+still under review:
 
 #text(size: 9pt)[
   Alessandro Betti (\@bettialessandro), Andrea (\@Renaad), Attilio Pregnolato
   (\@8Attilio1), Carlos H. P. Ross (\@WolCarlos), Craicek (\@Craicekhf), Daniele
   Murabito (\@worksdem), Di Gesto (\@Filippo76), ebbasta (\@esseggi), Emiliano
-  (\@Darkfog81), Fabio Accalai (\@fabos), flyer (\@maxxflyer), Francesco
-  (\@francechian), Francesco Wfm (\@workingfm), Gianluca Vertemati (\@GiaVer), go
-  hatfd (\@blokka11), Igino (\@ijinx), Lino (\@Lino9999), Lorenzo Ferrari
+  (\@Darkfog81), Fabio Accalai (\@fabos), Fabio Scialanga (\@fabioscialanga),
+  flyer (\@maxxflyer), Francesco (\@francechian), Francesco Wfm (\@workingfm),
+  Gianluca Vertemati (\@GiaVer), go hatfd (\@blokka11), Igino (\@ijinx), Lino
+  (\@Lino9999), Lorenzo Ferrari
   (\@Lorenzfer), Luca (\@LucaVes), Luca Mazzola (\@LuCaMazZ), Lucio Palmieri
   (\@plucius), Marco Buzzanca (\@Eagle-lab), Marco Occhialini (\@occhials), Marco
   Sinatra (\@CapitanJackMarcoS), Massimiliano (\@MassiLLM), Matteo Scortegagna
