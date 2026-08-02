@@ -25,6 +25,12 @@ Endpoint HTTP:
                   opzionali "exclude_tags" e "include_mapping" per override per-richiesta
   POST /pdf       stesso input di /analyze -> scarica il PDF ANONIMIZZATO (redazione
                   vera del PDF caricato, oppure PDF ricostruito dal testo)
+  POST /preview   multipart con un .pdf -> lo tiene in memoria per l'ANTEPRIMA a video e
+                  ritorna {doc_id, n_pages, text}
+  POST /pdf/preview  come /pdf, ma invece del binario ritorna {doc_id, n_pages, ...}:
+                  il PDF anonimizzato resta in memoria e si guarda pagina per pagina
+  GET  /doc/<id>/page/<n>.png   pagina renderizzata (anteprima a video)
+  GET  /doc/<id>/file.pdf       download del documento tenuto in memoria
   GET  /settings  legenda dei 23 tag, tag esclusi, stato del dizionario reversibile
   POST /settings  {"excluded_tags": [...], "mapping_enabled": bool} -> salva in prefs.json
                   (/tags e' un alias storico degli stessi due endpoint)
@@ -39,7 +45,10 @@ Preferenze di anonimizzazione (precedenza): campo nella richiesta > CLI --exclud
 
 import os
 import re
+import secrets
 import sys
+import threading
+from collections import OrderedDict
 from pathlib import Path
 
 import fitz  # PyMuPDF
@@ -116,6 +125,64 @@ app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
 
 # Estensioni accettate dall'upload (il PDF passa da PyMuPDF, il resto e' testo puro).
 TEXT_EXTS = {".md", ".markdown", ".txt", ".text"}
+
+# --------------------------------------------------------------------------- #
+# Anteprima a video dei PDF (documento caricato a sinistra, anonimizzato a destra)
+#
+# I PDF vengono renderizzati QUI, con PyMuPDF, e serviti come PNG per pagina: non
+# serve un viewer PDF nel browser (WebView2/WKWebView dentro Tauri non lo hanno in
+# modo affidabile) ne' una libreria JS esterna (l'app e' offline, niente CDN).
+#
+# I documenti restano in memoria (mai su disco: valgono quanto il documento stesso)
+# in una LRU piccola, e muoiono con il processo. Il render di una pagina e' pigro e
+# poi tenuto in cache: aprire un PDF di 200 pagine non costa 200 render.
+# --------------------------------------------------------------------------- #
+PREVIEW_DPI = 110          # ~1150 px di larghezza su un A4: leggibile senza pesare
+MAX_DOCS = 6               # documenti tenuti in memoria (LRU, i piu' vecchi cadono)
+
+_DOCS = OrderedDict()      # doc_id -> {"pdf": bytes, "pages": {n: png}, "n_pages", "name"}
+_DOCS_LOCK = threading.Lock()
+
+
+def _safe_name(name, default="documento.pdf"):
+    """Nome file pulito per Content-Disposition (ASCII, niente separatori)."""
+    base = os.path.basename(name or "").strip()
+    base = re.sub(r"[^A-Za-z0-9._\- ]+", "_", base).strip(" ._")
+    return base or default
+
+
+def _store_doc(data, name="documento.pdf"):
+    """Mette un PDF nello store dell'anteprima. Ritorna (doc_id, n_pages)."""
+    with fitz.open(stream=data, filetype="pdf") as doc:
+        n_pages = doc.page_count
+    doc_id = secrets.token_urlsafe(12)
+    with _DOCS_LOCK:
+        _DOCS[doc_id] = {"pdf": data, "pages": {}, "n_pages": n_pages,
+                         "name": _safe_name(name)}
+        while len(_DOCS) > MAX_DOCS:
+            _DOCS.popitem(last=False)
+    return doc_id, n_pages
+
+
+def _get_doc(doc_id):
+    with _DOCS_LOCK:
+        d = _DOCS.get(doc_id)
+        if d is not None:
+            _DOCS.move_to_end(doc_id)          # LRU: l'uso lo tiene in vita
+    return d
+
+
+def _page_png(d, n, dpi=PREVIEW_DPI):
+    """PNG della pagina n (0-based) del documento, con cache. None se fuori range."""
+    if not (0 <= n < d["n_pages"]):
+        return None
+    key = (n, dpi)
+    png = d["pages"].get(key)
+    if png is None:
+        with fitz.open(stream=d["pdf"], filetype="pdf") as doc:
+            png = doc.load_page(n).get_pixmap(dpi=dpi).tobytes("png")
+        d["pages"][key] = png
+    return png
 
 
 # --------------------------------------------------------------------------- #
@@ -582,13 +649,12 @@ def analyze_route():
 # --------------------------------------------------------------------------- #
 # PDF anonimizzato da scaricare (issue #7, punto 1)
 # --------------------------------------------------------------------------- #
-def _pdf_response(data, report, redactions):
+def _pdf_response(data, report, redactions, filename="documento_anonimizzato.pdf"):
     """Risposta binaria + intestazioni diagnostiche. X-PII-Residual e
     X-PII-Skipped sono le due che l'UI trasforma in AVVISO: valori del documento
     che, per motivi diversi, sono rimasti in chiaro."""
     resp = app.response_class(data, mimetype="application/pdf")
-    resp.headers["Content-Disposition"] = \
-        "attachment; filename=documento_anonimizzato.pdf"
+    resp.headers["Content-Disposition"] = f"attachment; filename={filename}"
     resp.headers["X-PII-Redactions"] = str(redactions)
     resp.headers["X-PII-Residual"] = str(len(report.get("residual", [])))
     resp.headers["X-PII-Skipped"] = str(len(report.get("skipped", [])))
@@ -596,9 +662,17 @@ def _pdf_response(data, report, redactions):
     return resp
 
 
-@app.route("/pdf", methods=["POST"])
-def pdf_route():
-    """Scarica il documento ANONIMIZZATO in PDF. Stesso input di /analyze:
+class _ReqError(Exception):
+    """Errore da rendere al client come {"error": ...} con uno status preciso."""
+
+    def __init__(self, msg, status=400):
+        super().__init__(msg)
+        self.msg, self.status = msg, status
+
+
+def _build_anonymized_pdf():
+    """Costruisce il PDF ANONIMIZZATO dall'input della richiesta. Stesso input di
+    /analyze:
 
     - multipart con un file .pdf  -> REDAZIONE VERA del documento originale: le
       PII sono rimosse dal content stream e sostituite dai placeholder, il layout
@@ -609,9 +683,11 @@ def pdf_route():
 
     Il dizionario placeholder->valore NON viaggia sulla rete in nessuna delle due
     direzioni: viene ricostruito qui, serve solo a localizzare le PII nel PDF e
-    muore con la richiesta. Per questo l'endpoint funziona identico anche con il
-    dizionario reversibile disattivato (MAPPING_ENABLED=False), dove il client
-    non ne ha nessuno.
+    muore con la richiesta. Per questo funziona identico anche con il dizionario
+    reversibile disattivato (MAPPING_ENABLED=False), dove il client non ne ha
+    nessuno.
+
+    Ritorna (bytes, report, n_redazioni, nome_file). Solleva _ReqError sugli errori.
     """
     up = _uploaded_file()
     if up is not None:
@@ -619,9 +695,9 @@ def pdf_route():
         try:
             text = _text_from_bytes(name, data)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            raise _ReqError(str(e))
         except Exception as e:                       # PDF corrotto / protetto
-            return jsonify({"error": f"Impossibile leggere il file: {e}"}), 400
+            raise _ReqError(f"Impossibile leggere il file: {e}")
         raw_excl = request.form.get("exclude_tags")
     else:
         payload = request.get_json(silent=True) or {}
@@ -630,34 +706,120 @@ def pdf_route():
 
     text = (text or "").strip()
     if not text:
-        return jsonify({"error": "Nessun testo da anonimizzare."}), 400
+        raise _ReqError("Nessun testo da anonimizzare.")
+
+    stem = os.path.splitext(_safe_name(name, "documento.pdf"))[0] or "documento"
+    out_name = f"{stem}_anonimizzato.pdf"
 
     excl = server_config.parse_tag_list(raw_excl) if raw_excl is not None else EXCLUDED_TAGS
     # mapping_enabled=True e' interno: il risultato non esce da questa funzione.
     res = analyze(text, excl, mapping_enabled=True)
     if not res["mapping"]:
-        return jsonify({"error": "Nessuna PII trovata: non c'e' niente da "
-                                 "anonimizzare in questo documento."}), 422
+        raise _ReqError("Nessuna PII trovata: non c'e' niente da "
+                        "anonimizzare in questo documento.", 422)
 
     if data and _is_pdf(name, data):
         try:
             out, report = pdf_export.redact_pdf(data, res["mapping"])
         except pdf_export.PdfError as e:
-            return jsonify({"error": str(e)}), 400
+            raise _ReqError(str(e))
         if report["occurrences"] == 0:
-            return jsonify({"error": "Nessuna occorrenza trovata nel PDF: se il "
-                                     "documento e' una scansione (testo dentro "
-                                     "un'immagine) la redazione del layer "
-                                     "testuale non puo' agire."}), 422
-        return _pdf_response(out, report, report["occurrences"])
+            raise _ReqError("Nessuna occorrenza trovata nel PDF: se il documento "
+                            "e' una scansione (testo dentro un'immagine) la "
+                            "redazione del layer testuale non puo' agire.", 422)
+        return out, report, report["occurrences"], out_name
 
     try:
         out = pdf_export.text_to_pdf(res["anonymized_text"])
     except pdf_export.PdfError as e:
-        return jsonify({"error": str(e)}), 400
+        raise _ReqError(str(e))
     # testo reimpaginato da zero: nell'output c'e' solo il testo anonimizzato,
     # quindi niente residui e niente valori saltati da segnalare.
-    return _pdf_response(out, {}, res["n_entities"])
+    return out, {}, res["n_entities"], out_name
+
+
+@app.route("/pdf", methods=["POST"])
+def pdf_route():
+    """Scarica il documento ANONIMIZZATO in PDF (vedi _build_anonymized_pdf)."""
+    try:
+        out, report, redactions, name = _build_anonymized_pdf()
+    except _ReqError as e:
+        return jsonify({"error": e.msg}), e.status
+    return _pdf_response(out, report, redactions, name)
+
+
+@app.route("/pdf/preview", methods=["POST"])
+def pdf_preview_route():
+    """Come /pdf, ma il binario resta in memoria e si guarda a video: la risposta
+    e' il descrittore del documento ({doc_id, n_pages, ...}), le pagine si prendono
+    poi da /doc/<id>/page/<n>.png e il file da /doc/<id>/file.pdf.
+
+    Serve a non anonimizzare due volte: l'anteprima a destra e il download del PDF
+    usano lo STESSO documento, generato una volta sola."""
+    try:
+        out, report, redactions, name = _build_anonymized_pdf()
+    except _ReqError as e:
+        return jsonify({"error": e.msg}), e.status
+    doc_id, n_pages = _store_doc(out, name)
+    return jsonify({
+        "doc_id": doc_id,
+        "n_pages": n_pages,
+        "filename": name,
+        "redactions": redactions,
+        "residual": len(report.get("residual", [])),
+        "skipped": len(report.get("skipped", [])),
+        "not_found": len(report.get("not_found", [])),
+    })
+
+
+# --------------------------------------------------------------------------- #
+# Anteprima a video del documento CARICATO + pagine renderizzate
+# --------------------------------------------------------------------------- #
+@app.route("/preview", methods=["POST"])
+def preview_route():
+    """Tiene in memoria il PDF appena caricato per mostrarlo a sinistra e ne
+    ritorna anche il testo estratto (cosi' l'UI puo' offrire "PDF" o "Testo"
+    senza una seconda estrazione)."""
+    up = _uploaded_file()
+    if up is None:
+        return jsonify({"error": "Nessun file caricato."}), 400
+    name, data = up.filename, up.read()
+    if not _is_pdf(name, data):
+        return jsonify({"error": "L'anteprima renderizzata vale solo per i PDF."}), 400
+    try:
+        text = _text_from_bytes(name, data)
+        doc_id, n_pages = _store_doc(data, name)
+    except Exception as e:                           # PDF corrotto / protetto
+        return jsonify({"error": f"Impossibile leggere il file: {e}"}), 400
+    return jsonify({"doc_id": doc_id, "n_pages": n_pages,
+                    "filename": _safe_name(name), "text": text})
+
+
+@app.route("/doc/<doc_id>/page/<int:n>.png")
+def doc_page(doc_id, n):
+    """Pagina n (0-based) renderizzata in PNG. 404 se il documento e' scaduto
+    dalla LRU: l'UI in quel caso rifa' l'upload."""
+    d = _get_doc(doc_id)
+    if d is None:
+        return ("", 404)
+    png = _page_png(d, n)
+    if png is None:
+        return ("", 404)
+    resp = app.response_class(png, mimetype="image/png")
+    resp.headers["Cache-Control"] = "private, max-age=600"
+    return resp
+
+
+@app.route("/doc/<doc_id>/file.pdf")
+def doc_file(doc_id):
+    """Download del PDF tenuto in memoria (quello gia' anonimizzato da
+    /pdf/preview): non ricalcola niente."""
+    d = _get_doc(doc_id)
+    if d is None:
+        return jsonify({"error": "Documento non piu' disponibile."}), 404
+    resp = app.response_class(d["pdf"], mimetype="application/pdf")
+    resp.headers["Content-Disposition"] = f"attachment; filename={d['name']}"
+    return resp
 
 
 # --------------------------------------------------------------------------- #
@@ -861,6 +1023,19 @@ PAGE = r"""
     .workspace{grid-template-columns:1fr;grid-template-rows:none;flex:none;min-height:auto}
     #src,#anon,.view,#pane2 textarea{flex:none;height:60vh}
   }
+  /* render del PDF (pagine PNG servite da /doc/<id>/page/<n>.png).
+     Sfondo scuro come un lettore PDF: le pagine bianche si staccano. */
+  .pdfview{padding:12px;background:#e8e6ef}
+  .pdfview .pg{position:relative;width:100%;margin:0 0 12px;background:#fff;border-radius:4px;
+               overflow:hidden;box-shadow:0 1px 3px rgba(33,26,48,.18),0 6px 18px rgba(33,26,48,.10)}
+  .pdfview .pg:last-child{margin-bottom:0}
+  .pdfview .pg img{display:block;width:100%;height:auto;min-height:24px}
+  .pdfview .pgn{position:absolute;right:7px;bottom:7px;background:rgba(28,35,48,.6);color:#fff;
+                font-size:11px;font-weight:700;border-radius:6px;padding:2px 7px;letter-spacing:.02em}
+  .pdfbusy{display:flex;align-items:center;justify-content:center;gap:10px;height:100%;
+           color:var(--muted);font-size:13.5px;font-weight:600}
+  .pdfbusy .spin{border-color:rgba(124,58,158,.25);border-top-color:var(--brand)}
+
   .preview{white-space:pre-wrap;word-wrap:break-word;font-size:14.5px;line-height:1.7}
   .ph{border-radius:6px;padding:1px 7px 2px;font-weight:600;font-size:12.5px;cursor:help;
       border:1px solid;white-space:nowrap;display:inline-block;line-height:1.4;
@@ -1048,8 +1223,15 @@ PAGE = r"""
       <!-- input -->
       <div class="card">
         <div class="hd"><h2 data-i18n="in_title">① Il tuo documento</h2>
-          <div class="right hint" data-i18n="in_hint">incolla testo o trascina un PDF / .md</div></div>
+          <div class="right">
+            <span class="hint" id="inHint" data-i18n="in_hint">incolla testo o trascina un PDF / .md</span>
+            <div class="seg-tabs" id="srcTabs" style="display:none">
+              <button class="on" id="sPdf" onclick="setSrcView('pdf')" data-i18n="v_pdf">Anteprima PDF</button>
+              <button id="sText" onclick="setSrcView('text')" data-i18n="v_raw">Testo</button>
+            </div>
+          </div></div>
         <div class="bd">
+          <div class="view pdfview" id="pdfSrcView" style="display:none"></div>
           <textarea id="src" data-i18n-ph="src_ph" placeholder="Incolla qui il testo dell'atto, del contratto o della sentenza…&#10;&#10;Oppure trascina un PDF nell'area qui sotto."></textarea>
           <label class="drop" id="drop">
             <span class="ic">📄</span>
@@ -1081,6 +1263,7 @@ PAGE = r"""
             <div class="seg-tabs">
               <button class="on" id="vPrev" onclick="setView('prev')" data-i18n="v_prev">Anteprima</button>
               <button id="vText" onclick="setView('text')" data-i18n="v_text">Testo da copiare</button>
+              <button id="vPdf" onclick="setView('pdf')" data-i18n="v_opdf">PDF censurato</button>
             </div>
           </div>
         </div>
@@ -1092,6 +1275,7 @@ PAGE = r"""
             </div>
             <div class="preview" id="prev" style="display:none"></div>
           </div>
+          <div class="view pdfview" id="pdfOutView" style="display:none"></div>
           <textarea class="mono" id="anon" style="display:none" readonly
                     data-i18n-ph="anon_ph" placeholder="Il testo anonimizzato apparirà qui."></textarea>
           <div class="row">
@@ -1225,6 +1409,9 @@ let TAGS = [];             // legenda dei tag servita da /settings
 let EXCL = new Set();      // tag da NON anonimizzare (scelta corrente)
 let TAGS_LOADED = false;   // /settings ha risposto -> possiamo mandare gli override
 let MAPPING = true;        // dizionario reversibile on/off (switch nella card di input)
+let SRC_DOC = null;        // PDF caricato, renderizzato dal server (colonna sinistra)
+let OUT_DOC = null;        // PDF anonimizzato (colonna destra), generato pigramente
+let VIEW = 'prev';         // vista attiva a destra: prev | text | pdf
 
 /* ---- i18n (IT default, EN opzionale) ---- */
 const T = {
@@ -1237,6 +1424,9 @@ const T = {
   drop:"Trascina un <b>PDF</b> o un <b>.md</b> qui, oppure <b>scegli un file</b>",
   go:"Anonimizza", clear:"Pulisci",
   out_title:"② Risultato", v_prev:"Anteprima", v_text:"Testo da copiare",
+  v_pdf:"Anteprima PDF", v_raw:"Testo", v_opdf:"PDF censurato",
+  t_prev_loading:"Renderizzo il PDF…", t_prev_err:"Anteprima del PDF non disponibile",
+  t_pdf_render:"Genero il PDF anonimizzato…",
   empty_prev:"L'anteprima con le PII evidenziate apparirà qui.",
   anon_ph:"Il testo anonimizzato apparirà qui.",
   copy:"Copia per ChatGPT", dl:"Scarica dizionario", dlpdf:"Scarica PDF anonimizzato",
@@ -1297,6 +1487,9 @@ const T = {
   drop:"Drop a <b>PDF</b> or a <b>.md</b> here, or <b>choose a file</b>",
   go:"Anonymize", clear:"Clear",
   out_title:"② Result", v_prev:"Preview", v_text:"Text to copy",
+  v_pdf:"PDF preview", v_raw:"Text", v_opdf:"Redacted PDF",
+  t_prev_loading:"Rendering the PDF…", t_prev_err:"PDF preview not available",
+  t_pdf_render:"Building the anonymized PDF…",
   empty_prev:"The preview with highlighted PII will appear here.",
   anon_ph:"The anonymized text will appear here.",
   copy:"Copy for ChatGPT", dl:"Download dictionary", dlpdf:"Download anonymized PDF",
@@ -1390,10 +1583,68 @@ function colors(label){const h=hue(label);
 function toast(msg,ok=true,ms=1800){const t=$('toast');t.textContent=msg;t.className='show'+(ok?' ok':'');
   clearTimeout(t._t);t._t=setTimeout(()=>t.className='',ms);}
 
+/* ---- render di un PDF a video ----------------------------------------------
+   Le pagine arrivano gia' renderizzate dal server (/doc/<id>/page/<n>.png):
+   niente viewer PDF del browser (dentro Tauri non c'e' garanzia che ci sia) e
+   niente libreria JS esterna (l'app e' offline, nessuna CDN raggiungibile).
+   `loading=lazy` -> un PDF di 200 pagine non scarica 200 immagini all'apertura. */
+function renderPages(el,doc){
+  el.innerHTML='';
+  for(let i=0;i<doc.n_pages;i++){
+    const pg=document.createElement('div');pg.className='pg';
+    const im=document.createElement('img');
+    im.loading='lazy';im.alt=(i+1)+' / '+doc.n_pages;   // alt = pagina: se il render manca si vede quale
+    im.src=`/doc/${doc.doc_id}/page/${i}.png`;
+    pg.appendChild(im);
+    const n=document.createElement('span');n.className='pgn';
+    n.textContent=(i+1)+' / '+doc.n_pages;pg.appendChild(n);
+    el.appendChild(pg);
+  }
+  el.scrollTop=0;
+}
+function busy(el,msg){
+  el.innerHTML='<div class="pdfbusy"><span class="spin"></span>'+msg+'</div>';}
+
 /* ---- tabs ---- */
 function showTab(n){
   $('tab1').classList.toggle('on',n===1);$('tab2').classList.toggle('on',n===2);
   $('pane1').classList.toggle('on',n===1);$('pane2').classList.toggle('on',n===2);
+}
+
+/* ---- documento caricato: anteprima renderizzata (sx) ----------------------
+   Appena si sceglie un PDF lo si manda a /preview: il server lo tiene in memoria,
+   ne ritorna il testo estratto e le pagine da renderizzare. Da li' in poi la
+   colonna sinistra ha due viste, "Anteprima PDF" (default) e "Testo".
+   Per .md/.txt non c'e' niente da renderizzare: resta la sola textarea. */
+function setSrcView(v){
+  const p=(v==='pdf'&&SRC_DOC);
+  $('sPdf').classList.toggle('on',!!p);$('sText').classList.toggle('on',!p);
+  $('pdfSrcView').style.display=p?'':'none';
+  $('src').style.display=p?'none':'';
+}
+
+async function onFile(f){
+  $('dropTxt').innerHTML='📎 <b>'+escapeHtml(f.name)+'</b>';
+  SRC_DOC=null;$('srcTabs').style.display='none';$('inHint').style.display='';
+  setSrcView('text');
+  if(!(f.type==='application/pdf'||/\.pdf$/i.test(f.name)))return;
+  $('inHint').textContent=tt('t_prev_loading');
+  busy($('pdfSrcView'),tt('t_prev_loading'));
+  $('srcTabs').style.display='';$('pdfSrcView').style.display='';$('src').style.display='none';
+  $('sPdf').classList.add('on');$('sText').classList.remove('on');
+  try{
+    const fd=new FormData();fd.append('pdf',f);
+    const r=await fetch('/preview',{method:'POST',body:fd});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||'');
+    SRC_DOC=d;$('src').value=d.text||'';
+    renderPages($('pdfSrcView'),d);
+    $('inHint').style.display='none';
+  }catch(e){
+    SRC_DOC=null;$('srcTabs').style.display='none';setSrcView('text');
+    $('inHint').innerHTML=tt('in_hint');$('inHint').style.display='';
+    toast(tt('t_prev_err'),false);          // il file resta valido: l'analisi funziona lo stesso
+  }
 }
 
 /* ---- analyze ---- */
@@ -1426,6 +1677,7 @@ async function run(){
 
 function render(){
   const d=DATA;
+  OUT_DOC=null;$('pdfOutView').innerHTML='';  // risultato nuovo -> il PDF censurato va rifatto
   $('dictCard').style.display='';            // mostra la card dizionario (sotto le due colonne)
   document.querySelector('.app').classList.add('has-result');  // -> scroll pagina, niente schiacciamento
   // preview evidenziata
@@ -1476,16 +1728,62 @@ function render(){
       `<td><span class="chip" style="cursor:default"><span class="sw" style="background:${c.bd}"></span>${lab}</span></td>`;
     rows.appendChild(tr);}
   $('ulock').textContent=keys.length?T[L].dict_n(keys.length):'';
+  if(VIEW==='pdf')setView('pdf');            // stavo guardando il PDF: lo rigenero
 }
 
 function escapeHtml(s){return s.replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
 
-/* ---- view toggle ---- */
-function setView(v){
-  const p=v==='prev';
-  $('vPrev').classList.toggle('on',p);$('vText').classList.toggle('on',!p);
-  $('viewPrev').style.display=p?'':'none';$('anon').style.display=p?'none':'';
-  matchScroll(p?$('viewPrev'):$('anon'),$('src'));   // allinea la vista appena mostrata
+/* ---- view toggle (dx): anteprima con i tag | testo da copiare | PDF censurato ---- */
+async function setView(v){
+  if(v==='pdf'&&!DATA&&!$('pdf').files.length&&!$('src').value.trim()){
+    toast(tt('t_need_anon'),false);return;}
+  VIEW=v;
+  $('vPrev').classList.toggle('on',v==='prev');
+  $('vText').classList.toggle('on',v==='text');
+  $('vPdf').classList.toggle('on',v==='pdf');
+  $('viewPrev').style.display=v==='prev'?'':'none';
+  $('anon').style.display=v==='text'?'':'none';
+  $('pdfOutView').style.display=v==='pdf'?'':'none';
+  if(v!=='pdf'){
+    matchScroll(v==='prev'?$('viewPrev'):$('anon'),$('src'));  // allinea la vista appena mostrata
+    return;
+  }
+  if(OUT_DOC){renderPages($('pdfOutView'),OUT_DOC);return;}
+  busy($('pdfOutView'),tt('t_pdf_render'));
+  const d=await buildOutPdf();
+  if(VIEW!=='pdf')return;                    // l'utente ha cambiato vista nel frattempo
+  if(!d){setView('prev');return;}
+  renderPages($('pdfOutView'),d);
+  if(d.residual+d.skipped>0)toast(T[L].t_pdf_warn(d.residual,d.skipped),false,9000);
+}
+
+/* Genera UNA volta il PDF anonimizzato e lo lascia sul server: la stessa copia
+   serve sia l'anteprima a destra sia il download (una sola inferenza).
+   Come /pdf, il dizionario non viene inviato: il server lo ricostruisce e lo
+   butta, quindi funziona anche con lo switch "dizionario" su DISATTIVO. */
+let PDF_JOB=null;
+function buildOutPdf(){
+  if(OUT_DOC)return Promise.resolve(OUT_DOC);
+  if(PDF_JOB)return PDF_JOB;                 // click su tab + download insieme -> una richiesta sola
+  const file=$('pdf').files[0];const text=$('src').value.trim();
+  if(!DATA&&!file&&!text){toast(tt('t_need_anon'),false);return Promise.resolve(null);}
+  const excl=TAGS_LOADED?[...EXCL]:null;
+  PDF_JOB=(async()=>{
+    try{
+      let resp;
+      if(file){const fd=new FormData();fd.append('pdf',file);
+        if(excl)fd.append('exclude_tags',excl.join(','));
+        resp=await fetch('/pdf/preview',{method:'POST',body:fd});}
+      else{const body={text};if(excl)body.exclude_tags=excl;
+        resp=await fetch('/pdf/preview',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(body)});}
+      const d=await resp.json();
+      if(!resp.ok){toast(d.error||tt('t_pdf_err'),false);return null;}
+      OUT_DOC=d;return d;
+    }catch(e){toast(tt('t_pdf_err')+': '+e.message,false);return null;}
+    finally{PDF_JOB=null;}
+  })();
+  return PDF_JOB;
 }
 
 /* ---- copy / download ---- */
@@ -1499,35 +1797,22 @@ $('dl').onclick=()=>{if(!DATA||!Object.keys(MAP).length){toast(tt('t_nothing_dl'
 
 /* ---- PDF anonimizzato (issue #7): redazione vera del PDF caricato, oppure PDF
        ricostruito dal testo anonimizzato quando l'input non era un PDF.
-       Il dizionario NON viene inviato: il server lo ricostruisce internamente,
-       cosi' il bottone funziona anche con lo switch "dizionario" su DISATTIVO. ---- */
+       Se lo si e' gia' guardato nella vista "PDF censurato" il file esiste gia'
+       sul server: si scarica quello, senza una seconda anonimizzazione. ---- */
 $('dlpdf').onclick=async()=>{
-  const file=$('pdf').files[0];const text=$('src').value.trim();
-  if(!DATA&&!file&&!text){toast(tt('t_need_anon'),false);return;}
   const btn=$('dlpdf');btn.disabled=true;const old=btn.innerHTML;
   btn.innerHTML='<span class="spin"></span> '+tt('t_pdf_making');
   try{
-    const excl=TAGS_LOADED?[...EXCL]:null;
-    let resp;
-    if(file){const fd=new FormData();fd.append('pdf',file);
-      if(excl)fd.append('exclude_tags',excl.join(','));
-      resp=await fetch('/pdf',{method:'POST',body:fd});}
-    else{const body={text};if(excl)body.exclude_tags=excl;
-      resp=await fetch('/pdf',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(body)});}
-    if(!resp.ok){const d=await resp.json().catch(()=>({}));
-      toast(d.error||tt('t_pdf_err'),false);return;}
-    const blob=await resp.blob();
-    const name=(file?file.name.replace(/\.[^.]+$/,''):'documento')+'_anonimizzato.pdf';
-    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
-    a.download=name;a.click();URL.revokeObjectURL(a.href);
+    const d=await buildOutPdf();
+    if(!d)return;
+    const a=document.createElement('a');
+    a.href='/doc/'+d.doc_id+'/file.pdf';
+    a.download=d.filename||'documento_anonimizzato.pdf';a.click();
     // residui = valori ancora leggibili nell'output; saltati = valori troppo corti
     // per essere cercati senza devastare il documento. Entrambi restano IN CHIARO.
-    const res=parseInt(resp.headers.get('X-PII-Residual')||'0',10);
-    const skp=parseInt(resp.headers.get('X-PII-Skipped')||'0',10);
-    if(res+skp>0)toast(T[L].t_pdf_warn(res,skp),false,9000);else toast(tt('t_pdf_ok'));
-  }catch(e){toast(tt('t_pdf_err')+': '+e.message,false);}
-  finally{btn.disabled=false;btn.innerHTML=old;}
+    if(d.residual+d.skipped>0)toast(T[L].t_pdf_warn(d.residual,d.skipped),false,9000);
+    else toast(tt('t_pdf_ok'));
+  }finally{btn.disabled=false;btn.innerHTML=old;}
 };
 
 /* ---- reverse ---- */
@@ -1565,23 +1850,28 @@ $('clear').onclick=()=>{$('src').value='';$('pdf').value='';$('dropTxt').innerHT
   DATA=null;$('prev').style.display='none';$('emptyPrev').style.display='';
   $('anon').value='';$('meta').innerHTML='';$('legend').innerHTML='';
   $('dictCard').style.display='none';$('ulock').textContent='';
+  SRC_DOC=null;OUT_DOC=null;$('pdfSrcView').innerHTML='';$('pdfOutView').innerHTML='';
+  $('srcTabs').style.display='none';$('inHint').innerHTML=tt('in_hint');
+  $('inHint').style.display='';setSrcView('text');setView('prev');
   document.querySelector('.app').classList.remove('has-result');};
 $('src').addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter')run();});
 
 /* pdf picker + dropzone */
 const drop=$('drop');
-$('pdf').onchange=e=>{const f=e.target.files[0];if(f)$('dropTxt').innerHTML=`📎 <b>${f.name}</b>`;};
+$('pdf').onchange=e=>{const f=e.target.files[0];if(f)onFile(f);};
 ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hot');}));
 ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hot');}));
 const OK_EXT=/\.(pdf|md|markdown|txt|text)$/i;
 drop.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];
   if(f&&(f.type==='application/pdf'||OK_EXT.test(f.name))){
     const dt=new DataTransfer();dt.items.add(f);$('pdf').files=dt.files;
-    $('dropTxt').innerHTML=`📎 <b>${f.name}</b>`;}else toast(tt('t_drag_pdf'),false);});
+    onFile(f);}else toast(tt('t_drag_pdf'),false);});
 
 /* scroll sincronizzato: editor (sx) <-> anteprima e testo (dx) */
 linkScroll($('src'),$('viewPrev'));linkScroll($('viewPrev'),$('src'));
 linkScroll($('src'),$('anon'));linkScroll($('anon'),$('src'));
+/* e le due viste PDF fra loro: stesso documento, prima e dopo la censura */
+linkScroll($('pdfSrcView'),$('pdfOutView'));linkScroll($('pdfOutView'),$('pdfSrcView'));
 
 /* lingua: selettore + applicazione iniziale (default IT, preferenza salvata) */
 $('lang').onchange=e=>applyLang(e.target.value);

@@ -82,8 +82,23 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   priorità sul modello). `URL` è un **23° tag solo-regex**: il modello non lo conosce; matcha schema,
   `www.` e domini nudi solo su una **lista chiusa di TLD** (senza, `p.iva`/`S.r.l.` diventerebbero
   domini). `APP_VERSION`. Endpoint: `GET /health` (readiness senza inference, 200/503),
-  `POST /analyze`, `POST /pdf`, `GET/POST /settings` (alias storico `/tags`), `GET/POST /config`,
+  `POST /analyze`, `POST /pdf`, `POST /preview`, `POST /pdf/preview`, `GET /doc/<id>/page/<n>.png`,
+  `GET /doc/<id>/file.pdf`, `GET/POST /settings` (alias storico `/tags`), `GET/POST /config`,
   `GET /port-check`; CLI `--host`/`--port`/`--exclude-tags`/`--no-mapping`.
+- **Anteprima del PDF a video, prima e dopo** — le due colonne mostrano il documento *renderizzato*,
+  non solo il testo. A sinistra, appena si carica un PDF: `POST /preview` lo tiene in memoria e
+  ritorna testo + numero di pagine, e la card offre due viste (**Anteprima PDF** default, **Testo**).
+  A destra, dopo l'anonimizzazione, una **terza vista** accanto ad Anteprima/Testo: **PDF censurato**,
+  cioè lo stesso documento redatto con i placeholder al posto delle PII.
+  Il render è **server-side con PyMuPDF** (`page.get_pixmap` → PNG per pagina): dentro Tauri non c'è
+  un viewer PDF affidabile (WebView2/WKWebView) e l'app è offline, quindi niente pdf.js da CDN.
+  Le pagine sono **pigre** (`loading=lazy`) e messe in cache: un PDF di 200 pagine non costa 200 render.
+  I documenti stanno in una **LRU in memoria** (`_DOCS`, `MAX_DOCS=6`) e **mai su disco**: valgono
+  quanto il documento stesso e muoiono col processo.
+  `POST /pdf/preview` fa lo stesso lavoro di `/pdf` ma lascia il binario nello store e ritorna
+  `{doc_id, n_pages, residual, skipped}`: l'anteprima a destra e il bottone "Scarica PDF" usano
+  **la stessa copia**, quindi guardare il PDF e poi scaricarlo costa **una sola** anonimizzazione
+  (il download passa da `/doc/<id>/file.pdf`). `/pdf` resta invariato per chi usa l'API.
 - **Preferenze di anonimizzazione** → `prefs.json` nella config dir (`EXCLUDED_TAGS`,
   `MAPPING_ENABLED`). File **separato da `config.json`** perché Tauri riscrive quest'ultimo per
   intero quando si cambia porta dallo splash. Precedenza: campo nella richiesta > CLI > env > file.

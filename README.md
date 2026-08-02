@@ -393,6 +393,19 @@ attachments are dropped. Text baked into a raster image cannot be redacted at al
 occurrence is found anywhere in the PDF the endpoint fails with `422` rather than handing you a file
 that only looks anonymized.
 
+### See the document, not just its text
+
+Drop a PDF and the left column **renders it**, page by page, right there: two views, `Anteprima PDF`
+and `Testo`. Anonymize and the right column gains a third view next to the highlighted preview and
+the raw text — **`PDF censurato`**, the same document redacted, so you can compare the two side by
+side before downloading anything.
+
+Pages are rendered **server-side by PyMuPDF** and served as PNGs (`GET /doc/<id>/page/<n>.png`):
+no PDF viewer is assumed in the webview and no pdf.js is fetched from a CDN — the app stays offline.
+Documents live in a small in-memory LRU and **never touch disk**. `POST /pdf/preview` does the same
+work as `POST /pdf` but keeps the binary server-side and answers with `{doc_id, n_pages, residual,
+skipped}`, so previewing then downloading costs **one** anonymization, not two.
+
 ### Reversible or irreversible: your call
 
 By default every PII gets a reversible ID and a **local dictionary**, so you can restore the real

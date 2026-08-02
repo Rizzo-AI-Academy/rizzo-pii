@@ -361,8 +361,15 @@ def _verify_residuals(pdf_bytes, items):
 # --------------------------------------------------------------------------- #
 # API pubblica
 # --------------------------------------------------------------------------- #
-def redact_pdf(pdf_bytes, mapping,
-               fill=(0.93, 0.92, 0.97), text_color=(0.39, 0.18, 0.50)):
+# Colore della casella di redazione: il viola del brand (#7c3a9e) pieno, con il
+# placeholder in bianco sopra. Deve SALTARE ALL'OCCHIO scorrendo il documento —
+# una casella tenue si confonde con un'evidenziazione qualsiasi, e chi rilegge il
+# PDF prima di mandarlo fuori deve vedere subito cosa e' stato coperto.
+REDACT_FILL = (0.486, 0.227, 0.620)
+REDACT_TEXT = (1.0, 1.0, 1.0)
+
+
+def redact_pdf(pdf_bytes, mapping, fill=REDACT_FILL, text_color=REDACT_TEXT):
     """PDF originale -> PDF con redazione vera + placeholder al posto delle PII.
 
     mapping: {"[FULLNAME_1]": "Mario Rossi", ...} (il dizionario di analyze()).
