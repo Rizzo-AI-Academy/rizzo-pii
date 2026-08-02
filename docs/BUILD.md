@@ -1,8 +1,9 @@
-# Build dell'app desktop (CPU — Windows e Linux)
+# Build dell'app desktop (CPU — Windows, Linux e macOS)
 
 Crea un eseguibile/installer **standalone e offline** dell'anonimizzatore PII.
 Usa una build **CPU di PyTorch** (gira su qualsiasi PC, niente CUDA richiesta).
 Windows: vedi sotto. **Linux** (.deb/.AppImage): vedi **[§ Build Linux](#build-linux-debappimage)**.
+**macOS** (.app/.dmg): vedi **[§ Build macOS](#build-macos-appdmg)**.
 
 Esistono due modi di impacchettare, entrambi CPU/offline:
 
@@ -42,7 +43,7 @@ npm install                  # prima volta: scarica la CLI di Tauri
 npx tauri icon ..\src\app\assets\mascot_shield.png   # (ri)genera le icone (già fatto)
 npx tauri build              # compila Rust + bundle + installer NSIS
 ```
-Output installer: `tauri\src-tauri\target\release\bundle\nsis\Anonimizzatore PII_1.0.0_x64-setup.exe`.
+Output installer: `tauri\src-tauri\target\release\bundle\nsis\Anonimizzatore PII_1.2.0_x64-setup.exe`.
 Installer **per-utente** (niente admin), in italiano, con shortcut e disinstallazione.
 
 ### Sviluppo / debug
@@ -94,6 +95,40 @@ docker run --rm -e VENV=/opt/venv -e APPIMAGE_EXTRACT_AND_RUN=1 \
   produce solo il `.deb`.
 - **Velocità**: buildare sul mount `/mnt/d` (filesystem Windows) è lento. Per build ripetute,
   `rsync` i sorgenti + il modello in `~/` dentro WSL e monta quella copia.
+
+---
+
+## Build macOS (.app/.dmg)
+
+Come per Linux, **non si compila da un altro SO**: PyInstaller e il bundle Tauri macOS vanno
+fatti su un Mac. Tutto automatizzato in **`build_macos.sh`** (root), speculare a `build_linux.sh`:
+stesso `build_sidecar.spec`, sidecar `pii-backend` senza estensione (il Rust in
+[`lib.rs`](../tauri/src-tauri/src/lib.rs) sceglie il nome col `cfg!(windows)`), bundle `app`/`dmg`
+al posto di `nsis` — la conf Tauri resta su NSIS per Windows e qui si sovrascrive da CLI con
+`--bundles`.
+
+```bash
+# prerequisiti (una volta)
+xcode-select --install                 # Command Line Tools
+# + Rust (https://rustup.rs) e Node.js 18+
+
+bash build_macos.sh                    # .app + .dmg
+bash build_macos.sh app                # solo il .app (piu' veloce, per provare)
+VENV=build_env_macos bash build_macos.sh   # venv dedicato invece di .venv
+```
+Output: `tauri/src-tauri/target/release/bundle/macos/Rizzo PII.app` e `.../dmg/*.dmg`.
+
+Note specifiche di macOS:
+- **Niente indice PyTorch CPU**: su macOS la ruota di default è già CPU/MPS, quindi lo script
+  installa `torch` senza `--index-url` (a differenza di Windows/Linux).
+- **Firma**: il bundle **non è firmato né notarizzato**. In locale si apre senza problemi (un file
+  che non arriva da internet non ha l'attributo di quarantena). Copiandolo su un altro Mac serve
+  "tasto destro → Apri", oppure `xattr -dr com.apple.quarantine "Rizzo PII.app"`. Per distribuirlo
+  davvero servono un Developer ID e la notarizzazione Apple.
+- **Architettura**: il `.app` esce per l'arch della macchina che compila (arm64 su Apple Silicon).
+  Per un binario universale servirebbero due build di PyInstaller + `lipo`.
+- **Porta 5005**: se stai già facendo girare `python src/app/app.py` in sviluppo, fermalo prima di
+  lanciare il `.app`, altrimenti il sidecar esce con codice 76 e lo splash chiede una porta nuova.
 
 ---
 

@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Rizzo PII",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "identifier": "com.rizzoai.pii-anonymizer",
   "build": {
     "frontendDist": "../ui"
@@ -43,6 +43,11 @@
         "installMode": "currentUser",
         "languages": ["Italian"]
       }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "hardenedRuntime": true,
+      "entitlements": "entitlements.plist"
     }
   }
 }

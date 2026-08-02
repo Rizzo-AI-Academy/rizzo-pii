@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements per la firma Developer ID + hardened runtime (macOS).
+
+  Il backend e' un bundle PyInstaller: Python carica estensioni .so/.dylib a
+  runtime e PyTorch genera codice eseguibile in memoria. Con l'hardened runtime
+  attivo (obbligatorio per notarizzare) senza queste eccezioni l'app viene
+  firmata e notarizzata ma CRASHA all'avvio del sidecar.
+
+  - allow-unsigned-executable-memory / allow-jit: PyTorch e i kernel compilati
+  - disable-library-validation: carica le .dylib di PyInstaller/torch, firmate
+    con la stessa identita' ma non parte del bundle principale
+  - allow-dyld-environment-variables: PyInstaller imposta DYLD_* per il loader
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+</dict>
+</plist>
