@@ -1,0 +1,17 @@
+# rizzo-pii — dipendenze dell'APP desktop quando gira su ONNX Runtime (Fase 4).
+#
+# Con un bundle ONNX esportato da src/export/export_onnx.py, l'app NON usa piu'
+# PyTorch/Transformers: l'inferenza gira su onnxruntime + tokenizers (vedi
+# src/app/onnx_infer.py), molto piu' leggeri del framework di training. Questo separa
+# l'applicazione dal training. Senza bundle, l'app fa fallback su requirements.txt (torch).
+#
+#   pip install -r requirements-app.txt
+
+# inferenza ONNX (niente torch/transformers)
+onnxruntime
+tokenizers
+numpy
+
+# UI Flask + parsing PDF
+flask
+pymupdf
