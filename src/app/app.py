@@ -1850,6 +1850,9 @@ $('clear').onclick=()=>{$('src').value='';$('pdf').value='';$('dropTxt').innerHT
   DATA=null;$('prev').style.display='none';$('emptyPrev').style.display='';
   $('anon').value='';$('meta').innerHTML='';$('legend').innerHTML='';
   $('dictCard').style.display='none';$('ulock').textContent='';
+  // la card era solo nascosta: senza queste tre righe il dizionario resta in MAP e su
+  // disco, e al riavvio ricompare zitto al posto di quello del documento nuovo
+  MAP={};localStorage.removeItem('pii_map');$('dictInfo').textContent='';
   SRC_DOC=null;OUT_DOC=null;$('pdfSrcView').innerHTML='';$('pdfOutView').innerHTML='';
   $('srcTabs').style.display='none';$('inHint').innerHTML=tt('in_hint');
   $('inHint').style.display='';setSrcView('text');setView('prev');

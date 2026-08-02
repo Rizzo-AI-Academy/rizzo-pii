@@ -5,6 +5,27 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-08-02 — "Pulisci" non cancellava il dizionario PII (`src/app/app.py`)
+
+Il bottone **Pulisci** nascondeva la card del dizionario ma lasciava i valori in `MAP` e in
+`localStorage['pii_map']`: nomi, CF e IBAN in chiaro restavano sul disco, e dall'interfaccia
+non c'era nessun modo di toglierli (`removeItem` non compariva da nessuna parte nel repo).
+
+Non è solo igiene. All'avvio il dizionario della sessione precedente viene ricaricato in `MAP`,
+quindi la guardia di `reverse()` — «Nessun dizionario: caricane uno .json» — non scatta mai:
+chi riapre l'app e incolla la risposta dell'LLM di oggi **senza** caricare il `.json` si vede
+sostituire i valori del caso precedente, con l'esito «Valori ripristinati».
+
+    dizionario rimasto sul disco: {"[FULLNAME_1]": "Mario Rossi", "[IBAN_1]": "IT60X054…"}
+    "Il ricorrente [FULLNAME_1] chiede il bonifico su [IBAN_1]."
+      ->  "Il ricorrente Mario Rossi chiede il bonifico su IT60X054…"
+
+Ora «Pulisci» azzera `MAP`, rimuove `pii_map` da `localStorage` e ripulisce l'etichetta: è
+quello che l'UI già dichiara in italiano e in inglese («il dizionario **di questa sessione**…
+se hai chiuso e riaperto l'app, **carica il dizionario .json**»). Nient'altro cambia.
+
+---
+
 ## 2026-06-30 — Porta del backend 5000 → 5005 (conflitto AirPlay su macOS)
 
 Gli utenti macOS vedevano una **pagina bianca**: la porta **5000** è occupata di default
