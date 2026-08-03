@@ -5,6 +5,46 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-08-03 - Rete regex: i formati con cui gli identificativi sono stampati
+
+La rete regex+checksum copriva la **forma compatta** degli identificativi ma non quella
+**stampata sui documenti**, e i due insiemi non coincidono. Un IBAN su una fattura o su una
+carta intestata è scritto a gruppi di quattro (`IT60 X054 2811 …`), un codice fiscale può
+essere **omocodico** (le cifre sostituite da lettere quando due contribuenti collidono), una
+carta è separata anche da punti, un telefono anche da trattini. Nessuno di questi veniva
+rilevato. I **validatori erano già corretti** su tutti quei valori: `iban_ok` normalizza gli
+spazi come prima cosa, `cf_ok` calcola l'omocodia, `luhn_ok` scarta i non-numeri. Erano le
+regex a non passargli mai un caso con i separatori, e su IBAN/PIVA/carta `strict=True`
+significa che **non esiste fallback**: senza checksum il valore resta in chiaro.
+
+Le regex ora accettano i separatori che i validatori già normalizzavano. Sull'IBAN i gruppi
+dopo il primo devono contenere almeno una cifra, altrimenti il match ingloberebbe la parola
+successiva e il mod-97 farebbe cadere tutto; `iban_ok` normalizza ora **gli stessi**
+separatori che la regex ammette, altrimenti il resto non servirebbe a niente. Il CF omocodico
+è una **voce a parte** con `strict=True`, non un allargamento della voce esistente: quella è
+`strict=False` e redige sulla sola forma, e sette posizioni che accettano lettere sarebbero
+troppo generiche per fidarsi. Sulla carta il match termina ora per forza su una cifra, così il
+punto di fine frase non entra nel placeholder.
+
+La rete è stata spostata in **`src/app/detectors.py`**, stesso principio già applicato a
+`pdf_export.py`: nessun import di `torch`/`transformers`/`fitz`, quindi è verificabile in
+isolamento. Prima non lo era, perché importare `app.py` carica il modello. `app.py` ri-esporta
+i nomi, il comportamento pubblico non cambia. Aggiunti `tests/test_detector_formats.py`
+(39 casi, valori sintetici) e una **CI** che esegue `python -m unittest discover tests` senza
+installare nulla. Su 200.000 documenti di `generate_synthetic_pii.py` le entità già rilevate
+restano identiche e le rilevazioni su span non-PII non aumentano; riformattando gli stessi
+identificativi come su un documento vero si passa da 0 a 7.830 IBAN, 24.304 CF e 16.070
+telefoni.
+
+Il costo è che i due separatori aggiunti ereditano l'esposizione che gli altri avevano già,
+e non di più: una sequenza di 13-19 cifre separate da punti diventa candidata carta e supera
+Luhn per caso in circa un caso su dieci (misurato: 493 su 5.000, contro 488 con lo spazio e
+480 col trattino, invariati); un numero amministrativo scritto `0521-123456` viene letto come
+telefono, esattamente come già accadeva per `0521.123456` e `0521 123456`. Nessun impatto sul
+training e nessuna modifica alla tassonomia.
+
+---
+
 ## 2026-06-30 — Porta del backend 5000 → 5005 (conflitto AirPlay su macOS)
 
 Gli utenti macOS vedevano una **pagina bianca**: la porta **5000** è occupata di default
