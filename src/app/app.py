@@ -53,18 +53,13 @@ if getattr(sys, "_MEIPASS", None):
 elif os.environ.get("PII_MODEL_DIR"):
     MODEL_DIR = os.environ["PII_MODEL_DIR"]
 else:
-    import re
-    _models = Path(__file__).resolve().parents[2] / "models"
-    _pinned = _models / f"rizzo-pii-0.3B-v{APP_MODEL_VERSION}" if APP_MODEL_VERSION else None
-    _versioned = [p for p in _models.glob("rizzo-pii-0.3B-v*") if p.is_dir()]
-    if _pinned and _pinned.is_dir():
-        MODEL_DIR = str(_pinned)
-    elif _versioned:
-        MODEL_DIR = str(max(_versioned, key=lambda p: tuple(
-            int(x) for x in re.search(r"-v([0-9][0-9.]*)$", p.name).group(1).split("."))))
-    else:
-        _prod = _models / "rizzo-pii-0.3B"
-        MODEL_DIR = str(_prod if _prod.exists() else _models / "pii_model_legacy")
+    # Import LOCALE al ramo, non in cima al file: quando l'app e' congelata da
+    # PyInstaller si passa dal ramo _MEIPASS qui sopra e questa riga non viene mai
+    # eseguita, quindi il bundle non deve portarsi dietro src/common/.
+    _ROOT = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(_ROOT / "src" / "common"))
+    from model_paths import resolve_model_dir      # noqa: E402
+    MODEL_DIR = resolve_model_dir(_ROOT / "models", pinned=APP_MODEL_VERSION)
 
 ASSETS_DIR = _resource_path("assets")   # mascotte / icone (servite su /assets/<file>)
 APP_VERSION = "1.0.0"                    # versione mostrata nell'UI (allineata a tauri.conf.json)

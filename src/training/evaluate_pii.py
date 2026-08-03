@@ -75,17 +75,11 @@ def load_data(path):
     return recs
 
 
-def resolve_model_dir(models_dir):
-    """Ultima versione models/rizzo-pii-0.3B-v* (storico); fallback al vecchio non versionato, poi legacy."""
-    import re
-    versioned = [p for p in models_dir.glob("rizzo-pii-0.3B-v*") if p.is_dir()]
-    if versioned:
-        def _key(p):
-            m = re.search(r"-v([0-9][0-9.]*)$", p.name)
-            return tuple(int(x) for x in m.group(1).split(".")) if m else ()
-        return str(max(versioned, key=_key))
-    base = models_dir / "rizzo-pii-0.3B"
-    return str(base if base.exists() else models_dir / "pii_model_legacy")
+# Risoluzione della cartella del modello: implementazione unica in
+# src/common/model_paths.py (prima era copiata qui e in altri tre file, e le
+# copie erano divergute -> vedi il docstring di quel modulo).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "common"))
+from model_paths import resolve_model_dir  # noqa: E402
 
 
 def main():
