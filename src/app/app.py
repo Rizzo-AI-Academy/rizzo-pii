@@ -320,6 +320,17 @@ DETECTORS = [
     ("CF",
      re.compile(r"\b[A-Za-z]{6}\d{2}[A-Za-z]\d{2}[A-Za-z]\d{3}[A-Za-z]\b"),
      cf_ok, False),
+    # CF omocodico. Quando due persone otterrebbero lo stesso codice, l'Agenzia
+    # delle Entrate sostituisce una o piu' cifre con una lettera partendo da
+    # destra (0=L 1=M 2=N 3=P 4=Q 5=R 6=S 7=T 8=U 9=V) e RICALCOLA il carattere
+    # di controllo. La forma sopra pretende cifre in posizione fissa, quindi un
+    # codice omocodico non diventa nemmeno candidato e resta in chiaro.
+    # Qui la forma da sola non basta a decidere (una parola di 16 lettere puo'
+    # combaciare), percio' strict=True: si redige solo se il checksum passa.
+    ("CF",
+     re.compile(r"\b[A-Za-z]{6}[\dLMNPQRSTUV]{2}[A-Za-z][\dLMNPQRSTUV]{2}"
+                r"[A-Za-z][\dLMNPQRSTUV]{3}[A-Za-z]\b", re.IGNORECASE),
+     cf_ok, True),
     ("IBAN",
      re.compile(r"\b[A-Za-z]{2}\d{2}[A-Za-z0-9]{11,30}\b"),
      iban_ok, True),
