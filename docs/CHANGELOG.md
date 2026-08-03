@@ -150,6 +150,46 @@ Luhn per caso in circa un caso su dieci (misurato: 493 su 5.000, contro 488 con 
 480 col trattino, invariati); un numero amministrativo scritto `0521-123456` viene letto come
 telefono, esattamente come già accadeva per `0521.123456` e `0521 123456`. Nessun impatto sul
 training e nessuna modifica alla tassonomia.
+## 2026-08-03 — La targa scritta col trattino restava in chiaro (`app.py`)
+
+Il detector TARGA ammetteva come separatore **solo lo spazio** (`\s?`), quindi `AB-123-CD` —
+la forma dei moduli, dei gestionali e degli export — non veniva vista dalla regex. Senza la
+rete regex resta il solo modello, che su quella forma sbaglia i confini:
+
+    HK-105-NS  ->  "...ha registrato HK-[TARGA_1]0[TARGA_2]-[TARGA_3] alle ore..."
+
+Il documento resta insieme **leggibile** (la coppia di lettere sopravvive) e **non
+ripristinabile** (il dizionario non ricompone la targa).
+
+Su 120 documenti con targa col trattino, contesti presi dallo stress test (`analyze()`,
+modello `rizzo-pii-0.3B`): **8 targhe intere in chiaro e 20 sbriciolate come sopra** — il
+23% — contro **0 e 0** dopo la modifica. Le forme `AB123CD` e `AB 123 CD` erano e restano a 0.
+
+Con `src/training/evaluate_targa_stress.py` sullo stress test (300 righe, 200 targhe,
+tre varianti identiche tranne la forma), modello+regex:
+
+| forma | prima | dopo |
+|---|---:|---:|
+| `AB123CD` | R 1,000 · F1 0,800 | invariata |
+| `AB 123 CD` | R 1,000 · F1 0,800 | invariata |
+| **`AB-123-CD`** | **R 0,280 · F1 0,165** | **R 1,000 · F1 0,800** |
+| mix delle tre (come il baseline) | R 0,910 · P 0,593 · F1 0,718 | **R 1,000 · P 0,667 · F1 0,800** |
+
+Sale anche la precisione, perché le span sbagliate del modello vengono sostituite da quella
+esatta della regex.
+
+Falsi positivi: **0 match nuovi** su 120.911 testi reali di Ai4Privacy (tutte le lingue) e su
+100.000 atti legali sintetici senza targa; 0 entità di altri tag toccate su 20.000 documenti;
+costo di scansione invariato. Sullo stress test i documenti con falso positivo restano
+100/100 sul mix e sulle forme compatta e a gruppi; sulla variante tutta col trattino passano
+da 70/100 a 100/100, perché i codici a forma di targa col trattino ora vengono redatti come
+già oggi lo sono quelli compatti (`PR450AB`). La regex non distingue una targa da un codice
+che ne ha la forma in nessuna delle due scritture, e per un anonimizzatore sovra-redigere è
+la direzione sicura.
+
+Limite: `\b` tratta il trattino come confine, quindi una forma di targa **dentro** un codice
+più lungo col trattino (`PROT-2024-AB-123-CD-XY`) viene ritagliata. Nei 120.911 testi reali
+non se ne trova nessuna.
 
 ---
 

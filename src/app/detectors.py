@@ -138,8 +138,11 @@ DETECTORS = [
      re.compile(r"(?:€|EUR|euro)\s?\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})?"
                 r"|\d{1,3}(?:\.\d{3})*,\d{2}\s?(?:€|EUR|euro)", re.IGNORECASE),
      None, True),
+    # il trattino e' un separatore quanto lo spazio ("AB-123-CD" nei moduli e negli
+    # export): senza, la targa scritta cosi' non viene vista da nessuno dei due lati,
+    # perche' nemmeno il modello la riconosce, e resta in chiaro.
     ("TARGA",
-     re.compile(r"\b[A-Za-z]{2}\s?\d{3}\s?[A-Za-z]{2}\b"),
+     re.compile(r"\b[A-Za-z]{2}[\s-]?\d{3}[\s-]?[A-Za-z]{2}\b"),
      None, True),
     # URL: tre forme, dalla piu' esplicita alla piu' rischiosa.
     #   1) con schema (http/https/ftp)     -> sempre un URL
