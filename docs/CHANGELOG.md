@@ -5,6 +5,34 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-08-03 — `_merge()` era quadratica: 100 s su un documento lungo (`app.py`)
+
+Il controllo delle sovrapposizioni confrontava **ogni** candidato con **tutta** la lista già
+tenuta, e `analyze()` chiama `_merge()` una volta sull'**intero documento**, non per chunk.
+Il costo esplode dopo l'inferenza, quando l'utente crede di aver finito (issue #61):
+
+| entità nel documento | prima | dopo |
+|---:|---:|---:|
+| 5.000 | 1,14 s | **0,025 s** |
+| 20.000 | 21,25 s | **0,181 s** |
+| 40.000 | 111,35 s | **0,398 s** |
+| 100.000 | non misurata (ore) | **2,08 s** |
+
+Le entità tenute sono per costruzione ordinate e non sovrapposte, quindi un candidato può
+accavallarsi solo con i due vicini: una ricerca binaria li trova subito.
+
+Comportamento invariato, verificato confrontando l'output della funzione intera fra vecchia e
+nuova implementazione: **60.000 casi casuali** (span sovrapposti, annidati, densi, punteggi
+tutti uguali per far contare la stabilità del `sorted`, 64.822 candidati di lunghezza zero) e
+**48 casi costruiti** (lista vuota, lunghezza zero dentro e fuori un altro span, candidati
+identici, stesso `start`, annidamento nei due ordini, adiacenti, sovrapposti di un carattere)
+→ **0 output diversi**.
+
+Non risolve da solo la issue #61: lì il grosso è l'inferenza su CPU. Questo è il pezzo che
+resta lento anche dopo.
+
+---
+
 ## 2026-06-30 — Porta del backend 5000 → 5005 (conflitto AirPlay su macOS)
 
 Gli utenti macOS vedevano una **pagina bianca**: la porta **5000** è occupata di default

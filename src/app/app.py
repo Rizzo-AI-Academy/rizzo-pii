@@ -43,6 +43,7 @@ Preferenze di anonimizzazione (precedenza): campo nella richiesta > CLI --exclud
   --no-mapping > env PII_EXCLUDE_TAGS/PII_MAPPING > prefs.json > default
 """
 
+import bisect
 import os
 import re
 import secrets
@@ -443,8 +444,15 @@ def _merge(cands, text):
     )
     kept = []
     for e in order:
-        if all(e["end"] <= k["start"] or e["start"] >= k["end"] for k in kept):
-            kept.append(e)
+        # kept resta ordinata per start e senza sovrapposizioni: allora un candidato puo'
+        # accavallarsi solo con i due vicini, che la ricerca binaria trova subito. Il
+        # confronto con TUTTA kept era O(n^2): su un documento con 40.000 entita' (una chat
+        # esportata di qualche MB) erano 111 s spesi qui, dopo l'inferenza.
+        i = bisect.bisect_right(kept, e["start"], key=lambda k: k["start"])
+        if (i and kept[i - 1]["end"] > e["start"]) or \
+           (i < len(kept) and kept[i]["start"] < e["end"]):
+            continue
+        kept.insert(i, e)
     # niente spazi inglobati nei placeholder (il modello a volte include lo spazio iniziale)
     for e in kept:
         while e["start"] < e["end"] and text[e["start"]].isspace():
