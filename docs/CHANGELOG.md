@@ -285,6 +285,18 @@ rigenerare i sintetici e riaddestrare** (come per la fix `PROVINCE`):
 python src/data_pipeline/generate_synthetic_pii.py -n 200000 --out dataset/synthetic/synthetic_pii_it_200k.jsonl
 python src/training/train_pii.py --type full
 ```
+## 2026-07-31 — Detector regex DATE e DOCID nell'app (niente più frammentazione)
+
+Il modello da solo frammentava date e numeri di registro in più span, lasciando
+**caratteri in chiaro** nel testo anonimizzato (es. `12/06/2025` → `[DATE_1][DATE_2]2[DATE_3]`,
+`R.G. 1234/2024` → quattro frammenti + `4` finale scoperta) e corrompendo il ripristino
+(`1234/202` al posto di `1234/2024`). Aggiunti in `src/app/app.py` due detector
+deterministici alla rete regex+checksum (stesso meccanismo di CF/IBAN, priorità sul modello):
+
+- **`DATE`**: date numeriche (`12/06/2025`, `12-06-25`, `12.06.2025`) e letterali (`12 giugno 2025`)
+- **`DOCID`**: `R.G.`/`RG`/`R.G.N.R.`, `Prot.`/`protocollo`, `Rep.`/`repertorio` + numero (con anno opzionale)
+
+Nessun impatto su training e pipeline dati.
 
 ---
 

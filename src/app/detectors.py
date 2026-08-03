@@ -159,6 +159,21 @@ DETECTORS = [
                 r"(?:it|com|net|org|eu|info|io|dev|app|gov|edu|cloud|online|site|blog)"
                 r"\b(?:/[^\s<>\"']*)?", re.IGNORECASE),
      None, True),
+    # DOCID: il codice di un atto e' scritto sempre dopo la sua sigla ("R.G. 1234/2024",
+    # "Prot. 123/2024", "Rep. 45"). E' la sigla a renderlo riconoscibile: il numero da
+    # solo ("1234/2024") non si distingue da una frazione o da un articolo di legge,
+    # quindi la si pretende sempre e la si include nello span.
+    # Il "n." fra la sigla e il numero e' opzionale e vale per TUTTE le sigle: si scrive
+    # "Prot. 456/2024" quanto "Prot. n. 456/2024", e negli atti la seconda e' la forma
+    # piu' frequente. Tenendolo attaccato alla sola parola "protocollo" - com'era - la
+    # forma abbreviata piu' comune restava in chiaro.
+    ("DOCID",
+     re.compile(r"\b(?:R\.?G\.?\s*N\.?R\.?|R\.?G\.?|RG|Prot\.?|protocollo"
+                r"|Rep\.?|repertorio)"
+                r"(?:\s*(?:n\.?|num\.?|nro\.?))?"
+                r"\s*\d{1,8}(?:[/\-]\d{2,4})?\b",
+                re.IGNORECASE),
+     None, True),
     # Date numeriche: forma specifica ma SENZA validatore possibile (una data non ha
     # checksum). Sta in SOFT_REGEX_LABELS -> in fusione non eredita la priorita' della
     # rete regex, quindi il modello puo' sovrascriverla: "06-11-2014" dentro un
