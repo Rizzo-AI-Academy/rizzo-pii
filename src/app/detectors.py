@@ -159,7 +159,21 @@ DETECTORS = [
                 r"(?:it|com|net|org|eu|info|io|dev|app|gov|edu|cloud|online|site|blog)"
                 r"\b(?:/[^\s<>\"']*)?", re.IGNORECASE),
      None, True),
+    # Date numeriche: forma specifica ma SENZA validatore possibile (una data non ha
+    # checksum). Sta in SOFT_REGEX_LABELS -> in fusione non eredita la priorita' della
+    # rete regex, quindi il modello puo' sovrascriverla: "06-11-2014" dentro un
+    # riferimento di laboratorio resta un falso positivo accettabile, non un verdetto.
+    ("DATE",
+     re.compile(r"(?<!\d)(?:0?[1-9]|[12]\d|3[01])[/.\-]"
+                r"(?:0?[1-9]|1[0-2])[/.\-](?:19|20)\d{2}"
+                r"(?:\s+\d{1,2}[:.]\d{2})?(?!\d)"),
+     None, True),
 ]
+
+# Label della rete regex SENZA validatore forte: la forma da sola non basta a dire
+# "e' certamente questo campo". In _merge non ereditano la priorita' della rete regex,
+# cosi' il modello (o una segnalazione manuale) puo' sovrascriverle.
+SOFT_REGEX_LABELS = {"DATE"}
 
 # Punteggiatura che chiude la frase e non fa parte dell'URL: "vedi https://x.it/pagina."
 _URL_TRAIL = ".,;:!?)]}»\"'"
