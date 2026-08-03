@@ -190,6 +190,43 @@ la direzione sicura.
 Limite: `\b` tratta il trattino come confine, quindi una forma di targa **dentro** un codice
 più lungo col trattino (`PROT-2024-AB-123-CD-XY`) viene ritagliata. Nei 120.911 testi reali
 non se ne trova nessuna.
+## 2026-08-03 — Codice fiscale omocodico: riconosciuto dalla rete regex, prodotto dal sintetico
+
+Un codice fiscale **omocodico** finiva in chiaro nel testo anonimizzato.
+
+Quando due persone otterrebbero lo stesso codice, l'Agenzia delle Entrate ne differenzia uno
+sostituendo le cifre con una lettera a partire da destra (`0=L 1=M 2=N 3=P 4=Q 5=R 6=S 7=T 8=U
+9=V`) e ricalcolando il carattere di controllo. Quello che ne esce è un codice fiscale valido, e
+sui documenti compare come qualsiasi altro. In Italia i casi sono circa 24.000, con circa 1.400
+nuovi ogni anno, concentrati proprio negli atti anagrafici e fiscali.
+
+Il detector `CF` pretendeva cifre in posizione fissa
+(`[A-Za-z]{6}\d{2}[A-Za-z]\d{2}[A-Za-z]\d{3}[A-Za-z]`), quindi un codice omocodico non diventava
+nemmeno candidato. `cf_ok()` lo avrebbe validato senza modifiche, ma non veniva mai chiamato.
+
+**1. Detector** (`app.py`). Una seconda voce `CF` in `DETECTORS` accetta `[\dLMNPQRSTUV]` nelle
+sette posizioni numeriche. È l'unica voce `CF` con `strict=True`: sulla forma ordinaria si continua
+a redigere anche quando il checksum fallisce (comportamento invariato), mentre la forma allargata da
+sola non basta a decidere, perché una parola di sedici lettere può combaciare. Lì si redige solo con
+il checksum valido.
+
+**2. Sintetico** (`generate_synthetic_pii.py`). `codice_fiscale()` accetta `omocodia=n`, cioè quante
+cifre sostituire, e `cf_piece()` ne produce una quota (`OMOCODIA_RATE = 0.05`). La quota non imita
+la frequenza reale: a quella frequenza il modello non ne incontrerebbe nessuno. Il carattere di
+controllo si calcola dopo la sostituzione, come fa l'Agenzia.
+
+Il punto cieco stava anche a monte del detector: il generatore non aveva mai prodotto un codice
+omocodico, quindi il training non ne conteneva e nessun benchmark del progetto poteva accorgersene.
+Il `CF` 567/567 della valutazione indipendente in #18 è misurato su una distribuzione che esclude il
+caso che fallisce.
+
+**3. Test** (`tests/test_cf_omocodia.py`). Dieci test senza dipendenze esterne, che coprono le sette
+profondità di sostituzione, l'ordine da destra, la tabella di conversione e il fatto che la forma
+ordinaria si comporti esattamente come prima. Il checksum è riverificato da un'implementazione
+scritta nel test e non importata dal generatore, altrimenti direbbe solo che il generatore concorda
+con se stesso. I detector vengono letti da `app.py` con `ast` invece che importati: `app.py`
+costruisce la pipeline del modello a import-time, e importarlo vorrebbe dire scaricare i pesi per
+provare una regex.
 
 ---
 
