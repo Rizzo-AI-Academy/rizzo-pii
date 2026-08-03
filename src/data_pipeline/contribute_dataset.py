@@ -45,6 +45,7 @@ Uso
 """
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -242,8 +243,63 @@ def gen_new_templates(per_type, boost):
     return out
 
 
-def generate(n, seed, handle, per_type, offline, boost, out_path=None):
-    """Genera n esempi sintetici. Con Gemini usa template NUOVI scritti al volo.
+def text_key(rec):
+    """Impronta del testo esatto. Serve solo a non scrivere due volte la stessa riga
+    identica: con valori pescati a caso non capita quasi mai, ma costa poco escluderlo."""
+    return hashlib.blake2b(rec["source_text"].encode(), digest_size=8).digest()
+
+
+def structure_key(rec):
+    """Impronta della STRUTTURA della riga: template di origine + sequenza delle label
+    nell'ordine in cui compaiono. E' la grana giusta per dire quante cose diverse c'e'
+    dentro un file, e quindi quella su cui mettere un tetto.
+
+    Non lo scheletro (il testo con le entita' sostituite dalle label): misurato, lo
+    scheletro punisce i template migliori. Un template di bolletta, in cui OGNI valore
+    iniettato e' etichettato, produce 1 solo scheletro su 500 righe -- tutte le sue righe
+    hanno lo stesso testo a meno delle label -- mentre un atto che contiene {TRIBUNAL}, il
+    cui valore iniettato NON e' etichettato, ne produce 343 perche' cambia il nome del
+    tribunale. Filtrando per scheletro il primo avrebbe diritto a una riga e il secondo a
+    venticinque: esattamente al rovescio.
+
+    A parita' di struttura le righe hanno nomi, date, importi e indirizzi tutti diversi, ed
+    e' variazione utile: insegna al modello che la label non dipende dal valore. Utile a
+    dosi piccole, zavorra a dosi grandi -- da qui il tetto."""
+    labels = "|".join(e["label"] for e in sorted(rec["entities"], key=lambda e: e["start"]))
+    return hashlib.blake2b(f"{rec['template_id']}#{labels}".encode(),
+                           digest_size=8).digest()
+
+
+# Rifiuti consecutivi dopo i quali un template si considera esaurito e smette di essere
+# pescato. Senza questo l'ultima parte della generazione e' quasi tutta lavoro buttato: i
+# template le cui strutture sono gia' piene continuano a uscire (sono la maggioranza) e ogni
+# loro riga viene costruita per essere scartata. Con l'uscita per template la generazione si
+# ferma da sola quando sono esauriti tutti, e il numero di righe e' quello che la banca sa
+# dare. La soglia e' un compromesso: troppo bassa dichiara esaurito un template che avrebbe
+# ancora strutture rare, troppo alta spreca tentativi.
+STOP_TEMPLATE = 2_000
+
+
+def generate(n, seed, handle, per_type, offline, boost, out_path=None,
+             max_per_structure=25):
+    """Genera esempi sintetici tenendo solo le righe che aggiungono qualcosa.
+
+    Perche' non semplicemente n righe: il testo di ogni riga e' unico (i valori cambiano
+    sempre), quindi "0 duplicati" non dice niente sulla varieta'. Misurato su una
+    contribuzione da 200.000 righe con 273 template: 57.093 scheletri distinti, cioe' il 71%
+    del file ripeteva una riga gia' presente -- 800 MB di zavorra che allunga ogni download
+    e ogni epoca di training senza insegnare niente di nuovo.
+
+    Il tetto sta sulla STRUTTURA (template + sequenza delle label): al massimo
+    max_per_structure righe possono condividerla. A parita' di struttura le righe hanno
+    nomi, date, importi e indirizzi tutti diversi -- variazione utile al modello, che
+    impara che la label non dipende dal valore -- ma utile a dosi piccole. Con 1 si tiene
+    una riga per struttura, e il file diventa il puro inventario di cio' che la banca sa
+    dire.
+
+    Se la banca si esaurisce prima di arrivare a n, la generazione si ferma e lo dichiara:
+    il numero di righe consegnabili e' un RISULTATO della banca, non una scelta di chi
+    genera.
 
     Con out_path le righe vengono SCRITTE MANO A MANO invece di essere accumulate in
     memoria. Serve: MAX_N e' 200.000 e con template lunghi (documenti interi, non frasi)
@@ -274,12 +330,32 @@ def generate(n, seed, handle, per_type, offline, boost, out_path=None):
     n_new = len(new_templates)
     rows, label_counts, bad = ([] if out_path is None else None), {}, 0
     n_ok = n_da_nuovi = 0
+    testi = set()                  # testi gia' scritti: nessuna riga identica due volte
+    strutture = {}                 # struttura -> quante righe gia' scritte
+    rip_testo = rip_struttura = tentativi = 0
+    rifiuti = {}                   # tid -> rifiuti consecutivi (per l'uscita del template)
+    attivi = list(idx_pool)
+    pesi = list(weights) if weights else None
     out = None
     if out_path is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out = open(out_path, "w", encoding="utf-8")
-    for _ in range(n):
-        tid = random.choices(idx_pool, weights=weights, k=1)[0]
+    def esaurisci(tid):
+        """Toglie dal sorteggio un template che non da' piu' niente di nuovo."""
+        nonlocal attivi, pesi
+        posizione = attivi.index(tid)
+        attivi = attivi[:posizione] + attivi[posizione + 1:]
+        if pesi is not None:
+            pesi = pesi[:posizione] + pesi[posizione + 1:]
+
+    def rifiuta(tid):
+        rifiuti[tid] = rifiuti.get(tid, 0) + 1
+        if rifiuti[tid] >= STOP_TEMPLATE:
+            esaurisci(tid)
+
+    while n_ok < n and attivi:
+        tentativi += 1
+        tid = random.choices(attivi, weights=pesi, k=1)[0]
         text, entities = gen.build_example(tid, templates)
         tokens, bio = gen.to_bio(text, entities)
         rec = {
@@ -298,7 +374,21 @@ def generate(n, seed, handle, per_type, offline, boost, out_path=None):
         err = _validate_record(rec)
         if err:
             bad += 1
+            rifiuta(tid)
             continue
+        testo = text_key(rec)
+        if testo in testi:                          # la stessa riga identica, di nuovo
+            rip_testo += 1
+            rifiuta(tid)
+            continue
+        struttura = structure_key(rec)
+        if strutture.get(struttura, 0) >= max_per_structure:
+            rip_struttura += 1                      # questa struttura ha gia' le sue righe
+            rifiuta(tid)
+            continue
+        testi.add(testo)
+        strutture[struttura] = strutture.get(struttura, 0) + 1
+        rifiuti[tid] = 0
         for e in entities:
             label_counts[e["label"]] = label_counts.get(e["label"], 0) + 1
         n_ok += 1
@@ -314,6 +404,17 @@ def generate(n, seed, handle, per_type, offline, boost, out_path=None):
 
     if bad:
         print(f"  scartati {bad} esempi non validi (self-check)")
+    print(f"  righe tenute: {n_ok} su {tentativi} tentativi "
+          f"({100 * n_ok / max(1, tentativi):.1f}%) | scartate {rip_testo} righe identiche "
+          f"a una gia' scritta e {rip_struttura} oltre il tetto di {max_per_structure} "
+          f"per struttura")
+    print(f"  strutture di etichette distinte: {len(strutture)} "
+          f"({n_ok / max(1, len(strutture)):.1f} righe per struttura)")
+    if n_ok < n:
+        print(f"  BANCA ESAURITA: chieste {n} righe, ottenute {n_ok}. Tutti i "
+              f"{len(templates)} template hanno smesso di produrre righe nuove "
+              f"({STOP_TEMPLATE} rifiuti di fila ciascuno).\n  Per averne di piu' serve "
+              f"allargare la banca di template (llm_template_bank.py), non alzare --n.")
     return rows, label_counts, n_new, n_ok, n_da_nuovi
 
 
@@ -373,6 +474,11 @@ def main():
                     help="genera solo in locale, non apre la PR")
     ap.add_argument("--upload-file", metavar="PATH",
                     help="non rigenerare: carica un .jsonl gia' prodotto (push veloce, niente Gemini)")
+    ap.add_argument("--max-per-structure", type=int, default=25, metavar="K",
+                    help="quante righe al massimo possono condividere la stessa STRUTTURA "
+                         "(template + sequenza delle label). Default 25: qualche variante di "
+                         "valori insegna al modello che la label non dipende dal valore, "
+                         "oltre e' volume. Con 1 il file e' l'inventario delle strutture")
     ap.add_argument("--repo", default=REPO_ID, help="dataset di destinazione (override)")
     args = ap.parse_args()
 
@@ -410,7 +516,8 @@ def main():
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     tmp_path = ROOT / "dataset" / "contributions" / f".{handle}-{stamp}.parziale.jsonl"
     _, counts, n_new, n_ok, from_new = generate(
-        args.n, seed, handle, args.per_type, args.offline, boost, out_path=tmp_path)
+        args.n, seed, handle, args.per_type, args.offline, boost, out_path=tmp_path,
+        max_per_structure=args.max_per_structure)
     if n_new:
         print(f"\n{from_new}/{n_ok} esempi da template NUOVI di Gemini.")
     print(f"Generati {n_ok} esempi validi. Entita' per label:")
