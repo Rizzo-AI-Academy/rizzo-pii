@@ -82,12 +82,16 @@ def sentence_boundaries(labels, tokens):
 
 
 def augment(tokens, labels, k):
-    """Inserisce k frammenti in posizioni di confine casuali (o in coda se non ce ne sono)."""
+    """Inserisce k frammenti in posizioni di confine casuali (o in coda se non ce ne sono).
+
+    Le posizioni si scelgono UNA volta sul testo originale e si inserisce da destra a
+    sinistra. Ricalcolarle dopo ogni inserimento fa cadere il frammento successivo dentro
+    il precedente: il punto di "P.IVA" o di "prot. n." e' un confine per la regola.
+    """
     toks, labs = list(tokens), list(labels)
-    for _ in range(k):
+    spots = sentence_boundaries(labs, toks) or [len(toks)]
+    for pos in sorted((random.choice(spots) for _ in range(k)), reverse=True):
         s_tok, s_lab = snippet_tokens(random.choice(INJECTION_SNIPPETS))
-        spots = sentence_boundaries(labs, toks)
-        pos = random.choice(spots) if spots else len(toks)
         toks[pos:pos] = s_tok
         labs[pos:pos] = s_lab
     return toks, labs

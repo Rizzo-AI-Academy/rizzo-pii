@@ -227,6 +227,34 @@ scritta nel test e non importata dal generatore, altrimenti direbbe solo che il 
 con se stesso. I detector vengono letti da `app.py` con `ast` invece che importati: `app.py`
 costruisce la pipeline del modello a import-time, e importarlo vorrebbe dire scaricare i pesi per
 provare una regex.
+## 2026-08-03 — Augment: il secondo frammento cadeva dentro il primo (`augment_real_pii.py`)
+
+`augment()` ricalcolava i confini di frase **dopo ogni inserimento**. Ma `sentence_boundaries()`
+considera confine ogni `.` o `;` etichettato `O`, e i frammenti ne contengono: il punto di
+`P.IVA`, di `prot. n.`, di `C.F.`. Così il secondo frammento veniva inserito **dentro** il
+primo, spezzandolo:
+
+    frammento: 'R . G . n . 15592 / 2018'
+    risultato: '... settembre 6º , 1961 R . G . n . IBAN IT31A9653013434814655221101 15592 / 2018'
+
+Le etichette BIO restano valide — l'entità non viene tagliata — ma il contesto sì: il modello
+vede «P.» seguito da un IBAN e impara l'associazione sbagliata, proprio sui tag che l'augment
+serve a insegnare.
+
+Ora le posizioni si scelgono **una volta sola** sul testo originale e si inserisce da destra a
+sinistra, così gli indici già scelti restano validi.
+
+Misurato su 40000 righe generate dalle frasi reali italiane di Ai4Privacy, verificando che i
+token di ogni frammento inserito restino contigui nella riga prodotta:
+
+| | prima | dopo |
+|---|---:|---:|
+| frammenti spezzati, k=2 | 9,87% | **0** |
+| frammenti spezzati, k=3 | 14,04% | **0** |
+| righe con almeno un frammento spezzato (`--max-inject 2`, il default) | 9,67% | **0** |
+
+Numero di frammenti inseriti, lunghezze e validità BIO invariati (0 anomalie). Per avere
+effetto va rigenerato l'augment: `python src/data_pipeline/augment_real_pii.py -n 40000`.
 
 ---
 
