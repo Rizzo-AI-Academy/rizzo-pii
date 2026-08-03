@@ -47,7 +47,7 @@ ALLOWED_SLOTS = {
     "FULLNAME", "JUDGE", "LAWYER", "PLAINTIFF", "DEFENDANT", "WITNESS",
     "CF", "PIVA", "IBAN", "ADDRESS", "EMAIL", "PEC", "PHONE", "AMOUNT",
     "RG", "TRIBUNAL", "TARGA", "IDCARD", "DRIVING", "CITY", "DATE",
-    "ORG", "DOCID", "CATASTO", "CONTO",
+    "ORG", "DOCID", "CATASTO", "CONTO", "CIG", "CUP", "POLIZZA", "MATRICOLA",
 }
 
 # breve legenda per i segnaposto il cui uso non e' ovvio dal nome (guida l'LLM a
@@ -55,7 +55,11 @@ ALLOWED_SLOTS = {
 SLOT_HINTS = """  {ORG}     = ragione sociale di una societa'/studio legale/banca (la PARTE, non il tribunale)
   {DOCID}   = codice identificativo di un atto: n. protocollo, n. repertorio/raccolta, n. sentenza
   {CATASTO} = dati catastali di un immobile (foglio, particella, subalterno)
-  {CONTO}   = numero di conto corrente (diverso dall'IBAN)"""
+  {CONTO}   = numero di conto corrente (diverso dall'IBAN)
+  {CIG}     = Codice Identificativo Gara di un appalto pubblico
+  {CUP}     = Codice Unico di Progetto di un investimento pubblico
+  {POLIZZA} = numero di una polizza assicurativa
+  {MATRICOLA} = matricola aziendale INPS/INAIL del datore di lavoro"""
 
 DOC_TYPES = [
     "atto di citazione", "comparsa di costituzione e risposta", "sentenza civile",

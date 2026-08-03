@@ -186,6 +186,10 @@ TAG_MAP = {
     "IDCARDNUM": "ID_DOC", "PASSPORTNUM": "ID_DOC",
     "DRIVERLICENSENUM": "ID_DOC", "SOCIALNUM": "ID_DOC",
     "CONTO": "IBAN",
+    # codici di procedura/contratto/posizione: identificano un atto o un rapporto, non
+    # l'identita' di una persona -> stessa politica di mascheramento di DOCID.
+    # (il numero previdenziale PERSONALE resta su ID_DOC via SOCIALNUM)
+    "CIG": "DOCID", "CUP": "DOCID", "POLIZZA": "DOCID", "MATRICOLA": "DOCID",
 }
 DROP_TYPES = {"TITLE", "TRIBUNAL"}    # tipi rimappati a O (non vanno anonimizzati):
 #   TITLE    = appellativo (Dott./Avv./Sig.)

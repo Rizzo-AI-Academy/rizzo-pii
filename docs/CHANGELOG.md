@@ -376,6 +376,32 @@ invalida il confronto con le metriche pubblicate.
 
 ---
 
+## 2026-07-30 — Forme nuove sotto `DOCID`: CIG, CUP, polizza, matricola (nessun tag nuovo)
+
+Allargando i tipi di documento oltre gli atti civili compaiono identificativi che il modello non
+ha **mai** visto: il **CIG** e il **CUP** di un appalto, il numero di **polizza** in un sinistro, la
+**matricola INPS** in un rapporto di lavoro.
+
+Non servono tag nuovi, e questa è la parte importante: identificano una *procedura*, un *contratto*
+o una *posizione* — non l'identità di una persona — quindi hanno la stessa politica di mascheramento
+di `DOCID`, su cui `TAG_MAP` li rimappa al caricamento. Nessun cambio di `num_labels`, nessun
+riaddestramento imposto, metriche pubblicate ancora confrontabili. Il numero previdenziale
+**personale** resta invece su `ID_DOC` via `SOCIALNUM`: è un documento della persona, non un codice
+di procedura.
+
+Quello che cambia è la **forma**, ed è il punto: oggi `DOCID` conosce solo `NNNN/AAAA` e cifre nude.
+Un CIG è alfanumerico a 10 caratteri (`9MUGDORPHV`), un CUP a 15, una polizza ha spesso lettere e
+barre (`AB/1234567`), una matricola 10 cifre. Sono grafie che in produzione oggi passerebbero
+inosservate. Aggiunti i quattro generatori, gli slot in `ALLOWED_SLOTS`/`SLOT_HINTS` e 5 template
+built-in (procedura aperta, denuncia di sinistro, comunicazione di assunzione, reclamo su polizza,
+determina a contrarre).
+
+Questa voce dipende dalla validazione della tassonomia (voce sotto): le quattro label grezze vanno
+aggiunte all'insieme ammesso, altrimenti il validatore le rifiuta — che è esattamente il
+comportamento desiderato per una label non prevista.
+
+---
+
 ## 2026-06-30 — Porta del backend 5000 → 5005 (conflitto AirPlay su macOS)
 
 Gli utenti macOS vedevano una **pagina bianca**: la porta **5000** è occupata di default
