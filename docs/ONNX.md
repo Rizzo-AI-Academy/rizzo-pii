@@ -57,7 +57,7 @@ tokenizer alla radice, pesi sotto `onnx/`.
 
 ---
 
-## Dimensioni misurate (v1.2.0, profilo arm64)
+## Dimensioni misurate (v1.2.0 e v1.3.0, profilo arm64)
 
 | Artefatto | Dimensione |
 |---|---:|
@@ -67,6 +67,10 @@ tokenizer alla radice, pesi sotto `onnx/`.
 | **Bundle totale** | **327,1 MB** |
 
 Export in ~10 s, quantizzazione in ~10 s (Apple M-series).
+
+Le due versioni producono bundle di dimensione **identica**: la v1.3.0 aggiunge
+una sola classe al modello (`I-IBAN`), cioè 768 pesi sulla testa di
+classificazione, invisibili sul totale.
 
 Due note utili a chi deve distribuire il modello:
 
@@ -84,17 +88,25 @@ Due note utili a chi deve distribuire il modello:
 testi, usando `dataset/validation/validation_real.jsonl` se presente e altrimenti
 un insieme di esempi che copre tutti i 22 tag.
 
-Sulla v1.2.0, con gli esempi predefiniti (537 token, 242 dei quali di entità):
+Con gli esempi predefiniti (537 token):
 
-| Misura | Valore |
-|---|---:|
-| Accordo su tutti i token | 98,51% |
-| Accordo sui soli token di entità | 98,76% |
+| Misura | v1.2.0 | v1.3.0 |
+|---|---:|---:|
+| Token di entità | 242 | **327** |
+| Accordo su tutti i token | 98,51% | **99,26%** |
+| Accordo sui soli token di entità | 98,76% | **99,69%** |
 
 La quantizzazione è quindi praticamente gratuita in accuratezza, a fronte di un
 file **4× più piccolo**. Per una misura più solida conviene rigenerare la
 validation (`python src/data_pipeline/build_validation.py`) ed eseguire
 `--verify --verify-n 2000`.
+
+Il salto della v1.3.0 va letto insieme alla riga dei token di entità: sugli
+stessi 537 token il modello ne etichetta ora 327 invece di 242. Sono i subword
+interni degli identificatori lunghi, che prima cadevano su `O` perché non
+entravano nella loss (`LABEL_ALL_SUBWORDS`, commit `7564553`). La verifica è
+quindi diventata **più severa** — misura l'accordo su un terzo di posizioni in
+più, tutte dentro le entità — e il risultato è migliorato lo stesso.
 
 ---
 
@@ -174,18 +186,23 @@ offset riportati in coordinate globali e deduplica finale.
 Vale anche qui quanto detto nel README: in produzione il modello **non va usato
 da solo**. La rete regex + checksum
 ([`src/inspect/validate_checksums.py`](../src/inspect/validate_checksums.py))
-resta necessaria, e un checksum valido ha la precedenza sul modello. È la
-mitigazione della frammentazione dei codici lunghi, che si osserva anche via
-Transformers.js: su un codice fiscale il modello può alternare `CF` e `ID_DOC`
-fra i subword dello stesso codice.
+resta necessaria, e un checksum valido ha la precedenza sul modello.
+
+Sulla **v1.2.0** questo serviva anche a mitigare la frammentazione dei codici
+lunghi, osservabile via Transformers.js: su un codice fiscale il modello poteva
+alternare `CF` e `ID_DOC` fra i subword dello stesso codice. **La v1.3.0
+risolve il problema alla radice** — su un dataset esterno di 147 documenti la
+quota di span con etichette in conflitto sugli stessi offset scende dal 21,1%
+al 3,0% (1,7% in fp32). La rete di checksum resta comunque consigliata: è
+l'unico livello che può *verificare* un identificatore invece di riconoscerlo.
 
 ---
 
 ## Limiti di questa documentazione
 
-- Le dimensioni e i numeri di fedeltà sono misurati sulla **v1.2.0** con profilo
-  `arm64`. Altri profili CPU producono file di dimensione paragonabile ma non
-  identica.
+- Le dimensioni e i numeri di fedeltà sono misurati sulle versioni **v1.2.0** e
+  **v1.3.0** con profilo `arm64`. Altri profili CPU producono file di dimensione
+  paragonabile ma non identica.
 - La verifica `--verify` misura l'**accordo fra fp32 e INT8**, non l'accuratezza
   assoluta: dice quanto costa la quantizzazione, non quanto è buono il modello.
   Per quello c'è `src/training/evaluate_pii.py`.

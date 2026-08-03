@@ -9,7 +9,7 @@ non cambia nulla della garanzia di privacy, cambia solo il motore che lo esegue.
 
 La quantizzazione INT8 riduce il file di ~4x. Con --verify si misura quanto
 costa in accuratezza, confrontando fp32 e INT8 sugli stessi testi (vedi
-docs/ONNX.md per i numeri della v1.2.0).
+docs/ONNX.md per i numeri misurati su v1.2.0 e v1.3.0).
 
 Dipendenze aggiuntive (non nel requirements.txt principale, per non appesantire
 chi vuole solo addestrare):

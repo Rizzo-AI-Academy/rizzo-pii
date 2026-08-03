@@ -25,9 +25,18 @@ Transformers.js (tokenizer alla radice, pesi in `onnx/`). Il modello si risolve
 con la stessa logica di `test_pii.py` (ultima versione + `PII_MODEL_DIR`).
 
 **Fedeltà INT8.** Il flag `--verify` confronta le predizioni fp32 e INT8 token per
-token. Sulla v1.2.0: **98,51%** di accordo complessivo e **98,76%** sui soli token
-di entità, per un file **4× più piccolo** (1206,6 MB → 294,3 MB). La
-quantizzazione è praticamente gratuita.
+token, per un file **4× più piccolo** (1206,6 MB → 294,3 MB):
+
+| | v1.2.0 | v1.3.0 |
+|---|---:|---:|
+| Accordo complessivo | 98,51% | **99,26%** |
+| Accordo sui token di entità | 98,76% | **99,69%** |
+
+La quantizzazione è praticamente gratuita. Sulla v1.3.0 la misura è anche più
+severa: sugli stessi 537 token il modello ne etichetta 327 come entità invece di
+242, perché i subword interni degli identificatori lunghi non cadono più su `O`
+(`LABEL_ALL_SUBWORDS`, `7564553`). Lo script ha girato invariato sulla nuova
+versione — nessuna modifica necessaria per l'export.
 
 **Nota emersa durante il lavoro**, documentata in docs/ONNX.md: la pipeline
 `token-classification` di Transformers.js non restituisce gli offset carattere
