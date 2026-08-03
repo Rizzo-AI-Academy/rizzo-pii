@@ -6,13 +6,23 @@ carta di credito, importo, targa, URL).
 Come `pdf_export`, questo modulo lavora solo su stringhe: nessun import di
 torch/transformers/fitz, quindi e' testabile in isolamento e senza il modello.
 `app.py` ne ri-esporta i nomi, il comportamento pubblico non cambia.
+
+Le regex accettano i separatori con cui gli identificativi sono STAMPATI nei
+documenti, non solo la forma compatta: un IBAN su una fattura o su una carta
+intestata e' raggruppato a quattro, una carta di credito e' separata da spazi,
+trattini o punti, un telefono da spazi, punti o trattini. I validatori
+normalizzano gia' i separatori: se la regex non gliene passa mai uno il
+checksum non viene nemmeno interrogato e, dove `strict=True`, il valore resta
+in chiaro senza alcun fallback.
 """
 
 import re
 
 
 def iban_ok(s):
-    s = re.sub(r"\s", "", s).upper()
+    # Si normalizzano gli stessi separatori che la regex ammette: spazio (anche
+    # non-breaking, e gli a-capo del testo estratto da un PDF), punto, trattino.
+    s = re.sub(r"[\s.\-]", "", s).upper()
     if not (15 <= len(s) <= 34):
         return False
     r = s[4:] + s[:4]
@@ -86,18 +96,49 @@ DETECTORS = [
     ("CF",
      re.compile(r"\b[A-Za-z]{6}\d{2}[A-Za-z]\d{2}[A-Za-z]\d{3}[A-Za-z]\b"),
      cf_ok, False),
+    # CF OMOCODICO: quando due contribuenti collidono, l'Agenzia sostituisce le
+    # cifre da destra con una lettera (0->L 1->M 2->N 3->P 4->Q 5->R 6->S 7->T
+    # 8->U 9->V), quindi la forma sopra non lo trova. Voce separata e non classe
+    # allargata sulla precedente: qui la forma da sola e' troppo generica (sette
+    # posizioni che accettano lettere), percio' strict=True e il checksum
+    # diventa obbligatorio. `cf_ok` gia' calcola l'omocodia. La forma canonica
+    # matcha entrambe le voci, ma sullo stesso span: `_merge` tiene il candidato
+    # validato e scarta il duplicato.
+    ("CF",
+     re.compile(r"\b[A-Za-z]{6}[\dLMNPQRSTUVlmnpqrstuv]{2}[A-Za-z]"
+                r"[\dLMNPQRSTUVlmnpqrstuv]{2}[A-Za-z]"
+                r"[\dLMNPQRSTUVlmnpqrstuv]{3}[A-Za-z]\b"),
+     cf_ok, True),
+    # IBAN: forma compatta, oppure raggruppata a quattro come e' stampata su
+    # fatture, carte intestate e home banking. Il gruppo intermedio e quello
+    # finale devono contenere almeno una cifra: senza quel vincolo il match
+    # goloso inghiottirebbe la parola successiva ("...0005 1332 pago"), il
+    # mod-97 fallirebbe e con strict=True l'IBAN si perderebbe del tutto.
     ("IBAN",
-     re.compile(r"\b[A-Za-z]{2}\d{2}[A-Za-z0-9]{11,30}\b"),
+     re.compile(r"\b[A-Za-z]{2}\d{2}"
+                r"(?:[A-Za-z0-9]{11,30}"
+                r"|[\s.\-][A-Za-z0-9]{4}"
+                r"(?:[\s.\-](?=[A-Za-z0-9]{0,3}\d)[A-Za-z0-9]{4}){1,6}"
+                r"(?:[\s.\-](?=[A-Za-z0-9]{0,3}\d)[A-Za-z0-9]{1,4})?)\b"),
      iban_ok, True),
+    # Carta: al gruppo dei separatori si aggiunge il punto ("4111.1111...").
+    # Qui NON si usa \s: a differenza dell'IBAN il vincolo e' il solo Luhn (una
+    # sequenza qualunque lo supera una volta su dieci) e con l'a-capo una
+    # colonna di numeri in tabella diventerebbe un candidato.
+    # Il match ora finisce per forza su una CIFRA: con il separatore in coda
+    # ("(?:\d[ .\-]?){13,19}") il punto che chiude la frase entrerebbe nello
+    # span e finirebbe dentro il placeholder.
     ("CREDITCARDNUMBER",
-     re.compile(r"(?<!\d)(?:\d[ \-]?){13,19}(?!\d)"),
+     re.compile(r"(?<!\d)\d(?:[ .\-]?\d){12,18}(?!\d)"),
      luhn_ok, True),
     ("PIVA",
      re.compile(r"(?<!\d)\d{11}(?!\d)"),
      piva_ok, True),
+    # Telefono: al gruppo dei separatori si aggiunge il trattino, usatissimo sia
+    # sul cellulare ("333-123-4567") sia sul fisso ("010-2471234").
     ("TELEPHONENUM",
-     re.compile(r"(?<![\w.])(?:\+39[\s.]?)?(?:3\d{2}[\s.]?\d{3}[\s.]?\d{3,4}"
-                r"|0\d{1,3}[\s.]?\d{5,8})(?![\w])"),
+     re.compile(r"(?<![\w.])(?:\+39[\s.\-]?)?(?:3\d{2}[\s.\-]?\d{3}[\s.\-]?\d{3,4}"
+                r"|0\d{1,3}[\s.\-]?\d{5,8})(?![\w])"),
      None, True),
     ("AMOUNT",
      re.compile(r"(?:€|EUR|euro)\s?\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})?"
