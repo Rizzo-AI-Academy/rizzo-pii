@@ -109,17 +109,11 @@ DETECTORS = [
                 r"[\dLMNPQRSTUVlmnpqrstuv]{2}[A-Za-z]"
                 r"[\dLMNPQRSTUVlmnpqrstuv]{3}[A-Za-z]\b"),
      cf_ok, True),
-    # IBAN: forma compatta, oppure raggruppata a quattro come e' stampata su
-    # fatture, carte intestate e home banking. Il gruppo intermedio e quello
-    # finale devono contenere almeno una cifra: senza quel vincolo il match
-    # goloso inghiottirebbe la parola successiva ("...0005 1332 pago"), il
-    # mod-97 fallirebbe e con strict=True l'IBAN si perderebbe del tutto.
+    # IBAN, forma compatta: copre qualsiasi paese, anche fuori dal registro ISO.
+    # Il formato di stampa a gruppi NON e' una regex ma `detect_iban()` qui sotto,
+    # perche' per sapere dove finisce serve la lunghezza prevista per il paese.
     ("IBAN",
-     re.compile(r"\b[A-Za-z]{2}\d{2}"
-                r"(?:[A-Za-z0-9]{11,30}"
-                r"|[\s.\-][A-Za-z0-9]{4}"
-                r"(?:[\s.\-](?=[A-Za-z0-9]{0,3}\d)[A-Za-z0-9]{4}){1,6}"
-                r"(?:[\s.\-](?=[A-Za-z0-9]{0,3}\d)[A-Za-z0-9]{1,4})?)\b"),
+     re.compile(r"\b[A-Za-z]{2}\d{2}[A-Za-z0-9]{11,30}\b"),
      iban_ok, True),
     # Carta: al gruppo dei separatori si aggiunge il punto ("4111.1111...").
     # Qui NON si usa \s: a differenza dell'IBAN il vincolo e' il solo Luhn (una
@@ -168,9 +162,82 @@ DETECTORS = [
 _URL_TRAIL = ".,;:!?)]}»\"'"
 
 
+# ISO 13616: lunghezza dell'IBAN per paese. Serve a sapere DOVE finisce quando e'
+# scritto a gruppi: indovinare il confine significa inghiottire le parole vicine o
+# fermarsi a meta' lasciando la coda dell'IBAN in chiaro.
+IBAN_LEN = {c[:2]: int(c[2:]) for c in (
+    "AD24 AE23 AL28 AT20 AZ28 BA20 BE16 BG22 BH22 BI27 BR29 BY28 CH21 CR22 CY28 CZ24 "
+    "DE22 DJ27 DK18 DO28 EE20 EG29 ES24 FI18 FK18 FO18 FR27 GB22 GE22 GI23 GL18 GR27 "
+    "GT28 HN28 HR21 HU28 IE22 IL23 IQ23 IS26 IT27 JO30 KW30 KZ20 LB28 LC32 LI21 LT20 "
+    "LU20 LV21 LY25 MC27 MD24 ME22 MK19 MN20 MR27 MT31 MU30 NI28 NL18 NO15 OM23 PK24 "
+    "PL28 PS29 PT25 QA29 RO24 RS22 RU33 SA24 SC31 SD18 SE24 SI19 SK24 SM27 SO23 ST25 "
+    "SV28 TL23 TN24 TR26 UA29 VA22 VG24 XK20 YE30").split()}
+
+# sigla e cifre di controllo attaccate: sono sempre stampate insieme, e pretenderlo
+# evita che "il 17 luglio 2008" o "RO 48 2897 ..." si aggancino come IBAN.
+_IBAN_HEAD = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]{2}\d{2}")
+_IBAN_MAX_SEP = 3                      # separatori di fila (PDF giustificati, tabelle)
+_IBAN_RUN = 5                          # caratteri per gruppo: piu' lunghi sono parole
+
+
+def _iban_char(c):
+    """ASCII: senza isascii() la scansione inghiotte "eta'", "piu'", ..."""
+    return c.isascii() and c.isalnum()
+
+
+def detect_iban(text):
+    """IBAN nel formato di stampa a gruppi ("IT60 X054 2811 ...").
+
+    Dalla sigla del paese consuma esattamente i caratteri previsti da IBAN_LEN,
+    tollerando i separatori; poi decide il mod-97.
+
+    Uno scanner e non una regex perche' il confine destro non e' deducibile dalla
+    forma: senza la lunghezza attesa il match o inghiotte la parola dopo, o si ferma
+    a meta' e lascia la coda dell'IBAN in chiaro sotto un placeholder rassicurante.
+    """
+    ents = []
+    for m in _IBAN_HEAD.finditer(text):
+        n, i = IBAN_LEN.get(m.group()[:2].upper()), m.start()
+        if not n or (i and text[i - 1].isalnum()):
+            continue
+        chars, sep, run, nl, grp, start = [], 0, 0, 0, False, i
+        while i < len(text) and len(chars) < n:
+            c = text[i]
+            if _iban_char(c):
+                chars.append(c)
+                run += 1
+                sep = 0
+            elif sep < _IBAN_MAX_SEP and run <= _IBAN_RUN and (c in ".-" or c.isspace()):
+                sep, run, grp = sep + 1, 0, True
+                nl += c.isspace() and c not in " \t "
+                if nl > 1:
+                    break              # un IBAN va a capo una volta; una colonna a ogni cella
+            else:
+                break
+            i += 1
+        if len(chars) < n or (i < len(text) and _iban_char(text[i])):
+            continue                    # troncato, oppure il codice prosegue oltre
+        if grp:
+            g = [x for x in re.split(r"[\s.\-]+", text[start:i]) if x]
+            if len(set(map(len, g[:-1]))) > 1 or len(g[-1]) > len(g[0]):
+                continue                # gruppi disuguali: e' prosa, non un IBAN stampato
+        if iban_ok(text[start:i]):
+            ents.append({"label": "IBAN", "start": start, "end": i,
+                         "score": 1.0, "validated": True, "source": "regex"})
+    # due candidati sovrapposti: uno e' l'artefatto di una scansione partita da un codice
+    # vicino, ma quale dei due non e' decidibile dal testo. Si maschera l'unione, perche'
+    # scartarne uno lascia in chiaro un pezzo dell'altro sotto un [IBAN_1] rassicurante.
+    ents.sort(key=lambda e: e["start"])
+    for a, b in zip(ents, ents[1:]):
+        if b["start"] < a["end"]:
+            b["start"], b["end"] = a["start"], max(a["end"], b["end"])
+            a["end"] = a["start"]       # assorbito in b
+    return [e for e in ents if e["end"] > e["start"]]
+
+
 def detect_regex(text):
     """Entita' della rete regex. validated=True solo quando il checksum passa."""
-    ents = []
+    ents = detect_iban(text)
     for label, rx, validator, strict in DETECTORS:
         for m in rx.finditer(text):
             start, end = m.start(), m.end()
