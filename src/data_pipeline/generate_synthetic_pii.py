@@ -271,13 +271,23 @@ def _date():
     d, m, y = random.randint(1, 28), random.randint(1, 12), random.randint(1955, 2005)
     return f"{d:02d}/{m:02d}/{y}", (d, m, y)
 
-def full_name():
+# Negli atti, nei moduli e nelle intestazioni il nome si scrive anche COGNOME NOME
+# ("Egr. Rossi Mario"). Generandone un ordine solo il modello impara quello: sull'altro
+# lascia in chiaro meta' nome (issue #40).
+INVERTED_NAME_P = 0.3
+
+def _name_pieces():
     g, s, _ = _person()
+    if random.random() < INVERTED_NAME_P:
+        return [(s, "SURNAME"), (" ", None), (g, "GIVENNAME")]
     return [(g, "GIVENNAME"), (" ", None), (s, "SURNAME")]
 
+def full_name():
+    return _name_pieces()
+
 def role(label):
-    g, s, _ = _person()
-    return [(f"{g} {s}", label)]   # nome intero taggato col ruolo legale
+    # nome intero taggato col ruolo legale, stesso mix di ordini
+    return [("".join(v for v, _ in _name_pieces()), label)]
 
 def cf_piece():
     g, s, sex = _person()
