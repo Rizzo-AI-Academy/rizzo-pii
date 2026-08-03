@@ -1,17 +1,136 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Batch 2 template legali IT (autore = Claude). Include liste e {PROVINCE} per
-varieta' strutturale. Validazione: slot in gen.SLOTS + guardia anti nomi inline
-(tb.find_stray_names). Accoda a dataset/synthetic/legal_templates.json. Solo {SLOT}."""
-import json, re, sys
+"""Banca di template legali scritti a mano, senza chiamare un LLM.
+
+Stessa idea di `llm_template_bank.py` - l'autore scrive SOLO la prosa con i
+segnaposto `{SLOT}`, il codice inietta i dati - ma l'autore qui e' una persona
+(o un agente di coding) invece di Gemini: serve a chi non ha una GEMINI_API_KEY,
+e i 60 template che ne escono sono deterministici, quindi il dataset e'
+riproducibile.
+
+I template puntano sui tag che il resto del sintetico copre poco: CATASTO,
+DOCID, TARGA, CF, ID_DOC, AMOUNT, IBAN, PIVA, ORG, PROVINCE.
+
+Come per i template generati, NESSUN dato reale compare qui: solo `{SLOT}`. La
+verifica non e' sulla fiducia ma sulla stessa guardia del repo
+(`llm_template_bank.clean_and_validate`), che scarta i template con segnaposto
+non iniettabili, con nomi propri scritti inline o con caratteri non latini.
+
+    python src/data_pipeline/author_templates.py            # accoda al file
+    python src/data_pipeline/author_templates.py --dry-run  # valida e basta
+"""
+
+import argparse
+import json
+import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[0]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src" / "data_pipeline"))
-import llm_template_bank as tb
-import generate_synthetic_pii as gen
 
+import generate_synthetic_pii as gen  # noqa: E402
+import llm_template_bank as tb  # noqa: E402
+
+OUT = ROOT / "dataset" / "synthetic" / "legal_templates.json"
+
+# (tipo di documento, testo con i soli segnaposto)
 DRAFTS = [
+    ("contratto di compravendita immobiliare",
+     "Con la presente scrittura privata il venditore {FULLNAME}, C.F. {CF}, cede all'acquirente "
+     "{FULLNAME}, C.F. {CF}, la piena proprieta' dell'immobile sito in {ADDRESS}, censito al Catasto "
+     "Fabbricati al {CATASTO}, per il prezzo di {AMOUNT}, versato mediante bonifico sull'IBAN {IBAN}."),
+
+    ("decreto ingiuntivo",
+     "Il {TRIBUNAL}, letto il ricorso iscritto al R.G. n. {RG}, ingiunge alla {ORG}, P.IVA {PIVA}, "
+     "in persona del legale rappresentante {FULLNAME}, di pagare la somma di {AMOUNT} in favore del "
+     "ricorrente, oltre interessi, come da fattura prot. n. {DOCID}."),
+
+    ("atto di citazione",
+     "L'avvocato {LAWYER}, C.F. {CF}, giusta procura in atti, nell'interesse dell'attore {PLAINTIFF}, "
+     "residente in {ADDRESS}, cita in giudizio il convenuto {DEFENDANT} dinanzi al {TRIBUNAL}, con "
+     "udienza fissata per il {DATE}, R.G. n. {RG}."),
+
+    ("verbale di udienza",
+     "All'udienza del {DATE} dinanzi al giudice {JUDGE}, comparso il teste {WITNESS}, identificato a "
+     "mezzo carta d'identita' n. {IDCARD}, si da' atto delle dichiarazioni rese nella causa R.G. n. {RG}."),
+
+    ("procura alle liti",
+     "Il sottoscritto {FULLNAME}, C.F. {CF}, nato a {CITY} il {DATE}, delega a rappresentarlo e difenderlo "
+     "l'avv. {LAWYER}, eleggendo domicilio in {ADDRESS}, PEC {PEC}, tel. {PHONE}."),
+
+    ("contratto di locazione",
+     "Tra il locatore {FULLNAME}, C.F. {CF}, e il conduttore {FULLNAME}, C.F. {CF}, si conviene la "
+     "locazione dell'immobile in {ADDRESS}, identificato al {CATASTO}, per un canone mensile di {AMOUNT}, "
+     "da versare sul conto corrente n. {CONTO}."),
+
+    ("atto di diffida",
+     "La {ORG}, P.IVA {PIVA}, con sede in {ADDRESS}, in persona dell'avv. {LAWYER}, diffida formalmente "
+     "il Sig. {FULLNAME}, C.F. {CF}, ad adempiere entro il {DATE}, pena l'azione esecutiva; ogni "
+     "comunicazione all'indirizzo email {EMAIL} o PEC {PEC}."),
+
+    ("ricorso per decreto ingiuntivo",
+     "Il ricorrente {PLAINTIFF}, rappresentato dall'avv. {LAWYER}, chiede al {TRIBUNAL} l'emissione di "
+     "decreto ingiuntivo nei confronti della {ORG}, P.IVA {PIVA}, per il pagamento di {AMOUNT}, come da "
+     "contratto rep. n. {DOCID} e da estratto del conto corrente n. {CONTO}."),
+
+    ("comparsa di costituzione e risposta",
+     "Si costituisce in giudizio il convenuto {DEFENDANT}, C.F. {CF}, rappresentato e difeso dall'avv. "
+     "{LAWYER}, con domicilio eletto in {ADDRESS}, il quale contesta la domanda attorea nella causa "
+     "R.G. n. {RG} dinanzi al {TRIBUNAL}."),
+
+    ("sentenza civile",
+     "Il {TRIBUNAL}, nella persona del giudice {JUDGE}, definitivamente pronunciando nella causa R.G. n. "
+     "{RG}, condanna il convenuto {DEFENDANT} al pagamento di {AMOUNT} in favore dell'attore {PLAINTIFF}, "
+     "come da sentenza n. {DOCID}."),
+
+    ("contratto di compravendita immobiliare",
+     "Il promittente venditore {FULLNAME}, C.F. {CF}, promette di vendere al promissario acquirente "
+     "{FULLNAME} l'immobile in {ADDRESS}, censito al {CATASTO}, al prezzo di {AMOUNT}; a titolo di "
+     "acconto si versa la somma sull'IBAN {IBAN}."),
+
+    ("verbale di udienza",
+     "Nel procedimento R.G. n. {RG}, il giudice {JUDGE} da' atto della presenza dell'avv. {LAWYER} per "
+     "l'attore {PLAINTIFF} e dell'avv. {LAWYER} per il convenuto {DEFENDANT}, rinviando l'udienza al {DATE}."),
+
+    ("atto di diffida",
+     "Con la presente si diffida il Sig. {FULLNAME}, proprietario del veicolo targato {TARGA}, patente n. "
+     "{DRIVING}, a provvedere al risarcimento di {AMOUNT} entro il {DATE}, mediante versamento sull'IBAN {IBAN}."),
+
+    ("procura alle liti",
+     "La {ORG}, P.IVA {PIVA}, in persona del legale rappresentante {FULLNAME}, C.F. {CF}, conferisce "
+     "mandato all'avv. {LAWYER} per la controversia dinanzi al {TRIBUNAL}, R.G. n. {RG}, con ogni "
+     "comunicazione a mezzo PEC {PEC}."),
+
+    ("decreto ingiuntivo",
+     "Visto il ricorso, il {TRIBUNAL} ingiunge al debitore {FULLNAME}, C.F. {CF}, residente in {ADDRESS}, "
+     "di pagare {AMOUNT} in favore della {ORG}, con addebito sul conto corrente n. {CONTO}, giusta "
+     "documentazione prot. n. {DOCID}."),
+
+    ("contratto di locazione",
+     "Il conduttore {FULLNAME}, C.F. {CF}, si obbliga a versare al locatore {FULLNAME} il canone di "
+     "{AMOUNT} mensili sull'IBAN {IBAN}, per l'immobile in {ADDRESS} identificato al {CATASTO}; recapiti: "
+     "tel. {PHONE}, email {EMAIL}."),
+
+    ("sentenza civile",
+     "Definitivamente pronunciando, il {TRIBUNAL}, giudice {JUDGE}, nella causa R.G. n. {RG} tra l'attore "
+     "{PLAINTIFF} e il convenuto {DEFENDANT}, dichiara risolto il contratto rep. n. {DOCID} e condanna "
+     "al pagamento di {AMOUNT}."),
+
+    ("comparsa di costituzione e risposta",
+     "Si costituisce la {ORG}, P.IVA {PIVA}, in persona del legale rappresentante {FULLNAME}, difesa "
+     "dall'avv. {LAWYER}, C.F. {CF}, la quale eccepisce l'inadempimento nella causa R.G. n. {RG}, "
+     "chiedendo il rigetto della domanda."),
+
+    ("ricorso per decreto ingiuntivo",
+     "Il creditore {FULLNAME}, C.F. {CF}, chiede al {TRIBUNAL} decreto ingiuntivo nei confronti del "
+     "debitore {FULLNAME}, per la somma di {AMOUNT} portata dalla fattura n. {DOCID}, da accreditare "
+     "sull'IBAN {IBAN}."),
+
+    ("atto di citazione",
+     "L'avv. {LAWYER}, per conto della {ORG}, P.IVA {PIVA}, conviene in giudizio dinanzi al {TRIBUNAL} "
+     "il Sig. {FULLNAME}, C.F. {CF}, proprietario del veicolo targato {TARGA}, per il risarcimento di "
+     "{AMOUNT}, R.G. n. {RG}."),
+
     ("atto di precetto",
      "Si intima e fa precetto al debitore {FULLNAME}, C.F. {CF}, residente in {ADDRESS}, di pagare "
      "entro dieci giorni la somma di {AMOUNT} di cui alla sentenza n. {DOCID} del {TRIBUNAL}, "
@@ -141,32 +260,49 @@ DRAFTS = [
 ]
 
 
-def validate(text):
-    text = re.sub(r"^```.*?\n|```$", "", text.strip(), flags=re.MULTILINE).strip()
-    slots = set(gen.SLOT_RE.findall(text))
-    if not slots:
-        return None, "nessun segnaposto"
-    bad = slots - set(gen.SLOTS)
-    if bad:
-        return None, f"slot non iniettabili {bad}"
-    stray = tb.find_stray_names(text)
-    if stray:
-        return None, f"nomi inline {sorted(set(stray))[:6]}"
-    return text, None
+def valida(text):
+    """Il template ripulito, oppure None con il motivo dello scarto.
+
+    Si usa la guardia del repo invece di riscriverne una: e' quella che decide
+    per i template generati da Gemini, e due guardie che divergono sono un modo
+    silenzioso di far entrare nel dataset cio' che l'altra scarterebbe.
+    """
+    clean = tb.clean_and_validate(text)
+    if not clean:
+        return None, "guardia clean_and_validate"
+    slots = set(gen.SLOT_RE.findall(clean))
+    non_iniettabili = slots - set(gen.SLOTS)
+    if non_iniettabili:
+        return None, "slot non iniettabili %s" % sorted(non_iniettabili)
+    return clean, None
 
 
 def main():
-    out = ROOT / "dataset" / "synthetic" / "legal_templates.json"
-    existing = json.load(open(out, encoding="utf-8")) if out.exists() else []
-    tid = len(existing)
-    new = 0
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--dry-run", action="store_true",
+                    help="valida i template e stampa l'esito, senza scrivere nulla")
+    args = ap.parse_args()
+
+    esistenti = json.loads(OUT.read_text(encoding="utf-8")) if OUT.exists() else []
+    tid = len(esistenti)
+    nuovi, scartati = [], 0
     for doc_type, text in DRAFTS:
-        clean, err = validate(text)
+        clean, errore = valida(text)
         if not clean:
-            print(f"SCARTATO ({doc_type}): {err}"); continue
-        existing.append({"id": tid, "doc_type": doc_type, "text": clean}); tid += 1; new += 1
-    json.dump(existing, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-    print(f"\nBatch 2: nuovi validi {new}/{len(DRAFTS)} | totale template nel file: {len(existing)}")
+            scartati += 1
+            print("SCARTATO (%s): %s" % (doc_type, errore))
+            continue
+        nuovi.append({"id": tid, "doc_type": doc_type, "text": clean})
+        tid += 1
+
+    print("\nTemplate validi: %d/%d | scartati: %d" % (len(nuovi), len(DRAFTS), scartati))
+    if args.dry_run:
+        print("--dry-run: nessuna scrittura.")
+        return
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(esistenti + nuovi, ensure_ascii=False, indent=2),
+                   encoding="utf-8")
+    print("Totale nel file: %d -> %s" % (len(esistenti) + len(nuovi), OUT))
 
 
 if __name__ == "__main__":

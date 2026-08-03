@@ -42,13 +42,17 @@ ROOT = Path(__file__).resolve().parents[2]
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", write_through=True)
 
-# segnaposto consentiti = tassonomia coperta dagli iniettori in generate_synthetic_pii.py
-ALLOWED_SLOTS = {
-    "FULLNAME", "JUDGE", "LAWYER", "PLAINTIFF", "DEFENDANT", "WITNESS",
-    "CF", "PIVA", "IBAN", "ADDRESS", "EMAIL", "PEC", "PHONE", "AMOUNT",
-    "RG", "TRIBUNAL", "TARGA", "IDCARD", "DRIVING", "CITY", "DATE",
-    "ORG", "DOCID", "CATASTO", "CONTO", "CIG", "CUP", "POLIZZA", "MATRICOLA",
-}
+# Segnaposto consentiti = quelli che gli iniettori di generate_synthetic_pii.py sanno
+# riempire. Si DERIVA da li' invece di riscriverne la lista: era una copia a mano, e
+# aveva gia' preso la deriva. Mancavano PROVINCE, NAMELIST, ORGLIST e MIXEDLIST, con
+# l'effetto che la guardia scartava template che l'iniettore avrebbe riempito senza
+# problemi - PROVINCE e' uno dei 22 tag, ed e' quello che nel training ha meno varieta'
+# di contesto proprio perche' arriva quasi solo dai template.
+# Una lista scritta a mano qui tornerebbe a divergere alla prossima aggiunta.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import generate_synthetic_pii as _gen  # noqa: E402
+
+ALLOWED_SLOTS = set(_gen.SLOTS)
 
 # breve legenda per i segnaposto il cui uso non e' ovvio dal nome (guida l'LLM a
 # posizionarli nel contesto giusto, in molti documenti diversi -> varieta' strutturale)
