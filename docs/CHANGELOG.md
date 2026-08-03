@@ -94,6 +94,25 @@ prima dell'errore sarebbe passata da ~10 a ~18 minuti.
 
 Il controllo che distingue il nostro Flask da un servizio estraneo (`GET /config` → il corpo
 contiene `config_path`) resta invariato.
+## 2026-07-31 — Span delle entità allineate ai confini di parola (`app.py`)
+
+Il modello etichetta i **sotto-token** e a volte ne copre solo una parte: `' No'` di
+`' No' + 'vara'`. Sostituendo la span così com'è, l'`anonymized_text` conservava frammenti
+leggibili — `Direzione Provinciale di [CITY_2]vara` — da cui il valore originale è banalmente
+ricostruibile. In un anonimizzatore è **peggio di un falso negativo pulito**: l'utente vede il
+segnaposto e conclude che il dato sia stato rimosso.
+
+`_merge` ora, dopo aver rifilato gli spazi, **estende ogni span fino a coprire per intero le
+parole che tocca**, e fonde le span che l'estensione rende sovrapposte o adiacenti con la stessa
+etichetta (prima `foglio 21` → `[CATASTO_1][CATASTO_2]`). L'estensione è sempre nella direzione
+sicura: nel dubbio si maschera un carattere in più. Nessun impatto sul training.
+
+Riscontrato su 5 documenti sintetici (perizia CTU, ricorso tributario, relazione dell'organo di
+controllo, istanza di composizione negoziata, verbale assembleare): spariscono tutti i frammenti
+osservati su `CITY`/`DATE`/`DOCID`/`CATASTO`/`ORG`/`TARGA`, le PII dirette restano mascherate
+23/23. Resta fuori portata il caso del richiamo parziale su entità multi-parola
+(`Guardia di Finanza` → `Guardia di [ORG_2]`), che è un problema del modello, non della
+sostituzione. Rif. issue #11.
 
 ---
 
