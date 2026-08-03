@@ -255,6 +255,36 @@ token di ogni frammento inserito restino contigui nella riga prodotta:
 
 Numero di frammenti inseriti, lunghezze e validità BIO invariati (0 anomalie). Per avere
 effetto va rigenerato l'augment: `python src/data_pipeline/augment_real_pii.py -n 40000`.
+## 2026-08-03 — I sintetici scrivevano il nome in un ordine solo (issue #40)
+
+`full_name()` e `role()` producevano **sempre** `Nome Cognome`: su 20.000 chiamate, 100%.
+Ma negli atti, nei moduli e nelle intestazioni il nome si scrive anche `Cognome Nome`
+(«Egr. Rossi Mario»), e il modello quell'ordine non lo ha mai visto.
+
+Effetto misurato su `rizzo-pii-0.3B` con `analyze()`, stessi nomi e stesse frasi, cambiato
+solo l'ordine — «in chiaro» = almeno metà del nome ancora leggibile dopo l'anonimizzazione:
+
+| | `Mario Rossi` | `Rossi Mario` |
+|---|---:|---:|
+| frasi con appellativo (`Egr.`, `Spett.le`, `Gentile`) | 2,5% (8/320) | **27,8% (89/320)** |
+| frasi senza appellativo | 0,0% (0/640) | **4,2% (27/640)** |
+
+    'Egr. Coppola Dario'   ->  'Egr. Coppola [FULLNAME_1],'
+    'Brambilla Ilaria'     ->  'Brambilla [FULLNAME_1], residente in [STREET_1]...'
+
+Ora il 30% dei nomi sintetici esce in ordine invertito (`INVERTED_NAME_P`), con le label
+`SURNAME`/`GIVENNAME` scambiate di conseguenza — la tassonomia non cambia, `normalize_labels()`
+li fonde in `FULLNAME` in entrambi i casi. Non 50%: nella prosa l'ordine diretto resta il più
+frequente, l'inverso domina solo in intestazioni ed elenchi.
+
+Verificato sul generatore: 70,3% / 29,7% su 20.000 nomi, 0 label scambiate su 5.000, e su
+20.000 documenti 0 sequenze BIO non valide e 0 offset sbagliati. **Per avere effetto serve
+rigenerare i sintetici e riaddestrare** (come per la fix `PROVINCE`):
+
+```powershell
+python src/data_pipeline/generate_synthetic_pii.py -n 200000 --out dataset/synthetic/synthetic_pii_it_200k.jsonl
+python src/training/train_pii.py --type full
+```
 
 ---
 
