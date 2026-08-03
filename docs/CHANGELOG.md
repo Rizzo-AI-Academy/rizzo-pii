@@ -5,6 +5,32 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-08-03 — La porta poteva risultare libera mentre era occupata (`src/app/server_config.py`)
+
+`port_available()` provava a legare solo `host:porta`. Se un altro programma ascolta su
+`0.0.0.0:5005`, il bind su `127.0.0.1:5005` riesce lo stesso: il controllo diceva **libera**,
+l'app partiva, e da quel momento non è definito chi serve le connessioni — l'utente può
+ritrovarsi sul server dell'altro programma. È il sintomo riportato nella #17: «You're speaking
+plain HTTP to an SSL-enabled server port».
+
+Ora si prova a legare anche l'indirizzo jolly, **senza** `SO_REUSEADDR`: quando ce l'ha anche
+il socket dell'altro programma — Werkzeug la imposta di default, quindi vale per qualsiasi
+Flask — su Windows il bind riesce lo stesso, ed è proprio il caso da rilevare. Se il jolly
+risulta occupato si guarda, con una connessione, se qualcuno risponde davvero su `host:porta`:
+potrebbe ascoltare su un'altra interfaccia, e allora la nostra è libera.
+
+| chi occupa la porta | prima | dopo |
+|---|---|---|
+| nessuno | libera | libera |
+| `127.0.0.1:5005` | occupata | occupata |
+| **`0.0.0.0:5005`** | **libera** | **occupata** |
+| un'altra interfaccia | libera | libera |
+
+Costo: 0,12 ms a chiamata quando la porta è libera. Vale per i tre entry point (`app.py`,
+`serve.py`, `desktop_app.py`), che escono con `EXIT_PORT_CONFLICT`, e per `/port-check`.
+
+---
+
 ## 2026-06-30 — Porta del backend 5000 → 5005 (conflitto AirPlay su macOS)
 
 Gli utenti macOS vedevano una **pagina bianca**: la porta **5000** è occupata di default
