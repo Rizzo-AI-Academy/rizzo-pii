@@ -71,6 +71,29 @@ potrebbe ascoltare su un'altra interfaccia, e allora la nostra è libera.
 
 Costo: 0,12 ms a chiamata quando la porta è libera. Vale per i tre entry point (`app.py`,
 `serve.py`, `desktop_app.py`), che escono con `EXIT_PORT_CONFLICT`, e per `/port-check`.
+## 2026-08-03 — Con host `localhost` l'app desktop non partiva mai (`tauri/src-tauri/src/lib.rs`)
+
+`is_our_backend()` costruiva `"{host}:{port}"` e lo passava a `parse::<SocketAddr>()`, che
+accetta **solo IP letterali**: con `host = localhost` (valore che si può scrivere nel form
+dello splash o passare in `PII_HOST`) il parse fallisce e la funzione restituisce sempre
+`false`. Il backend parte e scrive nel log che è pronto, ma `poll_backend` non lo riconosce:
+900 iterazioni × 200 ms → **~180 secondi** di splash, poi «il backend non si è avviato».
+
+Ora l'indirizzo si risolve con `to_socket_addrs()` e si provano **tutti** gli indirizzi
+restituiti, non il primo: su Windows `localhost` risolve prima `::1` e poi `127.0.0.1`, e il
+backend può ascoltare solo sul secondo. I 500 ms restano il budget dell'**intera chiamata** e
+vengono divisi fra gli indirizzi: `poll_backend` la ripete 900 volte, e senza questo l'attesa
+prima dell'errore sarebbe passata da ~10 a ~18 minuti.
+
+| host | prima | dopo |
+|---|---|---|
+| `127.0.0.1` | riconosciuto | riconosciuto |
+| **`localhost`** | **mai riconosciuto** | riconosciuto |
+| servizio estraneo sulla porta | `false` | `false` |
+| nessuno in ascolto | `false` | `false` |
+
+Il controllo che distingue il nostro Flask da un servizio estraneo (`GET /config` → il corpo
+contiene `config_path`) resta invariato.
 
 ---
 
