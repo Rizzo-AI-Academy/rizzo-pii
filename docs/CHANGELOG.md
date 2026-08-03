@@ -340,6 +340,20 @@ passava tutti i controlli esistenti — il carattere finiva poi in **ogni** esem
 template (visto: 87 righe su 5.000 da un solo template). Ora un template con caratteri non latini
 viene scartato. La guardia è utile anche col backend Gemini, ma è coi modelli locali che il caso
 si presenta davvero.
+## 2026-07-30 — `contribute_dataset.py`: scrittura incrementale invece di accumulo in RAM
+
+`generate()` accumulava **tutte** le righe in una lista e solo alla fine `write_local()` le
+scriveva. Con `MAX_N = 200_000` e template lunghi — documenti interi, non frasi: ~4-5 KB per riga —
+significa ~1 GB di JSON come oggetti Python, cioè diversi GB di heap, prima che venga scritto il
+primo byte. Su una macchina che stia già facendo altro (nel caso reale: server LLM locali che
+occupavano 22 GB su 30) il processo va in swap o viene ucciso, e si perde tutta la generazione.
+
+Ora le righe vengono scritte **mano a mano** su un file temporaneo, rinominato alla fine col numero
+di righe valide (che si conosce solo al termine, perché il self-check può scartarne). La memoria
+resta costante qualunque sia `--n`: misurato su 20.000 righe, **picco 25 MB** invece di ~1 GB, in
+2,3 s. Progresso stampato ogni 25.000 righe. `write_local()` è stata rimossa: non serviva più.
+
+Nessun cambio di formato né di interfaccia: stessi argomenti, stesso nome di file finale.
 
 ---
 

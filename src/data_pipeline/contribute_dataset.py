@@ -242,9 +242,17 @@ def gen_new_templates(per_type, boost):
     return out
 
 
-def generate(n, seed, handle, per_type, offline, boost):
+def generate(n, seed, handle, per_type, offline, boost, out_path=None):
     """Genera n esempi sintetici. Con Gemini usa template NUOVI scritti al volo.
-    Ritorna (righe, conteggi, n_template_nuovi)."""
+
+    Con out_path le righe vengono SCRITTE MANO A MANO invece di essere accumulate in
+    memoria. Serve: MAX_N e' 200.000 e con template lunghi (documenti interi, non frasi)
+    una riga pesa ~5 KB, quindi l'accumulo arriva a diversi GB di oggetti Python e la
+    macchina va in swap prima di scrivere il primo byte. In streaming la memoria resta
+    costante qualunque sia --n.
+
+    Ritorna (righe_o_None, conteggi, n_template_nuovi, n_valide, n_da_template_nuovi):
+    con out_path il primo elemento e' None (le righe sono sul file)."""
     # IMPORTANTE: ri-seminiamo DOPO l'import (gen imposta seed(42) a import-time).
     # Seed diverso per contributore => valori diversi => no duplicati nel dataset.
     random.seed(seed)
@@ -264,7 +272,12 @@ def generate(n, seed, handle, per_type, offline, boost):
     idx_pool = list(range(len(templates)))
 
     n_new = len(new_templates)
-    rows, label_counts, bad = [], {}, 0
+    rows, label_counts, bad = ([] if out_path is None else None), {}, 0
+    n_ok = n_da_nuovi = 0
+    out = None
+    if out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out = open(out_path, "w", encoding="utf-8")
     for _ in range(n):
         tid = random.choices(idx_pool, weights=weights, k=1)[0]
         text, entities = gen.build_example(tid, templates)
@@ -288,19 +301,20 @@ def generate(n, seed, handle, per_type, offline, boost):
             continue
         for e in entities:
             label_counts[e["label"]] = label_counts.get(e["label"], 0) + 1
-        rows.append(rec)
+        n_ok += 1
+        n_da_nuovi += rec["meta"]["new_template"]
+        if out is None:
+            rows.append(rec)
+        else:
+            out.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            if n_ok % 25_000 == 0:
+                print(f"  scritte {n_ok} righe ...", flush=True)
+    if out is not None:
+        out.close()
 
     if bad:
         print(f"  scartati {bad} esempi non validi (self-check)")
-    return rows, label_counts, n_new
-
-
-def write_local(rows, out_path):
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    return out_path
+    return rows, label_counts, n_new, n_ok, n_da_nuovi
 
 
 def upload_pr(local_path, path_in_repo, handle, n, seed, repo_id):
@@ -391,24 +405,28 @@ def main():
             else f"{tb.backend_name()} (--per-type {args.per_type})")
     print(f"handle={handle}  n={args.n}  seed={seed}  template={mode}")
 
-    rows, counts, n_new = generate(args.n, seed, handle, args.per_type, args.offline, boost)
+    # il nome definitivo contiene il numero di righe VALIDE, che si sa solo alla fine:
+    # si scrive su un temporaneo e si rinomina.
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    tmp_path = ROOT / "dataset" / "contributions" / f".{handle}-{stamp}.parziale.jsonl"
+    _, counts, n_new, n_ok, from_new = generate(
+        args.n, seed, handle, args.per_type, args.offline, boost, out_path=tmp_path)
     if n_new:
-        from_new = sum(1 for r in rows if r["meta"]["new_template"])
-        print(f"\n{from_new}/{len(rows)} esempi da template NUOVI di Gemini.")
-    print(f"Generati {len(rows)} esempi validi. Entita' per label:")
+        print(f"\n{from_new}/{n_ok} esempi da template NUOVI di Gemini.")
+    print(f"Generati {n_ok} esempi validi. Entita' per label:")
     for label, c in sorted(counts.items(), key=lambda x: -x[1]):
         print(f"  {label:18s} {c}")
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    fname = f"{handle}-{stamp}-seed{seed}-n{len(rows)}.jsonl"
-    local_path = write_local(rows, ROOT / "dataset" / "contributions" / fname)
+    fname = f"{handle}-{stamp}-seed{seed}-n{n_ok}.jsonl"
+    local_path = tmp_path.parent / fname
+    tmp_path.replace(local_path)
     print(f"\nScritto in locale -> {local_path}")
 
     if args.no_upload:
         print("\n(--no-upload) Nessun caricamento. Rilancia senza --no-upload per aprire la PR.")
         return
 
-    upload_pr(local_path, f"contributions/{fname}", handle, len(rows), seed, args.repo)
+    upload_pr(local_path, f"contributions/{fname}", handle, n_ok, seed, args.repo)
 
 
 if __name__ == "__main__":
