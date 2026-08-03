@@ -1,0 +1,12 @@
+# rizzo-pii — dipendenze aggiuntive per l'export ONNX (src/export/export_onnx.py)
+#
+# Tenute fuori da requirements.txt di proposito: servono solo a chi vuole
+# esportare il modello per un runtime ONNX o per il browser (Transformers.js).
+# Chi addestra o usa l'app desktop non ha motivo di installarle.
+#
+#   pip install -r requirements-onnx.txt
+
+optimum>=2.1
+optimum-onnx>=0.1
+onnx
+onnxruntime

@@ -5,6 +5,48 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-07-30 — Export ONNX (+ INT8): il modello gira anche nel browser
+
+Nuovo script `src/export/export_onnx.py` e documentazione in
+[docs/ONNX.md](ONNX.md). Nessun impatto su training, dataset o app desktop: è un
+percorso aggiuntivo, e le dipendenze stanno in un `requirements-onnx.txt`
+separato perché chi addestra non ha motivo di installarle.
+
+**Perché.** Oggi il modello è raggiungibile solo da PyTorch, quindi solo da
+Python. Con ONNX diventa utilizzabile da runtime nativi e soprattutto da
+**Transformers.js**, che apre browser, estensioni e WebAssembly — contesti in cui
+"anonimizza prima di mandare all'LLM" è esattamente il gesto dell'utente, ma dove
+un backend Python non si può installare. Il modello resta interamente locale:
+cambia il motore, non la garanzia di privacy.
+
+**Cosa fa.** Export fp32 via `optimum`, quantizzazione INT8 opzionale (profilo
+CPU scelto in automatico), e composizione di un `bundle/` nel layout atteso da
+Transformers.js (tokenizer alla radice, pesi in `onnx/`). Il modello si risolve
+con la stessa logica di `test_pii.py` (ultima versione + `PII_MODEL_DIR`).
+
+**Fedeltà INT8.** Il flag `--verify` confronta le predizioni fp32 e INT8 token per
+token, per un file **4× più piccolo** (1206,6 MB → 294,3 MB):
+
+| | v1.2.0 | v1.3.0 |
+|---|---:|---:|
+| Accordo complessivo | 98,51% | **99,26%** |
+| Accordo sui token di entità | 98,76% | **99,69%** |
+
+La quantizzazione è praticamente gratuita. Sulla v1.3.0 la misura è anche più
+severa: sugli stessi 537 token il modello ne etichetta 327 come entità invece di
+242, perché i subword interni degli identificatori lunghi non cadono più su `O`
+(`LABEL_ALL_SUBWORDS`, `7564553`). Lo script ha girato invariato sulla nuova
+versione — nessuna modifica necessaria per l'export.
+
+**Nota emersa durante il lavoro**, documentata in docs/ONNX.md: la pipeline
+`token-classification` di Transformers.js non restituisce gli offset carattere
+(`start`/`end`), che servono per la sostituzione reversibile. Con il tokenizer
+Metaspace di mmBERT si ricostruiscono in modo esatto dalle lunghezze cumulative
+dei `word`, a patto di passare `ignore_labels: []` (il default `['O']` scarta
+token e sfasa il conteggio). Lo snippet, verificato, è in docs/ONNX.md.
+
+---
+
 ## 2026-06-30 — Porta del backend 5000 → 5005 (conflitto AirPlay su macOS)
 
 Gli utenti macOS vedevano una **pagina bianca**: la porta **5000** è occupata di default

@@ -296,6 +296,12 @@ The desktop app **Rizzo PII** (Tauri) launches the Python/Flask backend as a bun
 "sidecar"; a CPU-only PyTorch build keeps it fully **offline** on Windows (WebView2), macOS and Linux.
 Packaging instructions in **[docs/BUILD.md](docs/BUILD.md)**.
 
+Where Python is not an option — a browser, an extension, a WebAssembly runtime — the model can be
+exported to **ONNX** and run with [Transformers.js](https://github.com/huggingface/transformers.js):
+`python src/export/export_onnx.py --verify`. INT8 quantization shrinks the weights ~4× (1.2 GB → 294 MB)
+at **98.8%** prediction agreement with fp32. Still entirely local: only the engine changes, not the
+privacy guarantee. See **[docs/ONNX.md](docs/ONNX.md)**.
+
 > **⬇️ Download.** Grab the ready-to-use build from the
 > **[Releases page](https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/latest)** — no Python or
 > setup required: a **Windows installer** (double-click), a **macOS `.dmg`** (Apple Silicon /
@@ -448,6 +454,7 @@ rizzo_pii/
 ├─ LICENSE                   MIT
 ├─ CONTRIBUTING.md           how to contribute (code, docs, data)
 ├─ requirements.txt          Python dependencies (see the cu128 note for Blackwell GPUs)
+├─ requirements-onnx.txt     extra dependencies for the ONNX export only
 ├─ .env.example              template for the optional W&B / Gemini keys
 ├─ CLAUDE.md                 operating instructions + environment constraints (GPU, CUDA…)
 ├─ report/                   the technical report (PDF + Typst source)
@@ -455,6 +462,7 @@ rizzo_pii/
 │   ├─ DATASET.md            full composition of train/validation
 │   ├─ TASSONOMIA_TAG.md     the 22 final tags and the merge decisions
 │   ├─ BUILD.md              desktop app build (Tauri recommended + PyInstaller legacy)
+│   ├─ ONNX.md               ONNX / INT8 export and Transformers.js usage
 │   └─ CHANGELOG.md          change log, with rationale
 ├─ src/
 │   ├─ data_pipeline/        data generation & preparation
@@ -468,6 +476,8 @@ rizzo_pii/
 │   │   ├─ train_pii.py               train, evaluate, save the model + metrics
 │   │   ├─ evaluate_pii.py            per-tag (P/R/F1) evaluation on validation_real
 │   │   └─ test_pii.py                CLI inference on the saved model
+│   ├─ export/
+│   │   └─ export_onnx.py             ONNX (+ INT8) export — see docs/ONNX.md
 │   ├─ inspect/                       read-only utilities (counts, lengths, checksums)
 │   └─ app/                           local anonymization app
 │       ├─ app.py                     Flask server: reversible anonymization + regex/checksum net
@@ -581,6 +591,7 @@ Vincoli: SOLO dati sintetici (mai PII reali). Se Gemini non è disponibile, ferm
 | [docs/TASSONOMIA_TAG.md](docs/TASSONOMIA_TAG.md) | The 22 final tags and the merges (`TAG_MAP`) |
 | [docs/FORMATO_DATI.md](docs/FORMATO_DATI.md) | Exact dataset row format for contributing data (JSONL/BIO/checksums) |
 | [docs/BUILD.md](docs/BUILD.md) | Desktop executable build (CPU, Windows) |
+| [docs/ONNX.md](docs/ONNX.md) | ONNX / INT8 export and usage from Transformers.js (browser) |
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | Change log for the pipeline, with rationale |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute code, docs and (above all) data |
 
