@@ -430,6 +430,40 @@ def detect_model(text):
 # --------------------------------------------------------------------------- #
 # Fusione modello + regex, ID reversibili, testo anonimizzato
 # --------------------------------------------------------------------------- #
+def _snap_to_token_spans(ents, text):
+    """Espande gli span del MODELLO ai confini dei token \\S+ che sovrappongono.
+
+    Su testo denso (paste Excel/TSV con tab e molte entita' ravvicinate) il modello
+    con aggregation_strategy=simple spezza spesso le entita' a meta' token
+    (es. 'DI' dentro 'VERDI', '7/07/20' dentro '27/07/2026', '6' dentro '1362').
+    Sostituire i frammenti lascia pezzi in chiaro nella stessa cella e produce lo
+    "sfasamento" visivo tra colonne. Dopo lo snap, frammenti nello stesso token
+    collassano sullo stesso span e il merge greedy ne tiene uno solo.
+
+    Solo source=modello: la rete regex ha gia' span precisi (e.g. CF senza la
+    virgola di chiusura), e allargarli a \\S+ ingloberebbe punteggiatura.
+
+    La ricostruzione del testo anonimizzato e' gia' a singolo pass sugli offset
+    originali (niente replace in-place): il bug #54 non era l'ordine di slicing.
+    """
+    if not ents or not text:
+        return ents
+    tokens = [(m.start(), m.end()) for m in re.finditer(r"\S+", text)]
+    if not tokens:
+        return ents
+    for e in ents:
+        if e.get("source") != "modello":
+            continue
+        s, en = e["start"], e["end"]
+        if s >= en:
+            continue
+        overlapping = [t for t in tokens if t[1] > s and t[0] < en]
+        if overlapping:
+            e["start"] = overlapping[0][0]
+            e["end"] = overlapping[-1][1]
+    return ents
+
+
 def _merge(cands, text):
     """Greedy senza overlap. Priorita': checksum-valido > fonte regex > score > lunghezza.
     La rete regex copre campi a forma molto specifica: per quegli span e' piu' affidabile
@@ -474,6 +508,8 @@ def analyze(text, excluded=None, mapping_enabled=True):
     cands = model_ents + detect_regex(text)
     if excluded:
         cands = [e for e in cands if e["label"] not in excluded]
+    # Prima del merge: allinea i frammenti del modello ai confini di token (issue #54).
+    cands = _snap_to_token_spans(cands, text)
     kept = _merge(cands, text)
 
     # ID reversibili: stesso (label, valore-normalizzato) -> stesso placeholder.
