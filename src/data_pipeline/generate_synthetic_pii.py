@@ -223,11 +223,37 @@ def _name_code(s):
         code = (c + _vow(s) + list("XXX"))[:3]
     return "".join(code)
 
-def codice_fiscale(given, surname, sex, year, month, day, city):
+# Omocodia. Se due persone ottengono lo stesso codice, l'Agenzia delle Entrate ne
+# differenzia uno sostituendo le cifre con una lettera, PARTENDO DA DESTRA, e
+# ricalcolando il carattere di controllo. Le sette posizioni numeriche del corpo
+# sono anno (6,7), giorno (9,10) e la parte numerica del codice catastale (12,13,14).
+# La tabella salta I e O perche' si confondono con 1 e 0.
+OMOCODIA_MAP = str.maketrans("0123456789", "LMNPQRSTUV")
+OMOCODIA_POS = (14, 13, 12, 10, 9, 7, 6)
+
+# Quota di CF omocodici nel sintetico. Nella popolazione reale sono una rarita'
+# (~24.000 casi), ma qui la frequenza non serve a imitare la realta': serve a far
+# vedere al modello la forma. A frequenza reale non ne incontrerebbe nessuno.
+OMOCODIA_RATE = 0.05
+
+
+def _apply_omocodia(body, n):
+    """Sostituisce con la lettera corrispondente le n cifre piu' a destra del corpo."""
+    chars = list(body)
+    for pos in OMOCODIA_POS[:n]:
+        chars[pos] = chars[pos].translate(OMOCODIA_MAP)
+    return "".join(chars)
+
+
+def codice_fiscale(given, surname, sex, year, month, day, city, omocodia=0):
+    """omocodia = quante cifre sostituire (0 = codice ordinario, max 7).
+    Il carattere di controllo si calcola DOPO la sostituzione, come fa l'Agenzia."""
     belfiore = CITIES[city][0]
     dd = day + 40 if sex == "F" else day
     body = (_surname_code(surname) + _name_code(given) +
             f"{year % 100:02d}" + MONTH_LETTERS[month - 1] + f"{dd:02d}" + belfiore)
+    if omocodia:
+        body = _apply_omocodia(body, omocodia)
     tot = sum((ODD[ch] if i % 2 == 0 else _even_val(ch)) for i, ch in enumerate(body))
     return body + chr(ord("A") + tot % 26)
 
@@ -282,7 +308,8 @@ def role(label):
 def cf_piece():
     g, s, sex = _person()
     _, (d, m, y) = _date()
-    return [(codice_fiscale(g, s, sex, y, m, d, random.choice(CITY_NAMES)), "CF")]
+    n = random.randint(1, 7) if random.random() < OMOCODIA_RATE else 0
+    return [(codice_fiscale(g, s, sex, y, m, d, random.choice(CITY_NAMES), omocodia=n), "CF")]
 
 def address():
     city = random.choice(CITY_NAMES)
