@@ -1,0 +1,6 @@
+# Il changelog si scrive solo in cima: ogni PR aggiunge una sezione nuova e ogni PR
+# confliggeva con la precedente (24 delle 29 aperte al 2026-08-03 confliggevano SOLO
+# qui). Il driver "union" tiene entrambi i lati invece di chiedere: per un registro in
+# cui nessuno riscrive le voci altrui e' la risoluzione giusta, e l'ordine fra due voci
+# dello stesso giorno non e' informazione che valga un conflitto a testa.
+docs/CHANGELOG.md merge=union
