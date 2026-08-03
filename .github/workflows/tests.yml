@@ -1,0 +1,42 @@
+name: tests
+
+# Su main e su ogni pull request. Il push e' filtrato su main apposta: senza il
+# filtro un branch aperto nello stesso repo farebbe girare due volte lo stesso
+# job, una per il push e una per la PR.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 e' il minimo dichiarato in requirements.txt, 3.14 la piu' recente.
+        python-version: ["3.11", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Nessun pip install: la suite in tests/ gira sulla sola libreria
+      # standard. I generatori di dati (src/data_pipeline/) non hanno
+      # dipendenze e src/app/detectors.py non importa torch/transformers/fitz,
+      # quindi la rete regex+checksum e' verificabile senza il modello.
+      # Installare torch qui costerebbe minuti e gigabyte per zero copertura
+      # in piu': l'inferenza del modello non e' sotto test.
+      - name: unittest discover
+        run: python -m unittest discover -v tests
