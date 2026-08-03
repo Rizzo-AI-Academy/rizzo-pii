@@ -48,6 +48,29 @@ sostituire i valori del caso precedente, con l'esito «Valori ripristinati».
 Ora «Pulisci» azzera `MAP`, rimuove `pii_map` da `localStorage` e ripulisce l'etichetta: è
 quello che l'UI già dichiara in italiano e in inglese («il dizionario **di questa sessione**…
 se hai chiuso e riaperto l'app, **carica il dizionario .json**»). Nient'altro cambia.
+## 2026-08-03 — La porta poteva risultare libera mentre era occupata (`src/app/server_config.py`)
+
+`port_available()` provava a legare solo `host:porta`. Se un altro programma ascolta su
+`0.0.0.0:5005`, il bind su `127.0.0.1:5005` riesce lo stesso: il controllo diceva **libera**,
+l'app partiva, e da quel momento non è definito chi serve le connessioni — l'utente può
+ritrovarsi sul server dell'altro programma. È il sintomo riportato nella #17: «You're speaking
+plain HTTP to an SSL-enabled server port».
+
+Ora si prova a legare anche l'indirizzo jolly, **senza** `SO_REUSEADDR`: quando ce l'ha anche
+il socket dell'altro programma — Werkzeug la imposta di default, quindi vale per qualsiasi
+Flask — su Windows il bind riesce lo stesso, ed è proprio il caso da rilevare. Se il jolly
+risulta occupato si guarda, con una connessione, se qualcuno risponde davvero su `host:porta`:
+potrebbe ascoltare su un'altra interfaccia, e allora la nostra è libera.
+
+| chi occupa la porta | prima | dopo |
+|---|---|---|
+| nessuno | libera | libera |
+| `127.0.0.1:5005` | occupata | occupata |
+| **`0.0.0.0:5005`** | **libera** | **occupata** |
+| un'altra interfaccia | libera | libera |
+
+Costo: 0,12 ms a chiamata quando la porta è libera. Vale per i tre entry point (`app.py`,
+`serve.py`, `desktop_app.py`), che escono con `EXIT_PORT_CONFLICT`, e per `/port-check`.
 
 ---
 

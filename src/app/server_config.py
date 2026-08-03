@@ -176,11 +176,32 @@ def resolve(cli_host=None, cli_port=None):
 
 
 def port_available(host: str, port: int) -> bool:
-    """True se la porta e' libera (tenta un bind effimero)."""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind((host, port))
-            return True
-    except OSError:
+    """True se la porta e' libera.
+
+    Il bind del solo host non basta: se un altro programma ascolta su 0.0.0.0:PORT,
+    il bind su 127.0.0.1:PORT riesce comunque e da quel momento non e' definito chi
+    serve le connessioni - l'utente puo' finire sul server dell'altro programma.
+    Quindi si prova a legare anche l'indirizzo jolly; se e' occupato si guarda, con
+    una connessione, se qualcuno risponde davvero su host:port (potrebbe ascoltare
+    su un'altra interfaccia, e allora la nostra e' libera).
+    """
+    def _bind(addr, riusa):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                if riusa:
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind((addr, port))
+                return True
+        except OSError:
+            return False
+
+    if not _bind(host, True):
         return False
+    # il jolly si prova SENZA SO_REUSEADDR: quando ce l'ha anche il socket dell'altro
+    # programma (Werkzeug la imposta di default) su Windows il bind riesce lo stesso,
+    # ed e' proprio il caso da rilevare.
+    if _bind("", False):
+        return True
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.3)
+        return s.connect_ex((host, port)) != 0
