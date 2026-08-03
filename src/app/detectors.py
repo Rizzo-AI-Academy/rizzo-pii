@@ -187,7 +187,7 @@ DETECTORS = [
 
 # Label della rete regex SENZA validatore forte: la forma da sola non basta a dire
 # "e' certamente questo campo". In _merge non ereditano la priorita' della rete regex,
-# cosi' il modello (o una segnalazione manuale) puo' sovrascriverle.
+# cosi' il modello puo' sovrascriverle.
 SOFT_REGEX_LABELS = {"DATE"}
 
 # Punteggiatura che chiude la frase e non fa parte dell'URL: "vedi https://x.it/pagina."

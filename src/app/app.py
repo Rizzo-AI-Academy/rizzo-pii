@@ -44,7 +44,6 @@ Preferenze di anonimizzazione (precedenza): campo nella richiesta > CLI --exclud
 """
 
 import bisect
-import json
 import os
 import re
 import secrets
@@ -298,16 +297,14 @@ def _is_word(ch):
 
 
 def _merge(cands, text):
-    """Greedy senza overlap. Priorita': manuale > checksum-valido > regex (non soft)
-    > score > lunghezza. Le entita' MANUALI vincono su tutto: sono l'unico caso in cui
-    un umano ha guardato quel preciso span e ha detto "questa e' una PII di tipo X",
-    quindi correggono anche un'etichetta sbagliata del modello.
+    """Greedy senza overlap. Priorita': checksum-valido > regex (non soft) > score
+    > lunghezza.
     La rete regex copre campi a forma molto specifica: per quegli span e' piu' affidabile
-    del modello (evita la frammentazione di CF/IBAN/carta in piu' pezzi)."""
+    del modello (evita la frammentazione di CF/IBAN/carta in piu' pezzi). Fanno eccezione
+    i tag in SOFT_REGEX_LABELS, dove la forma non ha un checksum a confermarla."""
     order = sorted(
         cands,
-        key=lambda e: (1 if e["source"] == "manuale" else 0,
-                       1 if e["validated"] else 0,
+        key=lambda e: (1 if e["validated"] else 0,
                        1 if (e["source"] == "regex"
                              and e["label"] not in SOFT_REGEX_LABELS) else 0,
                        e["score"], e["end"] - e["start"]),
@@ -364,44 +361,9 @@ def _norm(s):
     return re.sub(r"\s+", " ", s.strip()).casefold()
 
 
-def _manual_candidates(text, extra):
-    """Entita' segnalate A MANO dall'utente: [{"label": "FULLNAME", "value": "..."}].
-
-    Il valore viene cercato in TUTTE le sue occorrenze (case-insensitive, spazi
-    flessibili anche a cavallo di riga, confini di parola), cosi' una selezione sola
-    copre l'intero documento. Serve per cio' che il modello non tagga o tagga male:
-    tipicamente le intestazioni "COGNOME NOME" della modulistica, fuori dal dominio
-    legale su cui e' stato addestrato.
-    """
-    cands = []
-    for item in (extra or []):
-        if not isinstance(item, dict):
-            continue
-        label = re.sub(r"[^A-Z_]", "", str(item.get("label", "")).upper())[:24]
-        if label not in TAG_NAMES:
-            continue                                   # label sconosciuta: si ignora
-        toks = [re.escape(t) for t in _norm(item.get("value", "")).split(" ") if t]
-        if not toks:
-            continue
-        rx = re.compile(r"(?<!\w)" + r"\s+".join(toks) + r"(?!\w)", re.IGNORECASE)
-        for m in rx.finditer(text):
-            cands.append({
-                "label": label,
-                "start": m.start(),
-                "end": m.end(),
-                "score": 1.0,
-                "validated": True,
-                "source": "manuale",
-            })
-    return cands
-
-
-def analyze(text, excluded=None, mapping_enabled=True, extra=None):
+def analyze(text, excluded=None, mapping_enabled=True):
     """excluded = tag da NON anonimizzare: le entita' di quel tipo vengono scartate
     prima della fusione, quindi il valore resta in chiaro nel testo di output.
-
-    extra = entita' segnalate a mano dall'utente ([{label, value}]): cercate in tutto
-    il testo, hanno priorita' su modello e regex (vedi _merge).
 
     mapping_enabled=False -> anonimizzazione DEFINITIVA: nessun dizionario
     placeholder->valore, e i segmenti-entita' non riportano il testo originale
@@ -413,9 +375,6 @@ def analyze(text, excluded=None, mapping_enabled=True, extra=None):
     cands = model_ents + detect_regex(text)
     if excluded:
         cands = [e for e in cands if e["label"] not in excluded]
-    # le manuali si aggiungono DOPO il filtro: sono una richiesta esplicita dell'utente
-    # su quello span, quindi l'esclusione per tag non le tocca
-    cands += _manual_candidates(text, extra)
     kept = _merge(cands, text)
 
     # ID reversibili: stesso (label, valore-normalizzato) -> stesso placeholder.
@@ -557,20 +516,6 @@ def _uploaded_file():
                  if k in request.files and request.files[k].filename), None)
 
 
-def _parse_extra(raw):
-    """Entita' manuali dalla richiesta: lista [{label, value}] come JSON (multipart)
-    o gia' deserializzata (JSON body). Input malformato -> nessuna entita' manuale,
-    mai un errore: e' un di piu' dell'utente, non deve far fallire l'analisi."""
-    if raw is None or raw == "":
-        return []
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except ValueError:
-            return []
-    return raw if isinstance(raw, list) else []
-
-
 @app.route("/analyze", methods=["POST"])
 def analyze_route():
     up = _uploaded_file()
@@ -583,13 +528,11 @@ def analyze_route():
             return jsonify({"error": f"Impossibile leggere il file: {e}"}), 400
         raw_excl = request.form.get("exclude_tags")
         raw_map = request.form.get("include_mapping")
-        extra = _parse_extra(request.form.get("extra"))
     else:
         payload = request.get_json(silent=True) or {}
         text = payload.get("text", "")
         raw_excl = payload.get("exclude_tags")
         raw_map = payload.get("include_mapping")
-        extra = _parse_extra(payload.get("extra"))
 
     text = (text or "").strip()
     if not text:
@@ -599,7 +542,7 @@ def analyze_route():
     excl = server_config.parse_tag_list(raw_excl) if raw_excl is not None else EXCLUDED_TAGS
     keep_map = (server_config.parse_bool(raw_map, MAPPING_ENABLED)
                 if raw_map is not None else MAPPING_ENABLED)
-    out = analyze(text, excl, keep_map, extra)
+    out = analyze(text, excl, keep_map)
     out["source_text"] = text
     return jsonify(out)
 
@@ -657,12 +600,10 @@ def _build_anonymized_pdf():
         except Exception as e:                       # PDF corrotto / protetto
             raise _ReqError(f"Impossibile leggere il file: {e}")
         raw_excl = request.form.get("exclude_tags")
-        extra = _parse_extra(request.form.get("extra"))
     else:
         payload = request.get_json(silent=True) or {}
         name, data, text = "", b"", payload.get("text", "")
         raw_excl = payload.get("exclude_tags")
-        extra = _parse_extra(payload.get("extra"))
 
     text = (text or "").strip()
     if not text:
@@ -673,7 +614,7 @@ def _build_anonymized_pdf():
 
     excl = server_config.parse_tag_list(raw_excl) if raw_excl is not None else EXCLUDED_TAGS
     # mapping_enabled=True e' interno: il risultato non esce da questa funzione.
-    res = analyze(text, excl, mapping_enabled=True, extra=extra)
+    res = analyze(text, excl, mapping_enabled=True)
     if not res["mapping"]:
         raise _ReqError("Nessuna PII trovata: non c'e' niente da "
                         "anonimizzare in questo documento.", 422)
@@ -1207,13 +1148,6 @@ PAGE = r"""
               <div class="sub" id="mapSub">Ogni PII riceve un ID: potrai ripristinare i valori veri dalla risposta dell'LLM.</div>
             </div>
           </div>
-          <!-- rete di sicurezza per cio' che il modello non tagga (o tagga male):
-               si seleziona il testo nell'editor, si sceglie il tipo e si aggiunge -->
-          <div class="row" id="manualRow">
-            <select id="mlabel" class="lang" title="Tipo di PII" aria-label="Tipo di PII"></select>
-            <button class="ghost" id="addsel">➕ <span data-i18n="addsel">Aggiungi selezione come PII</span></button>
-          </div>
-          <div id="mchips" style="display:none;margin:6px 0 0"></div>
           <div class="row">
             <button class="btn lg" id="go">🛡️ <span data-i18n="go">Anonimizza</span></button>
             <button class="ghost" id="clear" data-i18n="clear">Pulisci</button>
@@ -1377,7 +1311,6 @@ let EXCL = new Set();      // tag da NON anonimizzare (scelta corrente)
 let TAGS_LOADED = false;   // /settings ha risposto -> possiamo mandare gli override
 let MAPPING = true;        // dizionario reversibile on/off (switch nella card di input)
 let SRC_DOC = null;        // PDF caricato, renderizzato dal server (colonna sinistra)
-let EXTRA = [];            // entita' segnalate a mano: [{label, value}]
 let OUT_DOC = null;        // PDF anonimizzato (colonna destra), generato pigramente
 let VIEW = 'prev';         // vista attiva a destra: prev | text | pdf
 
@@ -1398,9 +1331,6 @@ const T = {
   empty_prev:"L'anteprima con le PII evidenziate apparirà qui.",
   anon_ph:"Il testo anonimizzato apparirà qui.",
   copy:"Copia per ChatGPT", dl:"Scarica dizionario", dlpdf:"Scarica PDF anonimizzato",
-  addsel:"Aggiungi selezione come PII",
-  t_select_first:"Seleziona prima nell'editor il testo da anonimizzare",
-  t_manual_added:"Aggiunta manuale: rilancia l'anonimizzazione",
   t_pdf_making:"Genero il PDF…", t_pdf_ok:"PDF anonimizzato scaricato",
   t_pdf_err:"Errore nella creazione del PDF",
   t_pdf_warn:(r,s)=>"PDF scaricato · ATTENZIONE: "+(r+s)+" valori sono rimasti in chiaro"
@@ -1464,9 +1394,6 @@ const T = {
   empty_prev:"The preview with highlighted PII will appear here.",
   anon_ph:"The anonymized text will appear here.",
   copy:"Copy for ChatGPT", dl:"Download dictionary", dlpdf:"Download anonymized PDF",
-  addsel:"Add selection as PII",
-  t_select_first:"First select in the editor the text to anonymize",
-  t_manual_added:"Manual entry added: run the anonymization again",
   t_pdf_making:"Building the PDF…", t_pdf_ok:"Anonymized PDF downloaded",
   t_pdf_err:"Error while creating the PDF",
   t_pdf_warn:(r,s)=>"PDF downloaded · WARNING: "+(r+s)+" values were left in clear"
@@ -1621,36 +1548,6 @@ async function onFile(f){
   }
 }
 
-/* ---- entita' manuali ---- */
-function fillLabelSelect(){
-  const sel=$('mlabel');if(!sel||!TAGS.length)return;
-  const cur=sel.value;
-  sel.innerHTML=TAGS.map(t=>`<option value="${t.tag}">${t.tag}</option>`).join('');
-  if(cur)sel.value=cur;
-}
-function renderChips(){
-  const c=$('mchips');c.innerHTML='';c.style.display=EXTRA.length?'':'none';
-  EXTRA.forEach((e,i)=>{
-    const col=colors(e.label);const el=document.createElement('span');
-    el.className='chip';el.title=e.value;el.style.cursor='pointer';
-    const v=e.value.length>26?e.value.slice(0,26)+'…':e.value;
-    el.innerHTML=`<span class="sw" style="background:${col.bd}"></span>`+
-                 `${e.label}: ${escapeHtml(v)} <span class="n">✕</span>`;
-    el.onclick=()=>{EXTRA.splice(i,1);renderChips();run();};
-    c.appendChild(el);
-  });
-}
-$('addsel').onclick=()=>{
-  const s=$('src');
-  const val=(s.value.substring(s.selectionStart,s.selectionEnd)||'').trim();
-  if(!val){toast(tt('t_select_first'),false);return;}
-  const label=$('mlabel').value||'PII';
-  if(!EXTRA.some(e=>e.label===label&&e.value.toLowerCase()===val.toLowerCase()))
-    EXTRA.push({label,value:val});
-  renderChips();
-  run();                    // rianalisi immediata: l'aggiunta si vede subito
-};
-
 /* ---- analyze ---- */
 async function run(){
   const file=$('pdf').files[0];const text=$('src').value.trim();
@@ -1663,10 +1560,8 @@ async function run(){
     const excl=TAGS_LOADED?[...EXCL]:null;
     if(file){const fd=new FormData();fd.append('pdf',file);
       if(excl){fd.append('exclude_tags',excl.join(','));fd.append('include_mapping',MAPPING?'1':'0');}
-      if(EXTRA.length)fd.append('extra',JSON.stringify(EXTRA));
       resp=await fetch('/analyze',{method:'POST',body:fd});}
     else{const body={text};if(excl){body.exclude_tags=excl;body.include_mapping=MAPPING;}
-      if(EXTRA.length)body.extra=EXTRA;
       resp=await fetch('/analyze',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify(body)});}
     const d=await resp.json();
@@ -1779,11 +1674,9 @@ function buildOutPdf(){
       let resp;
       if(file){const fd=new FormData();fd.append('pdf',file);
         if(excl)fd.append('exclude_tags',excl.join(','));
-        if(EXTRA.length)fd.append('extra',JSON.stringify(EXTRA));
-        resp=await fetch('/pdf/preview',{method:'POST',body:fd});}
+          resp=await fetch('/pdf/preview',{method:'POST',body:fd});}
       else{const body={text};if(excl)body.exclude_tags=excl;
-        if(EXTRA.length)body.extra=EXTRA;
-        resp=await fetch('/pdf/preview',{method:'POST',headers:{'Content-Type':'application/json'},
+          resp=await fetch('/pdf/preview',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify(body)});}
       const d=await resp.json();
       if(!resp.ok){toast(d.error||tt('t_pdf_err'),false);return null;}
@@ -1855,7 +1748,6 @@ $('dictFile').onchange=e=>{const f=e.target.files[0];if(!f)return;
 /* ---- input helpers ---- */
 $('go').onclick=run;
 $('clear').onclick=()=>{$('src').value='';$('pdf').value='';$('dropTxt').innerHTML=tt('drop');
-  EXTRA=[];renderChips();
   DATA=null;$('prev').style.display='none';$('emptyPrev').style.display='';
   $('anon').value='';$('meta').innerHTML='';$('legend').innerHTML='';
   $('dictCard').style.display='none';$('ulock').textContent='';
@@ -1949,7 +1841,7 @@ async function loadTags(){
   try{
     const d=await (await fetch('/settings')).json();
     TAGS=d.tags||[];EXCL=new Set(d.excluded_tags||[]);TAGS_META=d;TAGS_LOADED=true;
-    MAPPING=d.mapping_enabled!==false;renderMapping();fillLabelSelect();
+    MAPPING=d.mapping_enabled!==false;renderMapping();
   }catch(e){/* server vecchio o offline: si continua con il comportamento di default */}
 }
 function renderTags(){
