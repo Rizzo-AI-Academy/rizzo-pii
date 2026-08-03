@@ -10,7 +10,7 @@
 
 use std::fs;
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
@@ -104,13 +104,23 @@ fn save_config_file(host: &str, port: u16) {
 /// un altro processo, o il server non risponde come previsto, restituisce false.
 fn is_our_backend(host: &str, port: u16) -> bool {
     let addr_str = format!("{}:{}", host, port);
-    let sock_addr: std::net::SocketAddr = match addr_str.parse() {
-        Ok(a) => a,
+    // il nome va risolto: "localhost:5005".parse::<SocketAddr>() e' un errore, il parse
+    // accetta solo IP letterali. E si provano TUTTI gli indirizzi risolti, non il primo:
+    // "localhost" da' prima ::1, mentre il backend puo' ascoltare solo su 127.0.0.1.
+    let addrs: Vec<_> = match (host, port).to_socket_addrs() {
+        Ok(it) => it.collect(),
         Err(_) => return false,
     };
-    let mut stream = match TcpStream::connect_timeout(&sock_addr, Duration::from_millis(500)) {
-        Ok(s) => s,
-        Err(_) => return false,
+    // i 500 ms sono il budget dell'intera chiamata, non di ogni indirizzo: poll_backend
+    // la ripete 900 volte e la somma sarebbe l'attesa prima dell'errore.
+    let attesa = Duration::from_millis(500) / addrs.len().max(1) as u32;
+    let mut stream = match addrs
+        .into_iter()
+        .filter_map(|a| TcpStream::connect_timeout(&a, attesa).ok())
+        .next()
+    {
+        Some(s) => s,
+        None => return false,
     };
     let _ = stream.set_read_timeout(Some(Duration::from_millis(2000)));
     let req = format!(
