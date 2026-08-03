@@ -17,6 +17,11 @@ Sicurezza chiave API: NON si incolla in chiaro. Si legge da variabile d'ambiente
 
 Modello: default gemini-3.5-flash (override con la env var GEMINI_MODEL).
 
+BACKEND LOCALE (nessuna chiave, niente esce dalla macchina): se e' impostata
+LLM_BASE_URL i template li scrive un LLM locale via endpoint OpenAI-compatibile.
+  export LLM_BASE_URL=http://127.0.0.1:8080/v1   # llama.cpp / Ollama / vLLM / LM Studio
+  export LLM_MODEL=nome-del-modello
+
 Uso:  python llm_template_bank.py --per-type 3
 Output: legal_templates.json  (lista di {"id", "doc_type", "text"})
 """
@@ -28,6 +33,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -66,6 +72,16 @@ SLOT_RE = re.compile(r"\{(\w+)\}")
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
 
+# --- backend alternativo: un LLM LOCALE (endpoint OpenAI-compatibile) ------------------
+# Se LLM_BASE_URL e' impostata, i template vengono scritti da quel modello invece che da
+# Gemini: nessuna chiave API, nessun prompt che esce dalla macchina. Coerente con lo scopo
+# del progetto (e chi non ha una chiave Google puo' comunque contribuire dati).
+#   export LLM_BASE_URL=http://127.0.0.1:8080/v1   # llama.cpp / Ollama / vLLM / LM Studio
+#   export LLM_MODEL=nome-del-modello
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL")
+LLM_MODEL = os.environ.get("LLM_MODEL", "local-model")
+LLM_API_KEY = os.environ.get("LLM_API_KEY", "sk-no-key-required")
+
 PROMPT = """Sei un giurista italiano. Scrivi un {doc_type} REALISTICO e completo (da 8 a 18 righe),
 nel linguaggio tecnico-giuridico autentico usato nei tribunali italiani.
 
@@ -87,11 +103,66 @@ un titolo seguito da un nome (es. "Sig. Bianchi", "avv. Verdi"): scrivi "il/la {
 Restituisci SOLO il testo del documento, senza titoli di contorno, senza commenti, senza markdown."""
 
 
+def backend_name():
+    """Descrizione del backend in uso, per i log."""
+    return f"locale {LLM_MODEL} @ {LLM_BASE_URL}" if LLM_BASE_URL else f"Gemini {MODEL}"
+
+
+def have_backend():
+    """True se c'e' un modo per far scrivere i template (locale o Gemini)."""
+    return bool(LLM_BASE_URL or API_KEY or os.environ.get("GEMINI_API_KEY"))
+
+
+def call_llm(prompt, retries=3):
+    """Fa scrivere un template al backend configurato: LLM locale se LLM_BASE_URL
+    e' impostata, altrimenti Gemini."""
+    if LLM_BASE_URL:
+        return call_local_openai(prompt, retries)
+    return call_gemini(prompt, retries)
+
+
+def call_local_openai(prompt, retries=3):
+    """Endpoint OpenAI-compatibile (llama.cpp server, Ollama, vLLM, LM Studio...)."""
+    url = LLM_BASE_URL.rstrip("/")
+    if not url.endswith("/chat/completions"):
+        url += "/chat/completions"
+    body = json.dumps({
+        "model": LLM_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.9,
+        "max_tokens": 1400,
+        # Sui modelli "reasoning" serviti in locale l'intero output puo' finire nel campo
+        # reasoning_content lasciando 'content' VUOTO (visto con gemma-4-12B su llama.cpp:
+        # 175 s di pensiero e zero testo). Qui il pensiero si disattiva e, per sicurezza,
+        # sotto si accetta reasoning_content come ripiego.
+        "chat_template_kwargs": {"enable_thinking": False},
+    }).encode()
+    headers = {"Content-Type": "application/json",
+               "Authorization": f"Bearer {LLM_API_KEY}"}
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, data=body, headers=headers)
+            with urllib.request.urlopen(req, timeout=600) as r:
+                data = json.load(r)
+            msg = data["choices"][0]["message"]
+            text = (msg.get("content") or msg.get("reasoning_content") or "").strip()
+            if text:
+                return text
+            print("  risposta vuota dal modello locale")
+        except urllib.error.HTTPError as e:
+            print(f"  HTTP {e.code}: {e.read().decode()[:200]}")
+        except (urllib.error.URLError, KeyError, IndexError) as e:
+            print(f"  errore: {e}")
+        time.sleep(2 * (attempt + 1))
+    return None
+
+
 def call_gemini(prompt, retries=3):
     key = API_KEY or os.environ.get("GEMINI_API_KEY")
     if not key:
         sys.exit("ERRORE: imposta API_KEY nel file oppure la variabile d'ambiente "
-                 "GEMINI_API_KEY (chiave NUOVA, non quella incollata in chat).")
+                 "GEMINI_API_KEY (chiave NUOVA, non quella incollata in chat).\n"
+                 "  Oppure usa un LLM locale: export LLM_BASE_URL=http://127.0.0.1:8080/v1")
     url = ENDPOINT.format(model=MODEL, key=key)
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
@@ -178,11 +249,39 @@ def find_stray_names(text):
     return stray
 
 
+def non_latin_char(text):
+    """Primo carattere alfabetico NON latino, se presente. Un modello locale (piccolo o
+    molto quantizzato) puo' infilare un ideogramma in mezzo alla prosa italiana; se il
+    template passa, quel carattere finisce in ogni esempio che lo usa."""
+    for ch in text:
+        if ch.isalpha():
+            try:
+                if "LATIN" not in unicodedata.name(ch):
+                    return ch
+            except ValueError:
+                return ch
+    return None
+
+
+def normalizza_escape(text):
+    r"""Converte gli escape LETTERALI (i due caratteri '\' + 'n') in veri a capo.
+
+    Il modello a volte scrive la sequenza invece dell'a capo. Non e' un problema
+    estetico: iniettando un valore subito dopo, il tokenizzatore incolla la 'n'
+    all'inizio dell'entita' ('\n09/06/1965' -> token 'n09'), che resta O mentre il
+    resto dell'entita' diventa I-DATE. Ne esce una riga con BIO malformato (I- senza
+    B-), inutilizzabile in training. Misurato: 1 template su 237 conteneva la
+    sequenza e ha rotto 721 righe su 200.000."""
+    return text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+
+
 def clean_and_validate(text):
-    """Pulisce il markdown, verifica i segnaposto e scarta i template con PII inline."""
+    """Pulisce il markdown, verifica i segnaposto e scarta i template con PII inline
+    o con caratteri non latini."""
     if not text:
         return None
     text = re.sub(r"^```.*?\n|```$", "", text.strip(), flags=re.MULTILINE).strip()
+    text = normalizza_escape(text)
     slots = set(SLOT_RE.findall(text))
     if not slots:
         return None                       # nessun segnaposto -> inutile
@@ -192,6 +291,10 @@ def clean_and_validate(text):
     stray = find_stray_names(text)
     if stray:
         print(f"  scartato: probabili nomi inline non taggati {sorted(set(stray))[:8]}")
+        return None
+    bad = non_latin_char(text)
+    if bad:
+        print(f"  scartato: carattere non latino {bad!r} (artefatto del modello)")
         return None
     return text
 
@@ -215,7 +318,7 @@ def main():
     done = ok = skip = 0
     t0 = time.time()
     print(f"Genero {total} template ({len(DOC_TYPES)} tipi x {args.per_type}) "
-          f"con Gemini [{MODEL}]\n")
+          f"con [{backend_name()}]\n")
 
     def save():
         with open(args.out, "w", encoding="utf-8") as f:
@@ -229,8 +332,8 @@ def main():
             pct = 100 * done // total
             print(f"[{done:>3}/{total} | {pct:>3}%] OK={ok} scartati={skip} | "
                   f"trascorso {elapsed:>4.0f}s | ETA {eta:>4.0f}s | {doc_type} ...")
-            raw = call_gemini(PROMPT.format(doc_type=doc_type, slot_list=slot_list,
-                                            slot_hints=SLOT_HINTS))
+            raw = call_llm(PROMPT.format(doc_type=doc_type, slot_list=slot_list,
+                                         slot_hints=SLOT_HINTS))
             text = clean_and_validate(raw)
             if text:
                 templates.append({"id": tid, "doc_type": doc_type, "text": text})

@@ -204,9 +204,12 @@ def gen_new_templates(per_type, boost):
     PII inline o segnaposto non gestiti (stessa validazione di llm_template_bank).
     Se 'boost' e' presente, chiede a Gemini di usare spesso i segnaposto dei tag
     potenziati -> piu' esempi per i tag sotto-rappresentati."""
-    if not (os.environ.get("GEMINI_API_KEY") or tb.API_KEY):
-        sys.exit("ERRORE: GEMINI_API_KEY non impostata.\n"
-                 "  Ottieni una chiave su https://aistudio.google.com/apikey e poi:\n"
+    if not tb.have_backend():
+        sys.exit("ERRORE: nessun backend LLM configurato.\n"
+                 "  (a) LLM LOCALE, senza chiave e senza far uscire nulla dalla macchina:\n"
+                 "    export LLM_BASE_URL=http://127.0.0.1:8080/v1   # llama.cpp / Ollama / vLLM\n"
+                 "    export LLM_MODEL=nome-del-modello\n"
+                 "  (b) Gemini: chiave su https://aistudio.google.com/apikey e poi:\n"
                  "    export GEMINI_API_KEY=...        (PowerShell: $env:GEMINI_API_KEY=...)\n"
                  "  Oppure usa --offline per generare dai soli template built-in.")
 
@@ -219,7 +222,7 @@ def gen_new_templates(per_type, boost):
                 "i seguenti segnaposto: " + " ".join(f"{{{s}}}" for s in boost_slots) + ".")
 
     total = len(tb.DOC_TYPES) * per_type
-    print(f"Scrivo {total} NUOVI template con Gemini [{tb.MODEL}] "
+    print(f"Scrivo {total} NUOVI template con [{tb.backend_name()}] "
           f"({len(tb.DOC_TYPES)} tipi x {per_type}) ...")
 
     out, done, ok = [], 0, 0
@@ -228,14 +231,14 @@ def gen_new_templates(per_type, boost):
             done += 1
             prompt = tb.PROMPT.format(doc_type=doc_type, slot_list=slot_list,
                                       slot_hints=tb.SLOT_HINTS) + hint
-            text = tb.clean_and_validate(tb.call_gemini(prompt))
+            text = tb.clean_and_validate(tb.call_llm(prompt))
             if text:
                 out.append(text)
                 ok += 1
             print(f"  [{done:>3}/{total}] {doc_type:42s} {'OK' if text else 'scartato'}")
     print(f"Template nuovi validi: {ok}/{total}")
     if not out:
-        sys.exit("ERRORE: nessun template valido da Gemini. Riprova o usa --offline.")
+        sys.exit("ERRORE: nessun template valido dal modello. Riprova o usa --offline.")
     return out
 
 
@@ -384,7 +387,8 @@ def main():
     print("rizzo-pii — contribuzione dati sintetici al dataset community")
     print("⚠️  Solo dati SINTETICI: nessuna PII reale viene prodotta o caricata.")
     print("=" * 70)
-    mode = "built-in (offline)" if args.offline else f"Gemini (--per-type {args.per_type})"
+    mode = ("built-in (offline)" if args.offline
+            else f"{tb.backend_name()} (--per-type {args.per_type})")
     print(f"handle={handle}  n={args.n}  seed={seed}  template={mode}")
 
     rows, counts, n_new = generate(args.n, seed, handle, args.per_type, args.offline, boost)

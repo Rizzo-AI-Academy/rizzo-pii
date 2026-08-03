@@ -314,6 +314,32 @@ stesso token collassano e ne resta uno. La rete regex non viene snappata (span g
 precisi; allargarli a `\S+` ingloberebbe punteggiatura, es. la virgola dopo un CF).
 Regressione in `tests/test_tsv_anonymize.py` con l'esempio dell'issue. Nessun impatto
 sul training.
+## 2026-07-30 — I template si possono scrivere con un LLM **locale** (senza chiave Gemini)
+
+Per contribuire dati serviva una chiave Google, e i prompt uscivano dalla macchina: attrito
+d'ingresso per chi vuole aiutare, e una stonatura in un progetto il cui punto è **non mandare
+niente a terzi**. `llm_template_bank.py` ha ora un secondo backend: se è impostata
+**`LLM_BASE_URL`** (endpoint OpenAI-compatibile — llama.cpp server, Ollama, vLLM, LM Studio) i
+template li scrive quel modello, in locale. Senza la variabile nulla cambia: si usa Gemini
+esattamente come prima.
+
+`call_llm()` smista tra i due backend; `backend_name()` lo stampa nei log; `have_backend()`
+sostituisce il controllo della sola `GEMINI_API_KEY` in `contribute_dataset.py`, che ora spiega
+entrambe le strade. Le guardie sui template (segnaposto ammessi, nomi inline) sono le stesse:
+il testo di un modello locale passa gli stessi controlli.
+
+**Dettaglio non ovvio, costato una diagnosi:** un modello *reasoning* servito in locale può
+mettere **tutto** l'output in `reasoning_content` e restituire `content` **vuoto** (visto con
+gemma-4-12B su llama.cpp: 175 s di pensiero, zero testo). La richiesta manda quindi
+`chat_template_kwargs: {enable_thinking: false}` e, per sicurezza, accetta `reasoning_content`
+come ripiego.
+
+**Nuova guardia `non_latin_char()`** in `clean_and_validate()`: un modello locale quantizzato può
+infilare un **ideogramma** in mezzo alla prosa italiana (`"oltre a槽 interessi"`), e il template
+passava tutti i controlli esistenti — il carattere finiva poi in **ogni** esempio generato da quel
+template (visto: 87 righe su 5.000 da un solo template). Ora un template con caratteri non latini
+viene scartato. La guardia è utile anche col backend Gemini, ma è coi modelli locali che il caso
+si presenta davvero.
 
 ---
 
