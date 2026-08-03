@@ -297,6 +297,23 @@ deterministici alla rete regex+checksum (stesso meccanismo di CF/IBAN, priorità
 - **`DOCID`**: `R.G.`/`RG`/`R.G.N.R.`, `Prot.`/`protocollo`, `Rep.`/`repertorio` + numero (con anno opzionale)
 
 Nessun impatto su training e pipeline dati.
+## 2026-08-03 — Fix allineamento colonne su paste Excel/TSV (issue #54)
+
+Incollando un intervallo multi-riga/multi-colonna da Excel, il testo anonimizzato
+usciva con celle "sfasate": frammenti di placeholder mescolati a pezzi del valore
+originale (`VER[FULLNAME_2]`, `[DATE_1][DATE_2]26`, `13[BUILDINGNUM_1]2`).
+
+**Causa**: non era l'ordine di sostituzione dei placeholder (`analyze()` ricostruiva
+già il testo in un unico pass sugli offset). Su TSV densi il modello spezza spesso
+le entità a metà token; il merge greedy teneva i frammenti non sovrapposti e la
+sostituzione lasciava residui nella stessa cella.
+
+**Fix** (`src/app/app.py`): prima del merge, `_snap_to_token_spans()` espande gli
+span `source=modello` ai confini dei token `\S+` che sovrappongono. Frammenti nello
+stesso token collassano e ne resta uno. La rete regex non viene snappata (span già
+precisi; allargarli a `\S+` ingloberebbe punteggiatura, es. la virgola dopo un CF).
+Regressione in `tests/test_tsv_anonymize.py` con l'esempio dell'issue. Nessun impatto
+sul training.
 
 ---
 
