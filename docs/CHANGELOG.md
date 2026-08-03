@@ -399,6 +399,19 @@ determina a contrarre).
 Questa voce dipende dalla validazione della tassonomia (voce sotto): le quattro label grezze vanno
 aggiunte all'insieme ammesso, altrimenti il validatore le rifiuta — che è esattamente il
 comportamento desiderato per una label non prevista.
+## 2026-08-01 — Banca template offline (+60 template, senza Gemini)
+
+Nuovi script `author_templates.py` e `author_templates2.py` (root del repo): scrivono
+template legali italiani con **soli segnaposto** `{SLOT}` (nessuna PII reale), seguendo il
+principio *"LLM autore, codice etichettatore"*. I template sono validati con la **guardia del
+repo** (`llm_template_bank.clean_and_validate` + slot ∈ `generate_synthetic_pii.SLOTS`, niente
+nomi inline) e accodati a `dataset/synthetic/legal_templates.json`.
+
+Motivazione: consentono di **arricchire il pool offline da 25 a 85 template senza
+`GEMINI_API_KEY`**, aumentando la varietà strutturale (incl. slot lista `NAMELIST`/`ORGLIST`/
+`MIXEDLIST` e `PROVINCE`) per mitigare l'overfit strutturale sui tag IT-legali rari
+(`CATASTO`/`DOCID`/`CF`/`TARGA`). Complementare al percorso Gemini raccomandato in
+`CONTRIBUTING.md`, non sostitutivo. Nessun impatto sul training.
 
 ---
 
