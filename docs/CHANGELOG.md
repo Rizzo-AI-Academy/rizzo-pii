@@ -34,6 +34,46 @@ Scelte che contano:
 `Dockerfile.linux` resta quello che era: l'ambiente di **build** dei bundle .deb/AppImage, non
 un modo di far girare l'app. Il `.dockerignore` ora riammette `src/app/` (era `*`, pensato per
 il contesto vuoto di `Dockerfile.linux`, che infatti non fa nessun `COPY`).
+## 2026-08-04 — Ispezionare una contribuzione: `src/inspect/inspect_contribution.py`
+
+Le Pull Request di dati arrivano più in fretta di quanto si riesca a leggerle, e l'unica cosa che
+il nome del file dichiara — il numero di righe — non dice se il contributo insegna qualcosa.
+Chi revisiona non ha modo di distinguere un file piccolo e ricco da uno grande e ripetitivo senza
+rifare la misura a mano, file per file. Il nuovo ispettore la fa in pochi secondi e con `--json`
+si esegue su tutta la coda, che così si può **ordinare per informazione invece che per peso**.
+
+Fa due cose che separate non bastano:
+
+1. **Errori duri.** Ricalcola tutto da zero — tokenizzazione (la regex del formato), offset delle
+   entità, coerenza BIO (`I-` senza `B-`), entità sovrapposte, checksum CF/PIVA/IBAN/Luhn, lingua,
+   caratteri non latini — senza fidarsi dello script che ha generato il file. **Uscita ≠ 0**, così
+   vale da cancello in uno script. La tassonomia ammessa si **legge dal repo** (`TAG_FINALI` e
+   `TAG_GREZZI` di `contribute_dataset.py`, `TAG_MAP` di `train_pii.py`) con una regex e non con un
+   `import`: una lista scritta a mano qui resterebbe indietro in silenzio e bloccherebbe contributi
+   corretti — aggiungere forme sotto un tag esistente (CIG, CUP, polizza, matricola → `DOCID`)
+   tocca solo quella mappa. Con un `import` servirebbero torch e transformers, che con
+   l'ispezione di un `.jsonl` non c'entrano nulla e non stanno nella CI dei test.
+
+2. **Informazione.** Quante cose diverse contiene: **strutture distinte** (template di origine +
+   sequenza delle label), righe per struttura, quota di righe nelle dieci più frequenti, testi
+   duplicati, composizione per label. Facoltativa la sovrapposizione dei testi con contribuzioni
+   già unite (`--contro FILE`, `--confronta` che le scarica).
+
+La grana è la struttura e non lo scheletro (testo con le entità sostituite dalle label), e la
+ragione è misurata: **lo scheletro punisce i template migliori.** Un template di bolletta in cui
+ogni valore iniettato è etichettato produce 1 solo scheletro su 500 righe; un atto che contiene un
+nome di tribunale non etichettato ne produce 343, perché basta che cambi quel nome. Ordinando per
+scheletri il secondo sembra quattro volte più ricco del primo, ed è il contrario. Lo scheletro
+resta come ripiego dichiarato per i file senza `template_id`.
+
+La memoria non dipende dal peso del file: dei testi si tengono impronte da 8 byte.
+
+Test: `tests/test_inspect_contribution.py`, 19 casi. Per **ogni** tipo di errore duro c'è un file
+che lo contiene e si pretende che venga contato — un controllo che accetta tutto è peggio di
+nessun controllo, perché fa credere che la coda sia stata verificata. Un test costruisce il caso
+bolletta/atto e verifica i due numeri (1 scheletro contro 3, una struttura ciascuno).
+
+---
 
 ## 2026-08-03 — `_merge()` era quadratica: 100 s su un documento lungo (`app.py`)
 

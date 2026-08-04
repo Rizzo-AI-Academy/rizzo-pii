@@ -66,6 +66,11 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
 - `validate_checksums.py` — ricalcola i checksum CF/IBAN/PIVA; **blueprint della rete regex+checksum**
   da affiancare al modello in produzione.
 - `inspect_ai4privacy.py` (conteggi lingue/tag), `inspect_lengths.py` (lunghezze), `inspect_no_iban.py`.
+- `inspect_contribution.py` — ispeziona un `.jsonl` **contribuito**: errori duri (token, offset,
+  BIO, checksum, tassonomia letta da `TAG_MAP`/`TAG_FINALI`; uscita ≠ 0, quindi vale da cancello)
+  e quanta informazione porta — **strutture distinte** (template + sequenza delle label), righe
+  per struttura, duplicati. La struttura e non lo scheletro: lo scheletro punisce i template che
+  etichettano ogni valore iniettato. Con `--json` si ispeziona in serie una coda di PR.
 
 **App di anonimizzazione locale — `src/app/` (+ packaging in `docs/BUILD.md`):**
 - `server_config.py` — **configurazione host/porta** (+ `prefs.json` con tag esclusi e stato del
