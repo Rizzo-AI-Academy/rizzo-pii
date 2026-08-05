@@ -34,6 +34,56 @@ Scelte che contano:
 `Dockerfile.linux` resta quello che era: l'ambiente di **build** dei bundle .deb/AppImage, non
 un modo di far girare l'app. Il `.dockerignore` ora riammette `src/app/` (era `*`, pensato per
 il contesto vuoto di `Dockerfile.linux`, che infatti non fa nessun `COPY`).
+## 2026-08-04 — L'ora perdeva i minuti (`detectors.py`)
+
+`TIME` è il tag più debole della valutazione indipendente della issue #18 (69,4%) e l'unico
+senza una regex ad affiancare il modello. Il modello **taglia i minuti** e la metà che resta
+finisce in chiaro accanto al placeholder:
+
+    'Ingresso ore 18:28'  ->  'Ingresso ore [TIME_1], uscita ore 18[TIME_2]30.'
+
+La forma coi due punti è chiusa (0-23 : 0-59, secondi opzionali) e si presta a una regex
+deterministica.
+
+**Il punto non è accettato.** `10.30` ha la stessa forma di `versione 1.30`, `capitolo 3.15`,
+`euro 10.30` e delle coordinate: ammettendolo la recall sale ma compaiono falsi positivi su
+metà delle frasi di prova. È il formato più fragile per il modello (28% di fallimenti misurati)
+e resta scoperto: senza contesto non è distinguibile.
+
+`TIME` sta in **`SOFT_REGEX_LABELS`**, come `DATE`, ed è il punto su cui regge tutto il resto.
+Una data spesso **include** l'ora, e in un timestamp ISO (`2026-03-15T10:30:00`) la data la
+trova solo il modello, in un'unica span: se `TIME` avesse la priorità della rete regex
+scalzerebbe quella span in fusione e lascerebbe `2026-03-` **in chiaro**, la data del documento
+sotto un segnaposto che dice il contrario. Da soft perde contro il modello e vince solo dove
+nessuno reclama l'ora.
+
+Misure con il **modello vero**, sulla pipeline completa (`detect_model` + `detect_regex` +
+`_merge`), su 120 frasi della forma «il DD/MM/AAAA HH:MM», che è come si scrive una convocazione:
+
+| | main | dopo |
+|---|---:|---:|
+| ora intera lasciata in chiaro | 45/120 | **0/120** |
+| pezzi di data lasciati in chiaro | 0/120 | **0/120** |
+| `2026-03-15T10:30:00` | `[DATE]` | **`[DATE]`** |
+| recall su 6.000 ore isolate | — | **6.000/6.000** |
+| costo su 2 MB | 0,74 s | 0,83 s |
+
+**Falsi positivi: 6 su 16** frasi senza ora, tutti della forma `h:mm` con l'ora a una cifra —
+scale catastali (`Scala 1:25`), proporzioni, diluizioni, riferimenti (`Giovanni 3:16`,
+`normativa 4:12`) e coordinate sessagesimali (`12:30:15`). Non si tolgono senza contesto, e la
+direzione dell'errore è quella accettabile per un anonimizzatore: mascherare in più è
+reversibile, lasciare in chiaro no. La forma col punto (`versione 1.30`, `euro 10.30`,
+`45.4642`) non produce match, per costruzione.
+
+**Limite dichiarato**: l'intervallo scritto col trattino attaccato (`10:30-11:45`) non viene
+riconosciuto — le due guardie si annullano a vicenda. Con il trattino spaziato (`10:30 - 11:45`)
+funziona.
+
+`tests/test_ora.py` copre la forma, il rifiuto del punto, le ore fuori scala e — con `app.py`
+importabile — la fusione contro una `DATE` del modello. Sulla versione senza `TIME` soft quel
+test fallisce, e mostra `2026-03-15T10:30:00` che diventa `TIME '15T10:30:00'`.
+
+---
 
 ## 2026-08-03 — `_merge()` era quadratica: 100 s su un documento lungo (`app.py`)
 
