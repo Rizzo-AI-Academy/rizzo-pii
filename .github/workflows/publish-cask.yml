@@ -1,0 +1,99 @@
+name: publish-cask
+
+# A ogni release pubblicata (niente prerelease; una draft "published" fa
+# scattare un solo run), aggiorna la cask Homebrew e la sincronizza nel tap
+# Rizzo-AI-Academy/homebrew-rizzo-pii. Vedi homebrew/README.md.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  update-cask:
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Scarica il DMG macOS del release
+        id: dmg
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/dmg
+          gh release download "${{ github.event.release.tag_name }}" \
+            --repo "${{ github.repository }}" --dir /tmp/dmg \
+            --pattern "*-macOS-arm64.dmg" || true
+          if ls /tmp/dmg/*.dmg >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "Nessun DMG macOS nella release: cask non aggiornata."
+          fi
+
+      - name: Calcola sha256 e versione, aggiorna e pubblica la cask
+        if: steps.dmg.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          VERSION: ${{ github.event.release.tag_name }}
+          SHA256_OUT: /tmp/sha256.txt
+        run: |
+          files=(/tmp/dmg/*.dmg)
+          [ "${#files[@]}" -eq 1 ] || { echo "Attesi 1 DMG, trovati ${#files[@]}"; exit 1; }
+          SHA256="$(shasum -a 256 "${files[0]}" | awk '{print $1}')"
+          VERSION="${TAG#v}"
+          python3 - "$VERSION" "$SHA256" <<'EOF'
+          import re, pathlib, sys
+          version, sha256 = sys.argv[1], sys.argv[2]
+          p = pathlib.Path("homebrew/Casks/rizzo-pii.rb")
+          s = p.read_text()
+          s = re.sub(r'version "[^"]*"', f'version "{version}"', s, count=1)
+          s = re.sub(r'sha256 "[^"]*"', f'sha256 "{sha256}"', s, count=1)
+          p.write_text(s)
+          print(f"cask aggiornata: version={version} sha256={sha256}")
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet homebrew/Casks/rizzo-pii.rb; then
+            echo "Cask invariata: niente commit."
+          else
+            git add homebrew/Casks/rizzo-pii.rb
+            git commit -m "chore(brew): cask rizzo-pii v${VERSION} (auto, release ${TAG})"
+            git push origin HEAD:main
+            echo "Cask aggiornata su main."
+          fi
+
+      - name: Sincronizza nel tap homebrew-rizzo-pii
+        if: steps.dmg.outputs.found == 'true'
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_REPO_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "Secret TAP_REPO_TOKEN assente: sync manuale del tap richiesta."
+            exit 0
+          fi
+          VERSION="${TAG#v}"
+          rm -rf /tmp/tap
+          git clone https://github.com/Rizzo-AI-Academy/homebrew-rizzo-pii.git /tmp/tap
+          cd /tmp/tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p Casks
+          cp "$GITHUB_WORKSPACE/homebrew/Casks/rizzo-pii.rb" Casks/rizzo-pii.rb
+          git add Casks/rizzo-pii.rb
+          if git diff --cached --quiet; then
+            echo "Tap gia' aggiornato: niente commit."
+            exit 0
+          fi
+          git commit -m "chore: cask rizzo-pii v${VERSION} (auto, release ${TAG})"
+          git push "https://x-access-token:${TAP_TOKEN}@github.com/Rizzo-AI-Academy/homebrew-rizzo-pii.git" HEAD:main
+          echo "Tap aggiornato."

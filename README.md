@@ -32,6 +32,8 @@
 
 <sub>🪟 **Windows installer** · 🍎 **macOS** (Apple Silicon) · 🐧 **Linux AppImage** — all available now</sub>
 
+<sub>🍺 **macOS via Homebrew**: `brew tap Rizzo-AI-Academy/rizzo-pii && brew install --cask rizzo-pii`</sub>
+
 </div>
 
 **`rizzo-pii:0.3B`** is a lightweight, CPU-friendly, **Italian-first** token-classification

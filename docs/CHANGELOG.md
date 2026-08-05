@@ -5,6 +5,20 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-08-05 — Installazione macOS via Homebrew (cask + tap personale, auto-publish)
+
+Nuova via di distribuzione per macOS: cask `rizzo-pii` in [`homebrew/Casks/rizzo-pii.rb`](../homebrew/Casks/rizzo-pii.rb)
+(Apple Silicon solo, come il DMG rilasciato), letta da Homebrew tramite il tap
+`Rizzo-AI-Academy/homebrew-rizzo-pii`. Setup e checklist in [`homebrew/README.md`](../homebrew/README.md)
+e [§ "Distribuzione via Homebrew"](BUILD.md).
+
+Il workflow `.github/workflows/publish-cask.yml` automatizza il mantenimento: alla pubblicazione
+di una release scarica il DMG, ricalcola lo `sha256`, aggiorna `version`/`sha256` della cask su
+`main` e sincronizza il tap (richiede il secret `TAP_REPO_TOKEN`; senza, la sync resta manuale).
+Motivazione: il `sha256` cambia a ogni release e un URL `latest` non è accettabile per Homebrew,
+quindi la cask va rigenerata a ogni rilascio — meglio un workflow che un passo manuale da
+dimenticare.
+
 ## 2026-08-03 — `_merge()` era quadratica: 100 s su un documento lungo (`app.py`)
 
 Il controllo delle sovrapposizioni confrontava **ogni** candidato con **tutta** la lista già

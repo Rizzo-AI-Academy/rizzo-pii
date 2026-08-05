@@ -132,6 +132,29 @@ Note specifiche di macOS:
 
 ---
 
+## Distribuzione via Homebrew (cask, macOS)
+
+Gli utenti macOS con Homebrew possono installare il `.dmg` rilasciato con un comando:
+
+```bash
+brew tap Rizzo-AI-Academy/rizzo-pii
+brew install --cask rizzo-pii
+```
+
+La cask vive in [`homebrew/Casks/rizzo-pii.rb`](../homebrew/Casks/rizzo-pii.rb) (Apple Silicon
+solo, come il DMG attuale) e Homebrew la legge dal **tap** dedicato
+`Rizzo-AI-Academy/homebrew-rizzo-pii`, dove va copiata in `Casks/`. Setup e flusso completi:
+**[`homebrew/README.md`](../homebrew/README.md)**.
+
+**Auto-publish**: il workflow [`.github/workflows/publish-cask.yml`](../.github/workflows/publish-cask.yml)
+scatta alla **pubblicazione** di una release (niente prerelease), scarica l'asset
+`*-macOS-arm64.dmg`, calcola lo `sha256`, aggiorna `version`/`sha256` nella cask, committa su
+`main` e sincronizza il tap (serve il secret `TAP_REPO_TOKEN`: PAT fine-grained con write sui
+soli contenuti del tap). Se manca il token, o `main` ha la branch protection, la sync è manuale
+(checklist in [`homebrew/README.md`](../homebrew/README.md)).
+
+---
+
 ## PyInstaller + Inno Setup (legacy, browser)
 
 ## Componenti
