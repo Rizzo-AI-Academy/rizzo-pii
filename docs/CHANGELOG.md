@@ -34,6 +34,38 @@ Scelte che contano:
 `Dockerfile.linux` resta quello che era: l'ambiente di **build** dei bundle .deb/AppImage, non
 un modo di far girare l'app. Il `.dockerignore` ora riammette `src/app/` (era `*`, pensato per
 il contesto vuoto di `Dockerfile.linux`, che infatti non fa nessun `COPY`).
+## 2026-08-05 — Il riavvio cancellava il log dell'avvio fallito (`serve.py`)
+
+Quando il backend non parte, lo splash di Tauri scrive *"Vedi il log in
+`%LOCALAPPDATA%\rizzo-pii\backend.log`"* (`lib.rs`). Ma `serve.py` apriva quel file in
+**troncamento** (`"w"`), e il sidecar viene rilanciato: da `retry_backend`, o dall'utente
+che riapre l'app per riprodurre il problema. Il rilancio azzerava il log dell'avvio
+fallito — cioè esattamente quello che il messaggio chiede di andare a leggere. Il lato
+Rust (`tlog`) scrive già in append: fuori linea era solo il lato Python.
+
+Ora il log è in **append**, con un'intestazione datata per avvio (`===== avvio … (pid …)`)
+per distinguere le sessioni, e rotazione su `backend.log.1` oltre 1 MB.
+
+Il controllo della dimensione avviene **solo all'avvio**, quindi non è un tetto sulla singola
+sessione: un backend che gira a lungo scrive quanto vuole. È il ripetersi degli avvii a restare
+limitato — 60 avvii da 60 KB (3,6 MB scritti) lasciano 1,56 MB su disco. Nota che `main`,
+troncando ogni volta, teneva al massimo una sessione; così ne tiene due.
+
+Dopo una rotazione il log fresco dice dove è finito il precedente. Serve: lo splash manda
+l'utente su `backend.log`, e senza quella riga chi arriva subito dopo il superamento della
+soglia non trova la traccia dell'avvio fallito, che la rotazione ha appena spostato in `.1`.
+
+La rotazione è in un `try` suo: se `os.replace` non riesce si accoda al file esistente senza
+perdere niente. Su Windows questo copre anche il caso di un'altra istanza che tiene il file
+aperto (sharing violation); su Linux e macOS `rename` ignora i descrittori aperti, quindi lì la
+rotazione riesce comunque e l'istanza già in esecuzione continua a scrivere sull'inode che ora
+si chiama `.1`.
+
+`tests/test_log_backend.py` (5 test) esegue il **preambolo vero** ritagliato da `serve.py`
+in un `LOCALAPPDATA` usa e getta — il file non è importabile, a import time carica il
+modello. Sul codice di `main` **3 dei 5 falliscono**.
+
+---
 
 ## 2026-08-03 — `_merge()` era quadratica: 100 s su un documento lungo (`app.py`)
 
