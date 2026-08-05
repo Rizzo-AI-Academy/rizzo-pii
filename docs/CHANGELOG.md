@@ -34,6 +34,48 @@ Scelte che contano:
 `Dockerfile.linux` resta quello che era: l'ambiente di **build** dei bundle .deb/AppImage, non
 un modo di far girare l'app. Il `.dockerignore` ora riammette `src/app/` (era `*`, pensato per
 il contesto vuoto di `Dockerfile.linux`, che infatti non fa nessun `COPY`).
+## 2026-08-04 — Anche `hard_split()` era quadratica (`pdf_export.py`)
+
+`text_to_pdf()` impagina il testo anonimizzato quando l'input non è un PDF (incolla, `.md`,
+`.txt`). `hard_split()` spezza le "parole" più larghe della riga e a **ogni giro** misurava e
+ricopiava tutta la stringa residua: O(n²) sulla lunghezza della parola. Basta una riga senza
+spazi — un JSON incollato, un base64, una riga di tabella con i soli tab — perché "Scarica PDF
+anonimizzato" diventi inutilizzabile.
+
+Le due colonne sono misurate **nello stesso giro sulla stessa macchina**, mediana di 3; conta
+il rapporto, non i secondi assoluti, e cresce con la lunghezza perché la vecchia è quadratica:
+
+| caratteri di una parola | prima | dopo | |
+|---:|---:|---:|---:|
+| 2.000 | 0,18 s | **0,070 s** | 3x |
+| 8.000 | 3,75 s | **0,434 s** | 9x |
+| 16.000 | 14,36 s | **0,915 s** | 16x |
+| 32.000 | 60,44 s | **1,76 s** | 34x |
+| 128.000 | ~16 min (estrapolata dalla curva) | **7,25 s** | |
+| 1.000.000 | — | **73 s** | |
+
+In una riga larga `width` non entrano più di `cap` caratteri qualunque essi siano: oltre quel
+punto non c'è niente da misurare. Si lavora su un prefisso lungo `cap` e si avanza con un
+indice invece di ricopiare la coda. Sul testo normale si esce dopo una sola misura, come prima:
+lo scarto misurato sta dentro la banda di rumore del banco, che con **lo stesso codice nei due
+bracci** dà +8,4%.
+
+`cap` si ricava dal glifo **più stretto** del repertorio, non da `"l"`. Il testo è già forzato
+in latin-1 poche righe sopra, quindi il repertorio è chiuso e il minimo si misura (191 chiamate,
+0,8 ms una volta per documento). Con `"l"` il conto sbagliava per difetto: in helv l'apostrofo
+misura 2,0055 pt a corpo 10,5 contro i 2,331 di `"l"`, quindi `cap` valeva 209 dove in colonna
+ne entrano 240 — una parola di apostrofi stava dentro la finestra, il ciclo usciva subito e
+accodava tutta la coda su **una riga sola**, larga fino a 2.022 pt su una colonna di 483 in una
+pagina di 595. I caratteri oltre il bordo sparivano dal PDF scaricato senza nessun errore: su
+300 apostrofi se ne rileggevano 269.
+
+Comportamento identico a prima, verificato sulla `text_to_pdf()` vera confrontando il **testo
+estratto** dai due PDF (i byte non sono confrontabili, l'`/ID` è casuale): 444 casi in 11
+alfabeti, compresi quelli dominati dal glifo più stretto, **0 differenze** e **0 righe fuori
+pagina**. `tests/test_pdf_hard_split.py` copre il caso, e con il `cap` calibrato su `"l"`
+fallisce. `smoke_pdf_export.py` 23/23 PASS.
+
+---
 
 ## 2026-08-03 — `_merge()` era quadratica: 100 s su un documento lungo (`app.py`)
 
