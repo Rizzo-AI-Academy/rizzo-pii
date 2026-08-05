@@ -34,6 +34,46 @@ Scelte che contano:
 `Dockerfile.linux` resta quello che era: l'ambiente di **build** dei bundle .deb/AppImage, non
 un modo di far girare l'app. Il `.dockerignore` ora riammette `src/app/` (era `*`, pensato per
 il contesto vuoto di `Dockerfile.linux`, che infatti non fa nessun `COPY`).
+## 2026-08-04 — La carta con la scadenza attaccata restava in chiaro (`detectors.py`)
+
+Il modo normale di scrivere una carta è numero **e scadenza di seguito**. Il detector
+`CREDITCARDNUMBER` è avido e ingloba il mese, il Luhn fallisce sulla sequenza allungata, e
+`strict=True` scarta tutto: il numero resta **in chiaro** nel documento anonimizzato.
+
+    'Carta 4111 1111 1111 1111 12/26'  ->  nessun match
+    'PAN 4111-1111-1111-1111 12/26'    ->  nessun match
+    'Carta 4111 1111 1111 1111 scadenza 12/26'  ->  trovata (basta una parola in mezzo)
+
+Quando il Luhn fallisce si riprova tagliando la coda, con tre vincoli che la tengono stretta:
+il taglio deve cadere su un **separatore già presente**, quel che resta fuori dev'essere fra
+**due e quattro cifre**, e deve **somigliare a una scadenza** (mese fra 1 e 12). Le lunghezze
+provate, dalla più lunga, sono le stesse che accetta `luhn_ok` (19…13): se la lista si ferma
+prima, di un PAN di 17 cifre se ne coprono 16 e l'ultima resta leggibile **accanto al
+segnaposto**, che è peggio di non mascherare affatto.
+
+Il minimo di due cifre non è un dettaglio: una cifra sola supera «mese fra 1 e 12» nove volte
+su dieci, e da sola faceva quasi raddoppiare i falsi positivi sui numeri di 17 cifre.
+
+Misure su PAN **sintetici** col Luhn calcolato apposta: 8.400 numeri, lunghezze da 13 a 19,
+tre spaziature (compatta, spazi, trattini), quattro code (`12/26`, `12 26`, `1226`, `03/28`).
+
+| | main | dopo |
+|---|---:|---:|
+| PAN con la scadenza attaccata, in chiaro | 65,8% (5.524/8.400) | **0** |
+| PAN **senza** scadenza attaccata, in chiaro (controllo) | 0 | **0** |
+| falsi positivi, 16 cifre + 1 (15.000 numeri di pratica) | 9,79% | **9,79%** |
+| falsi positivi, 16 cifre + 2 | 9,70% | 10,97% |
+| falsi positivi, 16 cifre + 3 | 10,27% | 11,40% |
+| match su **120.911 testi reali** (Ai4Privacy) | 891 | **891, span identiche** |
+
+Sul corpus reale non cambia niente: stesse 891 span, **zero differenze** su 120.911 testi. Il
+costo si paga solo dove il Luhn ha già fallito, quindi sulla prosa è nel rumore; su un documento
+fitto di numeri lunghi (estratto conto, tabulato) è dell'ordine del 20%, non zero.
+
+`tests/test_carta_scadenza.py` copre i due modi di sbagliare del taglio; due dei cinque test
+falliscono su `main`.
+
+---
 
 ## 2026-08-03 — `_merge()` era quadratica: 100 s su un documento lungo (`app.py`)
 
