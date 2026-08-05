@@ -54,6 +54,11 @@ import generate_synthetic_pii as _gen  # noqa: E402
 
 ALLOWED_SLOTS = set(_gen.SLOTS)
 
+# Quelli che il prompt propone all'LLM. GIVEN e SURNAME il codice li sa riempire, ma
+# servono ai template tabellari (nome e cognome in colonne separate): in un testo
+# corrente "{GIVEN} {SURNAME}" farebbe di un nome due entita'.
+PROMPT_SLOTS = ALLOWED_SLOTS - {"GIVEN", "SURNAME"}
+
 # breve legenda per i segnaposto il cui uso non e' ovvio dal nome (guida l'LLM a
 # posizionarli nel contesto giusto, in molti documenti diversi -> varieta' strutturale)
 SLOT_HINTS = """  {ORG}     = ragione sociale di una societa'/studio legale/banca (la PARTE, non il tribunale)
@@ -322,7 +327,7 @@ def main():
     ap.add_argument("--append", action="store_true", help="accoda al file esistente")
     args = ap.parse_args()
 
-    slot_list = "\n".join(f"  {{{s}}}" for s in sorted(ALLOWED_SLOTS))
+    slot_list = "\n".join(f"  {{{s}}}" for s in sorted(PROMPT_SLOTS))
     templates = []
     if args.append and os.path.exists(args.out):
         templates = json.load(open(args.out, encoding="utf-8"))

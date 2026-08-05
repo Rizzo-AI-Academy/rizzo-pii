@@ -362,6 +362,45 @@ Senza la correzione i test danno 7 errori.
 
 ---
 
+## 2026-08-04 — Nelle tabelle il cognome resta in chiaro (`generate_synthetic_pii.py`)
+
+Un elenco esportato da un gestionale o da Excel tiene **nome e cognome in colonne separate**.
+Su tabelle di sei righe, con `analyze()`, i nomi che restano leggibili:
+
+| separatore | modello del 4 agosto | v1.5.0, 16 semi | nome e cognome nella stessa cella |
+|---|---:|---:|---:|
+| tab | 7,9% (38/480) | 0,2% (4/1.920) | 0 |
+| virgola | 12,9% (62/480) | 0,05% (1/1.920) | 0 |
+| punto e virgola (il default di Excel italiano) | 17,1% (82/480) | 0,9% (17/1.920) | 0 |
+
+Con la v1.5.0 il problema è quasi chiuso: resta il punto e virgola, intorno all'1%. I template
+servono a non farlo tornare con un modello nuovo, e il beneficio atteso è piccolo.
+
+Il taglio esiste già nei sintetici ma è raro: su 20.000 esempi dai soli 33 template integrati,
+`nome SEP cognome` compare circa 700 volte, col punto e virgola circa 200. Tre template a
+colonne lo portano a circa 4.200 e 2.000. Con anche i 72 template generati dall'LLM i tre
+nuovi pesano circa un terzo di così.
+
+I due slot nuovi, `{GIVEN}` e `{SURNAME}`, il codice li sa riempire (stanno in `SLOTS`, e la
+guardia li ammette), ma il prompt non li propone all'LLM: `llm_template_bank.PROMPT_SLOTS` è
+`ALLOWED_SLOTS` senza di loro, usato sia da `llm_template_bank.py` sia da
+`contribute_dataset.py`. In un testo corrente `{GIVEN} {SURNAME}` farebbe di un nome due entità.
+
+Il caso col TAB questo generatore non può esprimerlo: `TOKEN_RE` scarta gli spazi, quindi una
+riga separata da tab diventa la stessa sequenza di token di `Nome Cognome`. Se servisse, andrebbe
+gestito in `analyze()` con un separatore che il modello vede come tale: non con uno spazio, che
+farebbe di nome e cognome un solo FULLNAME a cavallo di due celle.
+
+Nella tabella dei pagamenti l'importo va **fra virgolette**: `{AMOUNT}` contiene sempre la
+virgola decimale (`€ 62.880,00`), quindi senza sarebbero cinque campi sotto un'intestazione di
+quattro — ed è anche ciò che scrive un export CSV vero.
+
+Test: `tests/test_tabelle_sintetiche.py` (BIO valide, campi per riga, slot non proposti
+all'LLM). Generatore eseguito end-to-end, 0 anomalie. **Per avere effetto serve rigenerare i
+sintetici e riaddestrare.**
+
+---
+
 ## 2026-08-03 — `_merge()` era quadratica: 100 s su un documento lungo (`app.py`)
 
 Il controllo delle sovrapposizioni confrontava **ogni** candidato con **tutta** la lista già
