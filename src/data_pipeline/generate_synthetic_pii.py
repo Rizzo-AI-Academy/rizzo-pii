@@ -311,6 +311,16 @@ def _name_pieces():
 def full_name():
     return _name_pieces()
 
+# Un elenco esportato da un gestionale o da Excel tiene nome e cognome in COLONNE
+# separate: fra i due c'e' un separatore, non uno spazio. Nei sintetici quella forma e'
+# rara (714 occorrenze su 20.000 esempi, e col punto e virgola solo 216) e sul separatore
+# il modello perde il cognome: vedi i template in fondo.
+def given_piece():
+    return [(_person()[0], "GIVENNAME")]
+
+def surname_piece():
+    return [(_person()[1], "SURNAME")]
+
 def role(label):
     # nome intero taggato col ruolo legale, stesso mix di ordini
     return [("".join(v for v, _ in _name_pieces()), label)]
@@ -601,6 +611,7 @@ SLOTS = {
     "CIG": cig_piece, "CUP": cup_piece, "POLIZZA": polizza_piece,
     "MATRICOLA": matricola_piece,
     "NAMELIST": name_list, "ORGLIST": org_list, "MIXEDLIST": mixed_list,
+    "GIVEN": given_piece, "SURNAME": surname_piece,
 }
 
 # --------------------------------------------------------------------------- #
@@ -677,6 +688,38 @@ TEMPLATES = [
     "Allegato A - anagrafica:\n{MIXEDLIST}",
     "{NAMELIST}",
     "{ORGLIST}",
+
+    # Tabelle esportate da un gestionale o da Excel: nome e cognome in colonne separate.
+    # Su tabelle di sei righe (480 nomi per configurazione, quattro semi) il modello
+    # lascia in chiaro il 7,9% dei nomi col TAB, il 12,9% con la virgola e il 17,1% col
+    # punto e virgola, che e' il separatore di Excel italiano. Con nome e cognome nella
+    # stessa cella: zero. Il separatore resta un token (TOKEN_RE tiene la punteggiatura e
+    # scarta gli spazi), quindi qui il modello vede davvero "cognome dopo un punto e
+    # virgola". Il caso col TAB, invece, questo generatore NON puo' esprimerlo: TOKEN_RE
+    # scarta gli spazi, quindi una riga separata da tab diventa la stessa sequenza di
+    # token di "Cognome Nome" e il tab non arriva mai al training. Il 7,9% misurato col
+    # tab resta quindi scoperto: per chiuderlo servirebbe normalizzare i tab in analyze()
+    # prima di passare il testo al modello, che e' un'altra modifica e un altro file.
+    "Elenco dei ricorrenti allegato al ricorso.\n"
+    "nome;cognome;codice fiscale;email\n"
+    "{GIVEN};{SURNAME};{CF};{EMAIL}\n"
+    "{GIVEN};{SURNAME};{CF};{EMAIL}\n"
+    "{GIVEN};{SURNAME};{CF};{EMAIL}",
+
+    # L'importo va fra virgolette: {AMOUNT} contiene sempre la virgola decimale
+    # ("EUR 62.880,00"), quindi senza sarebbero cinque campi sotto un'intestazione
+    # di quattro. E' esattamente cio' che scrive un export CSV vero.
+    "Riepilogo dei pagamenti disposti.\n"
+    "nome,cognome,iban,importo\n"
+    "{GIVEN},{SURNAME},{IBAN},\"{AMOUNT}\"\n"
+    "{GIVEN},{SURNAME},{IBAN},\"{AMOUNT}\"\n"
+    "{GIVEN},{SURNAME},{IBAN},\"{AMOUNT}\"",
+
+    "Registro delle presenze.\n"
+    "cognome;nome;telefono\n"
+    "{SURNAME};{GIVEN};{PHONE}\n"
+    "{SURNAME};{GIVEN};{PHONE}\n"
+    "{SURNAME};{GIVEN};{PHONE}",
 ]
 
 SLOT_RE = re.compile(r"\{(\w+)\}")
