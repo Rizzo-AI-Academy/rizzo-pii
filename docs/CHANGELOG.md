@@ -34,6 +34,70 @@ Scelte che contano:
 `Dockerfile.linux` resta quello che era: l'ambiente di **build** dei bundle .deb/AppImage, non
 un modo di far girare l'app. Il `.dockerignore` ora riammette `src/app/` (era `*`, pensato per
 il contesto vuoto di `Dockerfile.linux`, che infatti non fa nessun `COPY`).
+## 2026-08-04 — Un file di testo veniva letto con la codifica sbagliata (`app.py`)
+
+`_text_from_bytes()` provava le codifiche in ordine `utf-8-sig`, `utf-16`, `latin-1`. Ma il
+codec `utf-16` **senza BOM accetta qualunque sequenza di lunghezza pari**: un `.txt` o un `.md`
+in latin-1 con un numero pari di byte non arrivava mai al terzo tentativo.
+
+    vero   : "Nicolò: Con atto di citazione l'avvocato Susanna Grassi, nell'interesse..."
+    letto  : "楎潣›潃⁮瑡潴搠⁩楣慴楺湯⁥❬癡潶慣潴匠獵湡慮䜠慲獳Ⱪ渠汥❬湩整敲獳..."
+
+Non è un difetto cosmetico: su un file letto così i rilevatori trovano **zero** entità. Il
+documento non viene anonimizzato, viene reso illeggibile.
+
+Ma anche `utf-8` accetta troppo: il **byte nullo** è un carattere legittimo, quindi in testa
+alla catena si prende gli `utf-16` di testo ASCII e li rende mojibake allo stesso modo. Nessuno
+dei due codec può fare da guardia all'altro.
+
+Il rimedio non è indovinare la codifica: è **togliere i byte nulli dal testo restituito**.
+In un utf-16 latino il byte alto è proprio quello nullo, quindi un file finito su una
+codifica a 8 bit esce `M\0a\0r\0i\0o` — e tolti i nulli il testo torna **esatto**, con le
+PII di nuovo trovabili. Vale anche per i file misti: la parte cinese o greca resta sporca,
+ma il corpo italiano con le PII no.
+
+Riconoscere l'utf-16 contando i byte nulli, invece, sbaglia in entrambe le direzioni, e le
+due versioni che ci ho provato erano **peggio di `main`**: un utf-16 con dentro del cinese
+ne ha pochi e resta mojibake, un file con la testa azzerata ne ha tanti e viene distrutto,
+e una tabella disegnata a cornice (`─`, U+2500) ne ha abbastanza su entrambe le parità da
+mandare in stallo qualunque soglia.
+
+Resta il resto della catena: `utf-16` solo col BOM, e `cp1252` prima di `latin-1` — è quello
+che scrivono Word e il Blocco note italiani, e i due differiscono su euro e virgolette
+tipografiche.
+
+Su 300 atti sintetici, metà con accenti italiani (`letto male` = il round-trip fallisce):
+
+| codifica del file caricato | prima | dopo |
+|---|---:|---:|
+| utf-8, utf-8 col BOM, utf-16 col BOM | 0 | **0** |
+| cp1252 (Windows italiano) | 30,7% | **0** |
+| latin-1 | 30,7% | **0** |
+| **utf-16-le senza BOM** | 50,0% | **0** |
+| **utf-16-be senza BOM** | 100% | **0** |
+
+Su questo corpus `latin-1` e `cp1252` coincidono, perché gli accenti italiani hanno gli stessi
+byte nelle due codifiche: a distinguerle sono l'euro e le virgolette tipografiche, e lì `main`
+sbaglia dove ora si legge bene.
+
+Il metro giusto però non è il round-trip, è **se le PII restano trovabili**. Su 36 file
+costruiti apposta (utf-16 LE e BE di varie lunghezze, bilingui con intestazione cinese, thai
+e a cornice, file a 8 bit con NUL vaganti, teste azzerate, export a record NUL-terminati,
+blob binari, degeneri), contando i casi in cui il testo resta leggibile a schermo ma i
+rilevatori non trovano più nulla — cioè il documento esce in chiaro e l'utente non se ne
+accorge:
+
+| | casi "falso pulito" | PII trovata |
+|---|---:|---:|
+| main | 8 | 17 |
+| dopo | **0** | **30** |
+
+`tests/test_codifiche.py` ritaglia la funzione vera dal sorgente con `ast` — `app.py` non è
+importabile senza torch — e misura la **trovabilità della PII**, non solo il round-trip: utf-16
+senza BOM, contorni non latini, NUL vaganti, teste azzerate, degeneri. Sul codice di `main`
+**4 dei 6 falliscono**.
+
+---
 
 ## 2026-08-03 — `_merge()` era quadratica: 100 s su un documento lungo (`app.py`)
 
