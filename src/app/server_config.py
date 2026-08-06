@@ -171,7 +171,10 @@ def resolve(cli_host=None, cli_port=None):
     """
     cfg = load_config()
     host = cli_host or os.environ.get("PII_HOST") or cfg.get("host") or DEFAULT_HOST
-    port = cli_port or os.environ.get("PII_PORT") or cfg.get("port") or DEFAULT_PORT
+    port = (cli_port if cli_port is not None else
+            os.environ.get("PII_PORT") if "PII_PORT" in os.environ else
+            cfg.get("port") if cfg.get("port") is not None else
+            DEFAULT_PORT)
     return str(host), int(port)
 
 
