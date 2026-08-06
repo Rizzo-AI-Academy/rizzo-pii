@@ -182,11 +182,13 @@ def _page_png(d, n, dpi=PREVIEW_DPI):
     if not (0 <= n < d["n_pages"]):
         return None
     key = (n, dpi)
-    png = d["pages"].get(key)
+    with _DOCS_LOCK:
+        png = d["pages"].get(key)
     if png is None:
         with fitz.open(stream=d["pdf"], filetype="pdf") as doc:
             png = doc.load_page(n).get_pixmap(dpi=dpi).tobytes("png")
-        d["pages"][key] = png
+        with _DOCS_LOCK:
+            d["pages"][key] = png
     return png
 
 
