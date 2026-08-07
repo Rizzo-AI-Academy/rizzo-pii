@@ -5,6 +5,36 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-08-07 — `Dockerfile`: l'app come webapp in un container
+
+Finora l'unico modo di far girare l'app era l'installer desktop o `python src/app/app.py` con
+il venv giusto; chi la voleva su una macchina condivisa (workstation dello studio, server
+interno) doveva ricostruirsi l'ambiente a mano. Ora c'è un `Dockerfile` alla root:
+
+```bash
+docker build -t rizzo-pii .
+docker run --rm -p 127.0.0.1:5005:5005 rizzo-pii
+```
+
+Scelte che contano:
+
+- **modello dentro l'immagine** (`snapshot_download` da `rizzoaiacademy/rizzo-pii-0.3B` in
+  build) e `HF_HUB_OFFLINE=1`/`TRANSFORMERS_OFFLINE=1` a runtime: il container non ha bisogno
+  della rete per lavorare, che è l'intero punto del progetto;
+- **torch e transformers pinnati** (`torch==2.13.0+cpu`, `transformers==5.14.1`, le versioni con
+  cui l'immagine è stata verificata) e presi **dall'indice CPU**: la wheel di default di torch si
+  porta dietro ~2,5 GB di CUDA inutili qui;
+- **gunicorn, 1 worker e 4 thread**: ogni worker sarebbe una copia del modello (~1,2 GB), e il
+  server di sviluppo di Flask non ha timeout; `--timeout 600` perché un PDF lungo su CPU sono
+  minuti, non secondi;
+- **bind `0.0.0.0` dentro, `127.0.0.1:5005:5005` fuori**: il confine di rete lo mette docker,
+  documentato nel README perché un `-p 5005:5005` distratto esporrebbe l'anonimizzatore alla LAN;
+- `HEALTHCHECK` su `/health`, che è readiness senza inferenza (503 finché il modello carica).
+
+`Dockerfile.linux` resta quello che era: l'ambiente di **build** dei bundle .deb/AppImage, non
+un modo di far girare l'app. Il `.dockerignore` ora riammette `src/app/` (era `*`, pensato per
+il contesto vuoto di `Dockerfile.linux`, che infatti non fa nessun `COPY`).
+
 ## 2026-08-03 — `_merge()` era quadratica: 100 s su un documento lungo (`app.py`)
 
 Il controllo delle sovrapposizioni confrontava **ogni** candidato con **tutta** la lista già

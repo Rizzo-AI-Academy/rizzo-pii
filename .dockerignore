@@ -1,3 +1,13 @@
-# Dockerfile.linux non fa COPY (sorgenti+modello si montano con -v a runtime):
-# contesto di build VUOTO -> `docker build` istantaneo, niente upload di GB al daemon.
+# Contesto di build minimo. Dockerfile (webapp) copia solo src/app/ e scarica il
+# modello da HF; Dockerfile.linux non fa nessun COPY (sorgenti e modello si
+# montano con -v a runtime), quindi qui si taglia tutto il resto: senza queste
+# righe il daemon si porterebbe dietro modelli e dataset, GB per niente.
+
+# tutto, poi si riammette a mano il minimo indispensabile
 *
+!src/app/
+
+# roba pesante o rigenerabile che NON deve rientrare nemmeno via src/app/
+**/__pycache__/
+**/*.pyc
+src/app/assets/**/*.psd

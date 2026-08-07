@@ -304,6 +304,93 @@ Packaging instructions in **[docs/BUILD.md](docs/BUILD.md)**.
 
 ---
 
+## Inference quickstart
+
+Just want to **anonymize documents**? You do not need the dataset, the training scripts or a GPU —
+only the model. Three ways, all of them fully local. (Regenerating the data and retraining is a
+different flow: **[Quickstart](#quickstart)**, further down.)
+
+### Run with Docker
+
+Nothing to install but Docker; the image carries the CPU dependencies and the model.
+
+```bash
+git clone https://github.com/Rizzo-AI-Academy/rizzo-pii
+cd rizzo-pii
+
+docker build -t rizzo-pii .                          # ~10 min, 2.65 GB image
+docker run -d --name rizzo-pii \
+  -p 127.0.0.1:5005:5005 rizzo-pii                   # -> http://127.0.0.1:5005
+
+docker logs -f rizzo-pii                             # startup / gunicorn logs
+docker rm -f rizzo-pii                               # stop and remove
+```
+
+The image is **self-contained**: the CPU-only PyTorch stack and the model
+([`rizzoaiacademy/rizzo-pii-0.3B`](https://huggingface.co/rizzoaiacademy/rizzo-pii-0.3B)) are baked
+in at build time, so `docker build` needs the network but `docker run` never does —
+`HF_HUB_OFFLINE=1` makes sure of it. Same deal as the desktop app: the documents never leave the
+machine. Inside the container the server is `gunicorn` with **1 worker** (the model is loaded once,
+~1.2 GB) and 4 threads; `/health` answers 503 until the model is ready, which is what the
+`HEALTHCHECK` polls — the first request is served when `docker ps` says `healthy`.
+
+Publish the port as `127.0.0.1:5005:5005`, not `5005:5005`, unless you actually mean to expose the
+service to your LAN — inside the container the bind is `0.0.0.0` on purpose, and the network
+boundary is Docker's job.
+
+Useful knobs (all optional):
+
+```bash
+# a different port, tags left in the clear, irreversible anonymization
+docker run -d -p 127.0.0.1:8080:8080 -e PII_PORT=8080 \
+  -e PII_EXCLUDE_TAGS=AGE,GENDER -e PII_MAPPING=0 rizzo-pii
+```
+
+> The image is **CPU-only**, which is the intended deployment (see the table above); `torch` and
+> `transformers` are pinned to the versions it was verified with. A GPU build would need the `cu128`
+> wheels and the NVIDIA container runtime. Note that `Dockerfile.linux` is a different thing: it is
+> the reproducible **build** environment for the Linux `.deb`/AppImage bundles, described in
+> [docs/BUILD.md](docs/BUILD.md).
+
+### Run the web app from source
+
+Same server, without Docker — this is what the desktop app runs internally.
+
+```bash
+git clone https://github.com/Rizzo-AI-Academy/rizzo-pii
+cd rizzo-pii
+python -m venv .venv && source .venv/bin/activate     # Windows: .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt                       # CPU torch is fine, no GPU needed
+
+# the model (~1.2 GB) into the folder the app looks for
+hf download rizzoaiacademy/rizzo-pii-0.3B --local-dir models/rizzo-pii-0.3B-main
+
+python src/app/app.py                                 # -> http://127.0.0.1:5005
+python src/app/app.py --port 8080 --exclude-tags AGE,GENDER --no-mapping   # same knobs as above
+```
+
+### One document, from the CLI
+
+No server at all: entities and anonymized text printed to stdout.
+
+```bash
+PII_MODEL_DIR=models/rizzo-pii-0.3B-main \
+  python src/training/test_pii.py "Mi chiamo Mario Rossi, IBAN IT60X0542811101000000123456"
+```
+
+### Call it over HTTP
+
+Whichever way you started it, the process is a plain HTTP service — see
+**[The local HTTP API](#the-local-http-api)** below for `/analyze`, `/pdf`, `/preview` and the rest.
+
+```bash
+curl localhost:5005/health                      # 200 = model loaded and ready
+curl -X POST localhost:5005/analyze -H 'Content-Type: application/json' \
+     -d '{"text": "Mario Rossi, CF RSSMRA85M01H501Z"}'
+```
+
+---
+
 ## Quickstart
 
 > Prerequisites and critical environment constraints (Blackwell GPU, torch **cu128**, etc.) are in
@@ -313,7 +400,8 @@ Packaging instructions in **[docs/BUILD.md](docs/BUILD.md)**.
 
 > 💡 Just want to **use** the app? You don't need any of this — download the ready-to-use build
 > (Windows / macOS / Linux) from the
-> [Releases page](https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/latest). The steps
+> [Releases page](https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/latest), or run the web app
+> with Docker / from source: **[Inference quickstart](#inference-quickstart)**. The steps
 > below are for developers who want to regenerate the data and retrain the model.
 
 ### 0) Install
@@ -448,6 +536,8 @@ rizzo_pii/
 ├─ LICENSE                   MIT
 ├─ CONTRIBUTING.md           how to contribute (code, docs, data)
 ├─ requirements.txt          Python dependencies (see the cu128 note for Blackwell GPUs)
+├─ Dockerfile                the web app in a container (CPU deps + model baked in)
+├─ Dockerfile.linux          reproducible build env for the Linux .deb/AppImage bundles
 ├─ .env.example              template for the optional W&B / Gemini keys
 ├─ CLAUDE.md                 operating instructions + environment constraints (GPU, CUDA…)
 ├─ report/                   the technical report (PDF + Typst source)
