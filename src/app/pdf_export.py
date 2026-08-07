@@ -30,11 +30,13 @@ che apply_redactions() da solo NON tocca):
   - contenuto delle ANNOTAZIONI (commenti, FreeText, note);
   - valore dei CAMPI MODULO (widget AcroForm);
   - titoli dei SEGNALIBRI (outline/TOC);
+  - target URI dei LINK (placeholder URI-safe per i match literal; rimozione
+    selettiva dell'azione-link se la PII e' visibile solo dopo un `unquote`);
   - ALLEGATI incorporati (embedded files), rimossi in blocco.
 
 Rete di sicurezza finale: `report["residual"]` elenca i placeholder il cui valore
-e' ANCORA leggibile nell'output (testo di pagina + annotazioni + widget + TOC).
-Deve essere vuota; l'UI avvisa se non lo e'.
+e' ANCORA leggibile nell'output (testo di pagina + annotazioni + widget + TOC +
+target URI dei link). Deve essere vuota; l'UI avvisa se non lo e'.
 
 Limiti noti (= punti 2-4 della issue #7):
   - testo dentro immagini raster (scansioni, loghi, blocchi firma): non esiste nel
@@ -48,6 +50,7 @@ Limiti noti (= punti 2-4 della issue #7):
 
 import re
 import unicodedata
+from urllib.parse import quote, unquote
 
 import fitz  # PyMuPDF
 
@@ -225,6 +228,101 @@ def _sub_all(patterns, s):
     return s, n
 
 
+# Le chiavi testuali persistenti che sappiamo anche aggiornare in modo affidabile
+# con Page.update_link(). Altri tipi di destinazione sono coordinate/pagine.
+_LINK_TEXT_KEYS = ("uri",)
+
+
+def _link_text_parts(link):
+    """Rappresentazioni testuali di un URI, raw e decodificata UNA volta.
+
+    `unquote` (non unquote_plus) conserva i `+` legittimi e permette a discovery
+    e residual verification di vedere PII nascoste dietro percent-encoding.
+    """
+    parts = []
+    for key in _LINK_TEXT_KEYS:
+        value = link.get(key)
+        if not isinstance(value, str) or not value:
+            continue
+        parts.append(value)
+        decoded = unquote(value)
+        if decoded != value:
+            parts.append(decoded)
+    return parts
+
+
+def _aux_text_parts(doc):
+    """Superfici testuali persistenti fuori dal normale page text.
+
+    Questa e' l'unica enumerazione usata sia per la discovery sia per la verifica
+    finale: aggiungere una superficie qui evita che i due percorsi divergano.
+    Superficie assente = sequenza vuota; enumerazione fallita = PdfError, perche'
+    un PDF che non possiamo ispezionare non puo' essere dichiarato sanificato.
+    """
+    parts = []
+    for page in doc:
+        try:
+            annots = page.annots()
+            for annot in annots or ():
+                if annot.type[0] == fitz.PDF_ANNOT_REDACT:
+                    continue
+                info = annot.info
+                parts.extend(str(info.get(k)) for k in ("content", "subject", "title")
+                             if info.get(k))
+        except Exception as e:
+            raise PdfError("Impossibile ispezionare le annotazioni del PDF.") from e
+        try:
+            widgets = page.widgets()
+            for widget in widgets or ():
+                if isinstance(widget.field_value, str):
+                    parts.append(widget.field_value)
+        except Exception as e:
+            raise PdfError("Impossibile ispezionare i campi modulo del PDF.") from e
+        try:
+            links = page.get_links()
+            for link in links or ():
+                parts.extend(_link_text_parts(link))
+        except Exception as e:
+            raise PdfError("Impossibile ispezionare i link del PDF.") from e
+    try:
+        toc = doc.get_toc(simple=True)
+        parts.extend(str(entry[1]) for entry in toc or () if entry[1])
+    except Exception as e:
+        raise PdfError("Impossibile ispezionare l'indice del PDF.") from e
+    return parts
+
+
+def _readable_parts(doc):
+    """Superfici persistenti indipendenti: nessun match puo' attraversarle."""
+    parts = [page.get_text() for page in doc]
+    parts.extend(_aux_text_parts(doc))
+    return [part for part in parts if part]
+
+
+def extract_detection_surfaces(pdf_bytes):
+    """Superfici PDF indipendenti destinate SOLO alla detection delle PII.
+
+    Non modifica il documento e non va aggiunto al testo anonimizzato mostrato
+    all'utente. Ogni page text, campo ausiliario e rappresentazione URI resta una
+    stringa distinta, cosi' il detector non costruisce entita' fra due superfici.
+    """
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        raise PdfError("File PDF non valido o danneggiato.")
+    if doc.needs_pass:
+        doc.close()
+        raise PdfError("PDF protetto da password: rimuovi la protezione e riprova.")
+    try:
+        return _readable_parts(doc)
+    except PdfError:
+        raise
+    except Exception as e:
+        raise PdfError("Impossibile ispezionare il contenuto del PDF.") from e
+    finally:
+        doc.close()
+
+
 def _scrub_annots(page, patterns):
     """Contenuto e titolo delle annotazioni (commenti, FreeText, note adesive):
     testo vero e proprio, invisibile a get_text() e non toccato dalle redazioni."""
@@ -276,6 +374,63 @@ def _scrub_widgets(page, patterns):
     return done
 
 
+def _scrub_links(page, patterns):
+    """Sanifica URI literal; rimuove l'azione se la PII e' solo encoded.
+
+    Il placeholder dei match literal viene percent-encoded per lasciare intatti
+    schema, query, fragment e tutti gli altri byte del target. Se la PII compare
+    soltanto dopo `unquote`, ricostruire gli offset raw sarebbe fragile: si elimina
+    quindi solo l'annotazione-link, mantenendo testo e layout della pagina.
+    """
+    done = 0
+    uri_patterns = [(pat, quote(ph, safe="")) for pat, ph in patterns]
+    try:
+        links = list(page.get_links())
+    except Exception:
+        return 0
+    for link in links:
+        try:
+            value = link.get("uri")
+            if not isinstance(value, str) or not value:
+                continue
+            decoded_value = unquote(value)
+
+            # La decisione va presa sul target ORIGINALE: sostituire prima un
+            # valore literal piu' corto (es. "mario") potrebbe mascherare una
+            # PII encoded piu' lunga (es. l'intera e-mail) e produrre un falso
+            # negativo. Se il decoding rivela nuove occorrenze, l'azione non e'
+            # riscrivibile in modo locale e viene neutralizzata per intero.
+            decoded_hits = 0
+            reveals_encoded_pii = False
+            for pat, _placeholder in patterns:
+                raw_count = sum(1 for _ in pat.finditer(value))
+                semantic_count = sum(1 for _ in pat.finditer(decoded_value))
+                decoded_hits += semantic_count
+                if semantic_count > raw_count:
+                    reveals_encoded_pii = True
+            if reveals_encoded_pii:
+                page.delete_link(link)
+                done += max(1, decoded_hits)
+                continue
+
+            new_value, literal_hits = _sub_all(uri_patterns, value)
+            # Un solo decoding, senza trasformare '+' in spazio. Se resta una PII
+            # nota nella forma semantica non tocchiamo genericamente il quoting:
+            # neutralizziamo esclusivamente questa azione del link.
+            _, encoded_hits = _sub_all(patterns, unquote(new_value))
+            if encoded_hits:
+                page.delete_link(link)
+                done += literal_hits + encoded_hits
+            elif literal_hits:
+                new = dict(link)
+                new["uri"] = new_value
+                page.update_link(new)
+                done += literal_hits
+        except Exception:
+            continue
+    return done
+
+
 def _scrub_toc(doc, patterns):
     """Titoli dei segnalibri: spesso ricalcano intestazioni con nomi e numeri."""
     try:
@@ -317,43 +472,28 @@ def _strip_embedded(doc):
 
 def _readable_text(doc):
     """TUTTO il testo leggibile del documento: pagine + annotazioni + campi
-    modulo + segnalibri. E' la base della verifica dei residui: se un valore
-    compare qui, l'anonimizzazione NON e' completa.
+    modulo + segnalibri + target URI dei link. E' la base della verifica dei
+    residui: se un valore compare qui, l'anonimizzazione NON e' completa.
     NB: non vede il testo dentro immagini raster (loghi, firme, scansioni)."""
-    parts = []
-    for page in doc:
-        parts.append(page.get_text())
-        try:
-            for a in page.annots():
-                if a.type[0] == fitz.PDF_ANNOT_REDACT:
-                    continue
-                info = a.info
-                parts.extend(str(info.get(k) or "") for k in ("content", "subject", "title"))
-        except Exception:
-            pass
-        try:
-            for w in page.widgets():
-                if isinstance(w.field_value, str):
-                    parts.append(w.field_value)
-        except Exception:
-            pass
-    try:
-        parts.extend(str(e[1] or "") for e in doc.get_toc(simple=True))
-    except Exception:
-        pass
-    return "\n".join(parts)
+    return "\n".join(_readable_parts(doc))
 
 
 def _verify_residuals(pdf_bytes, items):
     """Placeholder il cui valore e' ANCORA leggibile nell'output. Usa lo STESSO
     pattern della redazione (sillabazione inclusa), altrimenti dichiarerebbe
-    "0 residui" proprio nei casi che il matcher non sa gestire."""
-    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
-        text = _readable_text(doc)
+    "0 residui" proprio nei casi che il matcher non sa gestire. Se l'ispezione
+    non e' completa solleva PdfError invece di produrre un falso negativo."""
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            parts = _readable_parts(doc)
+    except PdfError:
+        raise
+    except Exception as e:
+        raise PdfError("Impossibile verificare il PDF anonimizzato.") from e
     residual = []
     for ph, val in items:
         pat = _value_pattern(val)
-        if pat and pat.search(text):
+        if pat and any(pat.search(part) for part in parts):
             residual.append(ph)
     return residual
 
@@ -383,6 +523,8 @@ def redact_pdf(pdf_bytes, mapping, fill=REDACT_FILL, text_color=REDACT_TEXT):
         "annots":         sostituzioni nelle annotazioni,
         "widgets":        sostituzioni nei campi modulo,
         "toc":            sostituzioni nei segnalibri,
+        "links":          sostituzioni nei target URI dei link,
+        "sanitizations":  sostituzioni reali totali (pagina + superfici ausiliarie),
         "embedded":       allegati rimossi,
     }
     """
@@ -418,7 +560,7 @@ def redact_pdf(pdf_bytes, mapping, fill=REDACT_FILL, text_color=REDACT_TEXT):
 
     by_ph = {ph: 0 for ph, _, _ in usable}
     patterns = [(pat, ph) for ph, _, pat in usable]   # per annot/widget/TOC
-    total = n_annots = n_widgets = 0
+    total = n_annots = n_widgets = n_links = 0
 
     for page in doc:
         text, boxes = _page_char_index(page)
@@ -445,6 +587,7 @@ def redact_pdf(pdf_bytes, mapping, fill=REDACT_FILL, text_color=REDACT_TEXT):
         # dopo le redazioni: annotazioni e campi modulo non sono content stream
         n_annots += _scrub_annots(page, patterns)
         n_widgets += _scrub_widgets(page, patterns)
+        n_links += _scrub_links(page, patterns)
 
     n_toc = _scrub_toc(doc, patterns)
     n_emb = _strip_embedded(doc)
@@ -462,6 +605,8 @@ def redact_pdf(pdf_bytes, mapping, fill=REDACT_FILL, text_color=REDACT_TEXT):
         "annots": n_annots,
         "widgets": n_widgets,
         "toc": n_toc,
+        "links": n_links,
+        "sanitizations": total + n_annots + n_widgets + n_toc + n_links,
         "embedded": n_emb,
     }
 

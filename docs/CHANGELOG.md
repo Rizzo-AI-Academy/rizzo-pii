@@ -5,6 +5,23 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-08-07 — PII fuori dal page text nei PDF (`src/app/pdf_export.py`)
+
+Il mapping usato da `/pdf` nasceva dal solo `page.get_text()`: una PII presente esclusivamente
+in un'annotazione, campo modulo, segnalibro o target URI poteva quindi non essere scoperta. I
+target dei link, inoltre, non venivano né sostituiti né inclusi nella verifica dei residui.
+
+La detection PDF ora tratta page text, ogni campo di annotazione, widget, TOC e URI come
+superfici indipendenti, senza concatenarle né aggiungerle al testo anonimizzato mostrato
+all'utente. Contatori e deduplicazione dei placeholder restano globali all'intero documento.
+Gli URI literal vengono aggiornati con un placeholder percent-encoded; quelli che rivelano la
+PII soltanto dopo un singolo `unquote` perdono selettivamente l'azione-link, perché ricostruirne
+gli offset encoded non è affidabile. Discovery, sanitizzazione e verifica dei residui applicano
+la stessa regola di decoding (mai `unquote_plus`). Il guardrail accetta un PDF senza redazioni
+di pagina soltanto quando è avvenuta almeno una reale sostituzione ausiliaria; i PDF image-only
+senza superfici sanificate restano rifiutati. Test sintetici coprono annotazione-only, widget,
+TOC, URI literal/encoded, confini fra superfici e il caso scansione.
+
 ## 2026-08-07 — `Dockerfile`: l'app come webapp in un container
 
 Finora l'unico modo di far girare l'app era l'installer desktop o `python src/app/app.py` con

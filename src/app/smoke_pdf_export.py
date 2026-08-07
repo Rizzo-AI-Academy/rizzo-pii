@@ -20,6 +20,8 @@ import fitz  # PyMuPDF
 import pdf_export as px
 
 OK = []
+CF_ONLY = "RSSMRA85H12H501V"
+LINK_EMAIL = "mario.rossi@example.com"
 
 
 def check(name, cond, extra=""):
@@ -118,6 +120,61 @@ pdf = px.text_to_pdf("Il sig. [FULLNAME_1] con IBAN [IBAN_1].\nRiga due — trat
 with fitz.open(stream=pdf, filetype="pdf") as d:
     t = d[0].get_text()
 check("text_to_pdf impagina i placeholder", "[FULLNAME_1]" in t and "[IBAN_1]" in t)
+
+# --- regressioni: PII scoperta solo fuori dal testo di pagina -----------------
+doc = fitz.open()
+p = doc.new_page()
+p.insert_text((50, 80), "Documento di prova senza identificativi personali.", fontsize=11)
+a = p.add_text_annot((200, 200), "Codice fiscale " + CF_ONLY)
+a.set_info(content="Codice fiscale " + CF_ONLY)
+a.update()
+aux_only_pdf = doc.tobytes()
+doc.close()
+with fitz.open(stream=aux_only_pdf, filetype="pdf") as d:
+    page_only_text = d[0].get_text()
+check("CF solo in annotazione assente dal page text", CF_ONLY not in page_only_text)
+aux_surfaces = px.extract_detection_surfaces(aux_only_pdf)
+check("CF solo in annotazione scoperto dal percorso auxiliary",
+      any(CF_ONLY in surface for surface in aux_surfaces))
+check("residuo noto in annotazione rilevato prima della sanitizzazione",
+      px._verify_residuals(aux_only_pdf, [("[CF_1]", CF_ONLY)]) == ["[CF_1]"])
+
+aux_out, aux_rep = px.redact_pdf(aux_only_pdf, {"[CF_1]": CF_ONLY})
+with fitz.open(stream=aux_out, filetype="pdf") as d:
+    aux_after = px._readable_text(d)
+check("CF solo in annotazione sanificato", CF_ONLY not in aux_after)
+check("sanitizzazione auxiliary conteggiata come lavoro reale",
+      aux_rep.get("sanitizations", 0) > 0, aux_rep)
+
+# --- regressioni: target mailto persistente e non sovrapposto al testo --------
+doc = fitz.open()
+p = doc.new_page()
+p.insert_text((50, 80), LINK_EMAIL, fontsize=11)
+p.insert_text((50, 130), "Invia un messaggio", fontsize=11)
+p.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(45, 115, 180, 135),
+               "uri": "mailto:" + LINK_EMAIL})
+link_pdf = doc.tobytes()
+doc.close()
+
+doc = fitz.open()
+p = doc.new_page()
+p.insert_text((50, 80), "Invia un messaggio", fontsize=11)
+p.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(45, 65, 180, 85),
+               "uri": "mailto:" + LINK_EMAIL})
+link_only_pdf = doc.tobytes()
+doc.close()
+check("target link incluso nella verifica residui prima della sanitizzazione",
+      px._verify_residuals(link_only_pdf, [("[EMAIL_1]", LINK_EMAIL)]) == ["[EMAIL_1]"])
+
+link_out, link_rep = px.redact_pdf(link_pdf, {"[EMAIL_1]": LINK_EMAIL})
+with fitz.open(stream=link_out, filetype="pdf") as d:
+    link_text = d[0].get_text()
+    links = d[0].get_links()
+check("testo email visibile sanificato", LINK_EMAIL not in link_text)
+check("link preservato", len(links) == 1, links)
+check("target mailto sanificato",
+      links and links[0].get("uri") == "mailto:%5BEMAIL_1%5D", links)
+check("nessun residuo solo dopo testo e link sanificati", link_rep["residual"] == [], link_rep)
 
 print("\n%d/%d PASS" % (sum(OK), len(OK)))
 sys.exit(0 if all(OK) else 1)

@@ -280,25 +280,45 @@ def chunk_text(text, max_words=MAX_WORDS, overlap=OVERLAP):
     return chunks
 
 
+def _detect_model_surfaces(texts):
+    """Inferenza batch su superfici indipendenti, senza concatenarle.
+
+    I chunk di tutte le superfici viaggiano in un'unica chiamata al modello per
+    non trasformare annotazioni/link numerosi in altrettante inference lente.
+    Gli offset restano relativi alla rispettiva superficie.
+    """
+    chunks, refs = [], []
+    counts = [0] * len(texts)
+    entities = [[] for _ in texts]
+    for surface_i, text in enumerate(texts):
+        surface_chunks = chunk_text(text)
+        counts[surface_i] = len(surface_chunks)
+        for chunk, offset in surface_chunks:
+            chunks.append(chunk)
+            refs.append((surface_i, offset))
+    if not chunks:
+        return entities, counts
+
+    results = nlp(chunks)
+    if isinstance(results, dict):                    # binding/pipeline non-batch
+        results = [results]
+    for (surface_i, offset), result in zip(refs, results):
+        for entity in result:
+            entities[surface_i].append({
+                "label": entity["entity_group"],
+                "start": int(entity["start"]) + offset,
+                "end": int(entity["end"]) + offset,
+                "score": float(entity["score"]),
+                "validated": False,
+                "source": "modello",
+            })
+    return entities, counts
+
+
 def detect_model(text):
     """Entita' trovate dal modello mmBERT su tutti i chunk, su offset globali."""
-    chunks = chunk_text(text)
-    ents = []
-    if chunks:
-        results = nlp([c for c, _ in chunks])
-        if isinstance(results, dict):                 # singolo chunk -> normalizza
-            results = [results]
-        for (_, off), res in zip(chunks, results):
-            for e in res:
-                ents.append({
-                    "label": e["entity_group"],
-                    "start": int(e["start"]) + off,
-                    "end": int(e["end"]) + off,
-                    "score": float(e["score"]),
-                    "validated": False,
-                    "source": "modello",
-                })
-    return ents, len(chunks)
+    entities, counts = _detect_model_surfaces([text])
+    return entities[0], counts[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -374,6 +394,38 @@ def _norm(s):
     return re.sub(r"\s+", " ", s.strip()).casefold()
 
 
+def _assign_placeholders(kept, text, counters, seen, mapping, mapping_enabled=True):
+    """Assegna ID con stato condivisibile fra piu' superfici indipendenti."""
+    for entity in kept:
+        value = text[entity["start"]:entity["end"]]
+        key = (entity["label"], _norm(value))
+        if key in seen:
+            entity["ph"] = seen[key]
+            continue
+        label = entity["label"]
+        counters[label] = counters.get(label, 0) + 1
+        placeholder = f"[{label}_{counters[label]}]"
+        seen[key] = placeholder
+        if mapping_enabled:
+            mapping[placeholder] = value
+        entity["ph"] = placeholder
+
+
+def _mapping_for_surfaces(texts, excluded=None):
+    """Mapping PDF globale, rilevando ogni superficie in isolamento."""
+    texts = [text for text in texts if isinstance(text, str) and text.strip()]
+    excluded = set(excluded or ())
+    model_entities, _counts = _detect_model_surfaces(texts)
+    counters, seen, mapping = {}, {}, {}
+    for text, model_ents in zip(texts, model_entities):
+        candidates = model_ents + detect_regex(text)
+        if excluded:
+            candidates = [e for e in candidates if e["label"] not in excluded]
+        kept = _merge(candidates, text)
+        _assign_placeholders(kept, text, counters, seen, mapping)
+    return mapping
+
+
 def analyze(text, excluded=None, mapping_enabled=True):
     """excluded = tag da NON anonimizzare: le entita' di quel tipo vengono scartate
     prima della fusione, quindi il valore resta in chiaro nel testo di output.
@@ -392,18 +444,7 @@ def analyze(text, excluded=None, mapping_enabled=True):
 
     # ID reversibili: stesso (label, valore-normalizzato) -> stesso placeholder.
     counters, seen, mapping = {}, {}, {}
-    for e in kept:
-        val = text[e["start"]:e["end"]]
-        key = (e["label"], _norm(val))
-        if key in seen:
-            e["ph"] = seen[key]
-        else:
-            counters[e["label"]] = counters.get(e["label"], 0) + 1
-            ph = f"[{e['label']}_{counters[e['label']]}]"
-            seen[key] = ph
-            if mapping_enabled:
-                mapping[ph] = val
-            e["ph"] = ph
+    _assign_placeholders(kept, text, counters, seen, mapping, mapping_enabled)
 
     # segmenti per la preview + testo anonimizzato + statistiche
     segments, anon, by_label, by_source, pos = [], [], {}, {}, 0
@@ -619,28 +660,43 @@ def _build_anonymized_pdf():
         raw_excl = payload.get("exclude_tags")
 
     text = (text or "").strip()
-    if not text:
+    source_is_pdf = bool(data and _is_pdf(name, data))
+    if source_is_pdf:
+        try:
+            detection_surfaces = pdf_export.extract_detection_surfaces(data)
+        except pdf_export.PdfError as e:
+            raise _ReqError(str(e))
+    else:
+        detection_surfaces = [text] if text else []
+    if not detection_surfaces:
         raise _ReqError("Nessun testo da anonimizzare.")
 
     stem = os.path.splitext(_safe_name(name, "documento.pdf"))[0] or "documento"
     out_name = f"{stem}_anonimizzato.pdf"
 
     excl = server_config.parse_tag_list(raw_excl) if raw_excl is not None else EXCLUDED_TAGS
-    # mapping_enabled=True e' interno: il risultato non esce da questa funzione.
-    res = analyze(text, excl, mapping_enabled=True)
-    if not res["mapping"]:
+    if source_is_pdf:
+        # Ogni page/annotation/widget/TOC/URI resta una superficie indipendente;
+        # il mapping globale condivide invece contatori e valori normalizzati.
+        mapping = _mapping_for_surfaces(detection_surfaces, excl)
+    else:
+        # mapping_enabled=True e' interno: il risultato non esce da questa funzione.
+        res = analyze(text, excl, mapping_enabled=True)
+        mapping = res["mapping"]
+    if not mapping:
         raise _ReqError("Nessuna PII trovata: non c'e' niente da "
                         "anonimizzare in questo documento.", 422)
 
-    if data and _is_pdf(name, data):
+    if source_is_pdf:
         try:
-            out, report = pdf_export.redact_pdf(data, res["mapping"])
+            out, report = pdf_export.redact_pdf(data, mapping)
         except pdf_export.PdfError as e:
             raise _ReqError(str(e))
-        if report["occurrences"] == 0:
+        if report["sanitizations"] == 0:
             raise _ReqError("Nessuna occorrenza trovata nel PDF: se il documento "
                             "e' una scansione (testo dentro un'immagine) la "
                             "redazione del layer testuale non puo' agire.", 422)
+        # API storica: redactions = sole occorrenze nel page content stream.
         return out, report, report["occurrences"], out_name
 
     try:
