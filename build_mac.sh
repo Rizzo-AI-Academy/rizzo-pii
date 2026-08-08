@@ -33,7 +33,7 @@ VENV="${VENV:-.venv}"
 BUNDLES="${*:-app dmg}"
 APP="$ROOT/tauri/src-tauri/target/release/bundle/macos/Rizzo PII.app"
 ENT="$ROOT/tauri/macos_python_entitlements.plist"
-DMG_OUT="$ROOT/tauri/src-tauri/target/release/bundle/dmg/Rizzo-PII-1.0.0-macOS-arm64.dmg"
+DMG_OUT="$ROOT/tauri/src-tauri/target/release/bundle/dmg/Rizzo-PII-2.0.0-macOS-arm64.dmg"
 
 # ---- 0) controlli ----------------------------------------------------------
 [ -d "$MODEL_DIR" ] || { echo "ERRORE: modello mancante: $MODEL_DIR"; exit 1; }
