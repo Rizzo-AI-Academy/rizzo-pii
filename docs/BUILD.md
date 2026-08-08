@@ -43,7 +43,8 @@ npm install                  # prima volta: scarica la CLI di Tauri
 npx tauri icon ..\src\app\assets\mascot_shield.png   # (ri)genera le icone (già fatto)
 npx tauri build              # compila Rust + bundle + installer NSIS
 ```
-Output installer: `tauri\src-tauri\target\release\bundle\nsis\Anonimizzatore PII_2.0.0_x64-setup.exe`.
+Output installer: `tauri\src-tauri\target\release\bundle\nsis\Rizzo PII_2.0.0_x64-setup.exe`
+(il nome viene da `productName` in `tauri.conf.json`).
 Installer **per-utente** (niente admin), in italiano, con shortcut e disinstallazione.
 
 ### Sviluppo / debug
@@ -52,6 +53,38 @@ Installer **per-utente** (niente admin), in italiano, con shortcut e disinstalla
 - Per rigenerare con un **nuovo modello**: riaddestra (crea `models\rizzo-pii-0.3B-v{VERSION}\`),
   aggiorna il path in **`build_sidecar.spec`** (riga `datas += [("models/rizzo-pii-0.3B-v...", "pii_model")]`),
   poi rifai il passo 1 e il passo 2. Build attuale: **v1.5.0**.
+
+### Build Windows da macOS/Linux → GitHub Actions
+
+**Non si compila da un altro SO**, nemmeno con Docker: su macOS i container sono Linux, e
+PyInstaller non cross-compila (il sidecar è Python+torch, va costruito sul SO di destinazione).
+La strada è un runner Windows di GitHub Actions: **[`.github/workflows/build-windows.yml`](../.github/workflows/build-windows.yml)**
+fa gli stessi passi 1 e 2 su `windows-latest` e allega l'installer alla release del tag.
+
+Il modello è gitignorato: il workflow lo scarica da Hugging Face, repo **pubblico**
+[`rizzoaiacademy/rizzo-pii-0.3B`](https://huggingface.co/rizzoaiacademy/rizzo-pii-0.3B)
+branch `v1.5.0` → nessun token, nessun secret. Per cambiare modello si aggiornano insieme
+`MODEL_REPO`/`MODEL_REV`/`MODEL_DIR` nel workflow e il path in `build_sidecar.spec`.
+
+Due modi di lanciarlo:
+```bash
+# a) build di prova, senza tag: l'installer resta come artifact del run (5 giorni)
+gh workflow run build-windows.yml        # oppure Actions > build-windows > Run workflow
+
+# b) release vera: il tag fa partire anche release.yml, che crea la release;
+#    build-windows la attende (max 5 min) e ci carica l'.exe
+git tag -a v2.0.1 -m "Rizzo PII 2.0.1" && git push origin v2.0.1
+```
+Ri-pushare lo stesso tag sostituisce l'asset (viene cancellato e ricaricato: l'API di GitHub
+non sovrascrive un asset con lo stesso nome).
+
+Accortezze:
+- **Limite di 2 GiB per asset di release.** L'NSIS sta sui ~1,5-1,8 GB: passa, ma con poco
+  margine. Se cresce, l'upload risponde 422.
+- **Disco del runner** ~25 GB liberi: per questo si usa l'indice `whl/cpu` di torch (il wheel
+  Windows di default tira dentro CUDA) e si cancella `build/sidecar_work` dopo PyInstaller.
+- **Tempi**: ~35 min il primo run, ~15 i successivi (cache di cargo su `src-tauri/target`).
+- L'installer **non è firmato** → SmartScreen avvisa al primo avvio, come per la build locale.
 
 ---
 
