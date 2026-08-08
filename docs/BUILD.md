@@ -68,13 +68,22 @@ branch `v1.5.0` → nessun token, nessun secret. Per cambiare modello si aggiorn
 
 Due modi di lanciarlo:
 ```bash
-# a) build di prova, senza tag: l'installer resta come artifact del run (5 giorni)
+# a) build di prova: l'installer resta come artifact del run (5 giorni, serve accesso al repo)
 gh workflow run build-windows.yml        # oppure Actions > build-windows > Run workflow
 
 # b) release vera: il tag fa partire anche release.yml, che crea la release;
 #    build-windows la attende (max 5 min) e ci carica l'.exe
 git tag -a v2.0.1 -m "Rizzo PII 2.0.1" && git push origin v2.0.1
+
+# c) riempire una release GIA' pubblicata (es. l'.exe mancante sulla 2.0.0):
+#    l'asset lo carica il runner, non passa da casa
+gh workflow run build-windows.yml -f release_tag=v2.0.0
 ```
+L'installer viene rinominato **`Rizzo-PII-<versione>-Windows-Setup.exe`** (la versione arriva da
+`tauri.conf.json`), la stessa convenzione degli artefatti macOS/Linux a cui puntano i pulsanti di
+download della landing in [`docs/index.html`](index.html). Attenzione: gli **artifact dei run non
+sono pubblici** (servono login e accesso al repo, e scadono) — per la landing serve sempre un
+**asset di release**, cioè la via (b) o la (c).
 Ri-pushare lo stesso tag sostituisce l'asset (viene cancellato e ricaricato: l'API di GitHub
 non sovrascrive un asset con lo stesso nome).
 

@@ -17,7 +17,12 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch: # build di prova senza tag: l'installer resta come artifact
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag di una release gia' esistente a cui allegare l'installer (vuoto = solo artifact del run)"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -93,24 +98,28 @@ jobs:
           npm install
           npx tauri build
 
-      # Il nome del bundle contiene spazi ("Rizzo PII_2.0.0_x64-setup.exe"): si rinomina
-      # perche' l'API di upload li vuole percent-encoded.
+      # Tauri lo chiama "Rizzo PII_2.0.0_x64-setup.exe": si rinomina nella convenzione degli
+      # altri artefatti della release (Rizzo-PII-2.0.0-macOS-arm64.dmg, ...-Linux-x86_64.AppImage),
+      # a cui puntano i link della landing in docs/index.html. Gli spazi andrebbero comunque
+      # percent-encoded nell'URL di upload.
       - name: Individua l'installer
         id: installer
         run: |
           $exe = Get-ChildItem tauri/src-tauri/target/release/bundle/nsis/*-setup.exe |
                  Select-Object -First 1
           if (-not $exe) { throw "installer NSIS non trovato" }
-          $dest = Join-Path $exe.DirectoryName ($exe.Name -replace ' ', '-')
+          $ver = (Get-Content tauri/src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $dest = Join-Path $exe.DirectoryName "Rizzo-PII-$ver-Windows-Setup.exe"
           if ($exe.FullName -ne $dest) { Move-Item -Force $exe.FullName $dest }
           $size = [math]::Round((Get-Item $dest).Length / 1GB, 2)
           Write-Host "installer: $dest ($size GB)"
           "path=$dest"                        >> $env:GITHUB_OUTPUT
           "name=$(Split-Path $dest -Leaf)"    >> $env:GITHUB_OUTPUT
 
-      # Senza tag (workflow_dispatch) l'installer resta scaricabile dalla pagina del run.
+      # Dispatch senza release_tag: l'installer resta scaricabile dalla pagina del run
+      # (solo per chi ha accesso al repo, e scade). Per la landing serve un asset di release.
       - name: Artifact del run
-        if: github.ref_type != 'tag'
+        if: github.ref_type != 'tag' && !inputs.release_tag
         uses: actions/upload-artifact@v4
         with:
           name: installer-windows
@@ -118,14 +127,15 @@ jobs:
           retention-days: 5
           compression-level: 0 # l'NSIS e' gia' compresso
 
-      # Con un tag: si allega alla release creata da release.yml. Stesso GITHUB_TOKEN,
-      # nessuna action di terzi.
+      # Con un tag: si allega alla release creata da release.yml. Da dispatch: alla release
+      # indicata in release_tag (utile per riempire una release gia' pubblicata senza
+      # scaricare e ricaricare 1,3 GB da casa). Stesso GITHUB_TOKEN, nessuna action di terzi.
       - name: Allega l'installer alla release
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || inputs.release_tag
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.release_tag || github.ref_name }}
           REPO: ${{ github.repository }}
           ASSET: ${{ steps.installer.outputs.path }}
           ASSET_NAME: ${{ steps.installer.outputs.name }}
