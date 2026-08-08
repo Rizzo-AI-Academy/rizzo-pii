@@ -21,25 +21,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Crea la release
+      - name: Crea o aggiorna la release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          API="https://api.github.com/repos/$REPO"
+          auth=(-H "Authorization: Bearer $GH_TOKEN"
+                -H "Accept: application/vnd.github+json"
+                -H "X-GitHub-Api-Version: 2022-11-28")
+
           NOTES_FILE="docs/releases/${TAG}.md"
           BODY=""
           [ -f "$NOTES_FILE" ] && BODY="$(cat "$NOTES_FILE")"
 
-          jq -n --arg tag "$TAG" --arg name "Rizzo PII ${TAG#v}" --arg body "$BODY" \
-            '{tag_name: $tag, name: $name, body: $body, generate_release_notes: true}' > payload.json
+          # Note generate da GitHub (commit e PR dal tag precedente), accodate a mano: il campo
+          # generate_release_notes vale solo in creazione, e qui la release puo' gia' esistere.
+          GENERATED="$(curl -fsS -X POST "${auth[@]}" "$API/releases/generate-notes" \
+            -d "$(jq -n --arg tag "$TAG" '{tag_name: $tag}')" | jq -r .body)"
+          BODY="$(printf '%s\n\n%s' "$BODY" "$GENERATED")"
 
-          # -f: esce con errore se l'API risponde 4xx/5xx, cosi' il job fallisce visibilmente
-          curl -fsS -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${{ github.repository }}/releases" \
-            -d @payload.json > response.json
+          jq -n --arg tag "$TAG" --arg name "Rizzo PII ${TAG#v}" --arg body "$BODY" \
+            '{tag_name: $tag, name: $name, body: $body}' > payload.json
+
+          # Se la release del tag esiste gia' si aggiorna (ri-pushare il tag corregge le note),
+          # altrimenti si crea. -f fa fallire il job su 4xx/5xx; il 404 della GET e' atteso.
+          ID="$(curl -sS "${auth[@]}" "$API/releases/tags/$TAG" | jq -r '.id // empty')"
+          if [ -n "$ID" ]; then
+            curl -fsS -X PATCH "${auth[@]}" "$API/releases/$ID" -d @payload.json > response.json
+          else
+            curl -fsS -X POST "${auth[@]}" "$API/releases" -d @payload.json > response.json
+          fi
 
           echo "Release: $(jq -r .html_url response.json)"
