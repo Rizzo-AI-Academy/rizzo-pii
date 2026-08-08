@@ -1,0 +1,77 @@
+# docker-compose.yml — Rizzo PII webapp
+#
+# Uso:
+#   docker compose up -d --build     # build + avvio in background
+#   docker compose logs -f           # segui i log
+#   docker compose down              # stop (il volume delle preferenze resta)
+#
+# -> http://127.0.0.1:5005
+
+services:
+  rizzo-pii:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Cambia qui se vuoi una revisione/modello diverso.
+        MODEL_REPO: rizzoaiacademy/rizzo-pii-0.3B
+        MODEL_REVISION: main
+    image: rizzo-pii:local
+    container_name: rizzo-pii
+    restart: unless-stopped
+
+    ports:
+      # Solo localhost: l'app processa documenti con dati personali,
+      # il confine di rete lo mette docker. Togli "127.0.0.1:" solo
+      # se ti serve davvero raggiungerla dalla LAN.
+      - "127.0.0.1:5005:5005"
+
+    environment:
+      PII_HOST: 0.0.0.0
+      PII_PORT: 5005
+      # Nessuna chiamata a Hugging Face a runtime: il modello e' nell'immagine.
+      HF_HUB_OFFLINE: 1
+      TRANSFORMERS_OFFLINE: 1
+      # Evita che torch saturi tutti i core; alza se la macchina e' dedicata.
+      OMP_NUM_THREADS: 4
+
+    volumes:
+      # Preferenze UI (~/.local/share/rizzo-pii): senza questo si perdono
+      # a ogni ricreazione del container.
+      - rizzo-pii-home:/home/app
+
+    # /health risponde 503 finche' il modello non e' caricato: lo start_period
+    # copre il caricamento a freddo.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import os,urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen(
+          f'http://127.0.0.1:{os.environ[\"PII_PORT\"]}/health', timeout=4
+          ).status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+
+    # Inferenza CPU: senza limiti un PDF lungo si prende tutta la macchina.
+    # Ritocca in base all'host (il modello da solo sta su ~1.2 GB di RAM).
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 6G
+
+    # Irrigidimenti minimi: l'app non ha bisogno di privilegi.
+    security_opt:
+      - no-new-privileges:true
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  rizzo-pii-home:
