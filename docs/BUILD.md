@@ -43,7 +43,7 @@ npm install                  # prima volta: scarica la CLI di Tauri
 npx tauri icon ..\src\app\assets\mascot_shield.png   # (ri)genera le icone (già fatto)
 npx tauri build              # compila Rust + bundle + installer NSIS
 ```
-Output installer: `tauri\src-tauri\target\release\bundle\nsis\Anonimizzatore PII_1.2.0_x64-setup.exe`.
+Output installer: `tauri\src-tauri\target\release\bundle\nsis\Anonimizzatore PII_2.0.0_x64-setup.exe`.
 Installer **per-utente** (niente admin), in italiano, con shortcut e disinstallazione.
 
 ### Sviluppo / debug
@@ -51,7 +51,7 @@ Installer **per-utente** (niente admin), in italiano, con shortcut e disinstalla
 - Log del backend: `%LOCALAPPDATA%\rizzo-pii\backend.log` (il sidecar è windowed, niente console).
 - Per rigenerare con un **nuovo modello**: riaddestra (crea `models\rizzo-pii-0.3B-v{VERSION}\`),
   aggiorna il path in **`build_sidecar.spec`** (riga `datas += [("models/rizzo-pii-0.3B-v...", "pii_model")]`),
-  poi rifai il passo 1 e il passo 2. Build attuale: **v1.2.0**.
+  poi rifai il passo 1 e il passo 2. Build attuale: **v1.5.0**.
 
 ---
 
@@ -171,7 +171,7 @@ con shortcut nel menu Start e disinstallazione.
 - **Dimensione**: la cartella/installer è di alcuni GB (PyTorch + modello incluso). Normale.
 - **Rigenerare col modello definitivo**: il modello è impacchettato dalla cartella versionata
   `models\rizzo-pii-0.3B-v{VERSION}\` (vedi `datas` in `build.spec` / `build_sidecar.spec`; build
-  attuale **v1.2.0**). Quando riaddestri una nuova versione, aggiorna quel path negli spec e rifai
+  attuale **v1.5.0**). Quando riaddestri una nuova versione, aggiorna quel path negli spec e rifai
   il passo 2 (e 3). Per provare senza modello si può puntare a `models\pii_model_legacy`.
 - **console=True** in `build.spec` mostra una finestra con i log; mettila `False` per nasconderla
   (consigliato solo dopo che tutto funziona).

@@ -1,6 +1,6 @@
 # Pubblica una release GitHub quando si pusha un tag `vX.Y.Z`.
 #
-#   git tag -a v1.2.0 -m "Rizzo PII 1.2.0" && git push origin v1.2.0
+#   git tag -a v2.0.0 -m "Rizzo PII 2.0.0" && git push origin v2.0.0
 #
 # Usa il GITHUB_TOKEN che Actions inietta da solo: niente PAT, niente gh CLI, nessuna
 # action di terzi. Le note sono `docs/releases/<tag>.md` se il file esiste, piu' le note
