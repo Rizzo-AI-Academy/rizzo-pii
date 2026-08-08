@@ -15,7 +15,7 @@ services:
       args:
         # Cambia qui se vuoi una revisione/modello diverso.
         MODEL_REPO: rizzoaiacademy/rizzo-pii-0.3B
-        MODEL_REVISION: main
+        MODEL_REVISION: v1.5.0
     image: rizzo-pii:local
     container_name: rizzo-pii
     restart: unless-stopped
