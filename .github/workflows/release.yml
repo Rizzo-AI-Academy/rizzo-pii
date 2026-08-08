@@ -1,0 +1,45 @@
+# Pubblica una release GitHub quando si pusha un tag `vX.Y.Z`.
+#
+#   git tag -a v1.2.0 -m "Rizzo PII 1.2.0" && git push origin v1.2.0
+#
+# Usa il GITHUB_TOKEN che Actions inietta da solo: niente PAT, niente gh CLI, nessuna
+# action di terzi. Le note sono `docs/releases/<tag>.md` se il file esiste, piu' le note
+# generate da GitHub (commit e PR dal tag precedente) che l'API accoda da sola.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Crea la release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          NOTES_FILE="docs/releases/${TAG}.md"
+          BODY=""
+          [ -f "$NOTES_FILE" ] && BODY="$(cat "$NOTES_FILE")"
+
+          jq -n --arg tag "$TAG" --arg name "Rizzo PII ${TAG#v}" --arg body "$BODY" \
+            '{tag_name: $tag, name: $name, body: $body, generate_release_notes: true}' > payload.json
+
+          # -f: esce con errore se l'API risponde 4xx/5xx, cosi' il job fallisce visibilmente
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/releases" \
+            -d @payload.json > response.json
+
+          echo "Release: $(jq -r .html_url response.json)"
