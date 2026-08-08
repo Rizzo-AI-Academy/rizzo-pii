@@ -98,6 +98,24 @@
   .dl p{font-size:.85rem;color:var(--muted);min-height:34px}
   .dl .btn{margin-top:12px;width:100%;justify-content:center}
 
+  /* ---- fallback: install via coding agent ---- */
+  .fallback{
+    margin-top:30px;background:#f6f2ff;border:1px solid #e3d9ff;border-radius:var(--radius);
+    padding:24px 22px;max-width:820px;margin-left:auto;margin-right:auto;
+  }
+  .fallback h3{font-size:1.08rem;font-weight:800;margin-bottom:8px}
+  .fallback p{font-size:.92rem;color:var(--ink-2)}
+  .fallback .small{color:var(--muted)}
+  .prompt-box{
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:14px 0 10px;
+    background:var(--ink);color:#eee;border-radius:12px;padding:14px 16px;
+  }
+  .prompt-box code{
+    flex:1 1 340px;min-width:0;font-size:.88rem;line-height:1.5;color:#eee;
+    background:none;padding:0;word-break:break-word;
+  }
+  .prompt-box .copy-btn{flex:0 0 auto;padding:10px 16px;font-size:.9rem}
+
   /* ---- how it works ---- */
   .how{background:linear-gradient(180deg,#fff,#faf9ff)}
   .how img{width:100%;max-width:860px;display:block;margin:0 auto 36px;border-radius:var(--radius)}
@@ -251,6 +269,26 @@
       <span class="it">Per sviluppatori: <a href="https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/latest">pesi del modello e tutte le release</a>.</span>
       <span class="en">For developers: <a href="https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/latest">model weights and all releases</a>.</span>
     </p>
+
+    <!-- FALLBACK: install as a local web app via a coding agent -->
+    <div class="fallback">
+      <h3>🛟 <span class="it">Il download o l'installer non funziona?</span><span class="en">Download or installer not working?</span></h3>
+      <p>
+        <span class="it">Se l'eseguibile non parte sul tuo sistema, puoi comunque usare rizzo-pii: fai installare l'app <b>come webapp locale</b> al tuo coding agent (Claude Code, Cursor, Codex, Copilot Agent, Gemini CLI…). Copia il testo qui sotto, incollalo nell'agente e lascialo lavorare: clona il repository, installa le dipendenze, scarica il modello e apre l'app nel browser. Resta tutto in locale, esattamente come l'app desktop.</span>
+        <span class="en">If the executable will not start on your system, you can still run rizzo-pii: have your coding agent (Claude Code, Cursor, Codex, Copilot Agent, Gemini CLI…) install it <b>as a local web app</b>. Copy the text below, paste it into your agent and let it work: it clones the repository, installs the dependencies, downloads the model and opens the app in your browser. Everything stays on your machine, exactly like the desktop app.</span>
+      </p>
+      <div class="prompt-box">
+        <code id="agent-prompt">Install and run the following project as a local web app on my machine: https://github.com/Rizzo-AI-Academy/rizzo-pii</code>
+        <button class="btn btn-primary copy-btn" type="button" onclick="copyAgentPrompt(this)">
+          <svg viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/></svg>
+          <span class="copy-label"><span class="it">Copia il testo</span><span class="en">Copy the text</span></span>
+        </button>
+      </div>
+      <p class="small">
+        <span class="it">Serve <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3.10+</a> e <a href="https://git-scm.com/downloads" target="_blank" rel="noopener">Git</a> sul tuo computer: l'agente fa il resto. Istruzioni manuali nel <a href="https://github.com/Rizzo-AI-Academy/rizzo-pii#readme" target="_blank" rel="noopener">README</a>.</span>
+        <span class="en">You need <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3.10+</a> and <a href="https://git-scm.com/downloads" target="_blank" rel="noopener">Git</a> installed: the agent handles the rest. Manual instructions are in the <a href="https://github.com/Rizzo-AI-Academy/rizzo-pii#readme" target="_blank" rel="noopener">README</a>.</span>
+      </p>
+    </div>
   </div>
 </section>
 
@@ -349,6 +387,24 @@
     document.body.classList.add('lang-'+l);
     document.documentElement.lang=l;
     try{localStorage.setItem('rizzo_lang',l)}catch(e){}
+  }
+  function copyAgentPrompt(btn){
+    var text=document.getElementById('agent-prompt').textContent.trim();
+    function done(){
+      var label=btn.querySelector('.copy-label'),old=label.innerHTML;
+      label.textContent=document.body.classList.contains('lang-it')?'Copiato!':'Copied!';
+      setTimeout(function(){label.innerHTML=old},1800);
+    }
+    if(navigator.clipboard&&window.isSecureContext){
+      navigator.clipboard.writeText(text).then(done,fallback);
+    }else{fallback()}
+    function fallback(){
+      var ta=document.createElement('textarea');
+      ta.value=text;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.opacity='0';
+      document.body.appendChild(ta);ta.select();
+      try{document.execCommand('copy');done()}catch(e){}
+      document.body.removeChild(ta);
+    }
   }
   (function(){
     var saved;try{saved=localStorage.getItem('rizzo_lang')}catch(e){}
