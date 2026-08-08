@@ -40,5 +40,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends libpython3.10 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /work
-# i sorgenti + il modello (models/rizzo-pii-0.3B-v1.2.0) sono montati su /work a runtime
+# i sorgenti + il modello (models/rizzo-pii-0.3B-v1.5.0) sono montati su /work a runtime
 CMD ["bash", "build_linux.sh"]

@@ -38,13 +38,13 @@ RUN pip install --upgrade pip \
  && pip install "transformers==5.14.1" tokenizers safetensors flask pymupdf gunicorn huggingface_hub
 
 # --- modello -----------------------------------------------------------------
-# app.py con APP_MODEL_VERSION="main" cerca models/rizzo-pii-0.3B-main/ a partire
+# app.py con APP_MODEL_VERSION="1.5.0" cerca models/rizzo-pii-0.3B-v1.5.0/ a partire
 # dalla root della repo (parents[2] rispetto a src/app/app.py) -> /app/models/.
 ARG MODEL_REPO=rizzoaiacademy/rizzo-pii-0.3B
-ARG MODEL_REVISION=main
+ARG MODEL_REVISION=v1.5.0
 RUN python -c "from huggingface_hub import snapshot_download; \
 snapshot_download('$MODEL_REPO', revision='$MODEL_REVISION', \
-local_dir='/app/models/rizzo-pii-0.3B-main', \
+local_dir='/app/models/rizzo-pii-0.3B-v1.5.0', \
 allow_patterns=['*.json','*.safetensors','*.txt','*.model'])"
 
 # --- applicazione ------------------------------------------------------------

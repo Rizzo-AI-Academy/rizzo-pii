@@ -77,7 +77,7 @@ def _resource_path(rel):
 #   "main"   -> models/rizzo-pii-0.3B-main/     (revision scaricata da HF, senza numero)
 #   percorso -> usato tal quale (assoluto o relativo alla root della repo)
 # Metti None per usare AUTOMATICAMENTE l'ultima versione `-v*` disponibile.
-APP_MODEL_VERSION = "main"
+APP_MODEL_VERSION = "1.5.0"
 
 # Dentro l'exe il modello e' impacchettato come "pii_model" (vedi build.spec).
 # In sviluppo: pin sopra -> auto-ultima versione -> vecchio non versionato -> legacy.

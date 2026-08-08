@@ -23,7 +23,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-MODEL_DIR="models/rizzo-pii-0.3B-v1.2.0"   # deve combaciare con build_sidecar.spec
+MODEL_DIR="models/rizzo-pii-0.3B-v1.5.0"   # deve combaciare con build_sidecar.spec
 VENV="${VENV:-build_env_linux}"            # override: in Docker si usa il venv gia' nell'immagine
 BUNDLES="${*:-deb appimage}"               # bundle da produrre (es. "bash build_linux.sh deb")
 

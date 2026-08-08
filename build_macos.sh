@@ -25,7 +25,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-MODEL_DIR="models/rizzo-pii-0.3B-main"     # deve combaciare con build_sidecar.spec
+MODEL_DIR="models/rizzo-pii-0.3B-v1.5.0"     # deve combaciare con build_sidecar.spec
 VENV="${VENV:-.venv}"                      # override: VENV=build_env_macos bash build_macos.sh
 BUNDLES="${*:-app dmg}"
 

@@ -28,7 +28,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-MODEL_DIR="models/rizzo-pii-0.3B-v1.2.0"   # deve combaciare con build_sidecar.spec
+MODEL_DIR="models/rizzo-pii-0.3B-v1.5.0"   # deve combaciare con build_sidecar.spec
 VENV="${VENV:-.venv}"
 BUNDLES="${*:-app dmg}"
 APP="$ROOT/tauri/src-tauri/target/release/bundle/macos/Rizzo PII.app"
