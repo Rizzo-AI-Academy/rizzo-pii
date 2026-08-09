@@ -106,6 +106,19 @@ else:
         _prod = _models / "rizzo-pii-0.3B"
         MODEL_DIR = str(_prod if _prod.exists() else _models / "pii_model_legacy")
 
+# Se la cartella non c'e', dirlo QUI e con il comando giusto: senza questo controllo si
+# arriva a from_pretrained() con un path inventato (pii_model_legacy, ultimo fallback) e
+# l'errore parla di una cartella che l'utente non ha mai sentito nominare.
+if not getattr(sys, "_MEIPASS", None) and not os.path.isdir(MODEL_DIR):
+    _v = APP_MODEL_VERSION or "1.5.0"
+    print(f"ERRORE: modello non trovato in {MODEL_DIR}\n"
+          f"Scaricalo con (la revision e la cartella devono combaciare):\n"
+          f"  hf download rizzoaiacademy/rizzo-pii-0.3B --revision v{_v} "
+          f"--local-dir models/rizzo-pii-0.3B-v{_v}\n"
+          f"Oppure indica una cartella tua con la variabile PII_MODEL_DIR.",
+          file=sys.stderr)
+    sys.exit(2)
+
 ASSETS_DIR = _resource_path("assets")   # mascotte / icone (servite su /assets/<file>)
 APP_VERSION = "2.0.0"                    # versione mostrata nell'UI (allineata a tauri.conf.json)
 MAX_WORDS = 120      # parole per chunk (~180 subword, sotto i 512 del training)

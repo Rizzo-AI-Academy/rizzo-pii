@@ -42,6 +42,13 @@ def resolve_model_dir(models_dir):
 
 MODEL_DIR = resolve_model_dir(_ROOT / "models")
 
+if not Path(MODEL_DIR).is_dir():
+    sys.exit(f"ERRORE: modello non trovato in {MODEL_DIR}\n"
+             "Scaricalo con (la revision e la cartella devono combaciare):\n"
+             "  hf download rizzoaiacademy/rizzo-pii-0.3B --revision v1.5.0 "
+             "--local-dir models/rizzo-pii-0.3B-v1.5.0\n"
+             "Oppure indica una cartella tua con la variabile PII_MODEL_DIR.")
+
 # pipeline di token-classification; aggregation_strategy raggruppa i subword
 # in entita' intere (unisce B-/I-). device=0 -> GPU, -1 -> CPU.
 device = 0 if torch.cuda.is_available() else -1

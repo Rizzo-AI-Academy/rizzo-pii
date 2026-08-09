@@ -362,8 +362,10 @@ cd rizzo-pii
 python -m venv .venv && source .venv/bin/activate     # Windows: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt                       # CPU torch is fine, no GPU needed
 
-# the model (~1.2 GB) into the folder the app looks for
-hf download rizzoaiacademy/rizzo-pii-0.3B --local-dir models/rizzo-pii-0.3B-main
+# the model (~1.2 GB) into the folder the app looks for. The folder name carries the
+# version: app.py pins it in APP_MODEL_VERSION, so revision and directory must match.
+hf download rizzoaiacademy/rizzo-pii-0.3B --revision v1.5.0 \
+  --local-dir models/rizzo-pii-0.3B-v1.5.0
 
 python src/app/app.py                                 # -> http://127.0.0.1:5005
 python src/app/app.py --port 8080 --exclude-tags AGE,GENDER --no-mapping   # same knobs as above
@@ -374,7 +376,7 @@ python src/app/app.py --port 8080 --exclude-tags AGE,GENDER --no-mapping   # sam
 No server at all: entities and anonymized text printed to stdout.
 
 ```bash
-PII_MODEL_DIR=models/rizzo-pii-0.3B-main \
+PII_MODEL_DIR=models/rizzo-pii-0.3B-v1.5.0 \
   python src/training/test_pii.py "Mi chiamo Mario Rossi, IBAN IT60X0542811101000000123456"
 ```
 
