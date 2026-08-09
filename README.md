@@ -536,6 +536,7 @@ curl -X POST localhost:5005/analyze -H 'Content-Type: application/json' \
 rizzo_pii/
 ├─ README.md                 this file
 ├─ LICENSE                   MIT
+├─ THIRD_PARTY_LICENSES.md   what ships inside the binaries, and under which licence
 ├─ CONTRIBUTING.md           how to contribute (code, docs, data)
 ├─ requirements.txt          Python dependencies (see the cu128 note for Blackwell GPUs)
 ├─ Dockerfile                the web app in a container (CPU deps + model baked in)
@@ -687,6 +688,9 @@ Vincoli: SOLO dati sintetici (mai PII reali). Se Gemini non è disponibile, ferm
 ## License
 
 Released under the **[MIT License](LICENSE)** © 2026 Simone Rizzo — Rizzo AI Academy.
+The **released binaries** are a different matter: they bundle PyMuPDF and are therefore conveyed
+under the AGPL-3.0 — see [Licensing of the released binaries](#licensing-of-the-released-binaries)
+at the end of this file, and [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
 Note on third-party data: the training corpus draws on
 [Ai4Privacy](https://huggingface.co/datasets/ai4privacy/open-pii-masking-500k-ai4privacy)
@@ -741,3 +745,27 @@ installed on the org. Refresh it with <code>python scripts/plot_star_history.py<
 6. Microsoft. *Presidio: Data Protection and De-identification SDK*. Open source (MIT).
 7. Regulation (EU) 2016/679: General Data Protection Regulation (GDPR).
 8. Regulation (EU) 2024/1689: Artificial Intelligence Act (EU AI Act).
+
+---
+
+### Licensing of the released binaries
+
+The **source code in this repository is MIT** — clone it, install the dependencies yourself, and
+nothing here is copyleft.
+
+The **binaries published under Releases** (`.exe`, `.dmg`, `.deb`, `.AppImage`) are conveyed under
+the **AGPL-3.0**, because they bundle [PyMuPDF](https://pypi.org/project/PyMuPDF/), which is dual
+licensed AGPL-3.0 or Artifex Commercial. PyMuPDF is what performs the real redaction — the glyphs
+leave the PDF content stream instead of being covered with a rectangle. The corresponding source
+required by the AGPL is this repository.
+
+**This does not affect your documents.** Copyleft applies to the software, not to its output:
+anonymising a contract with this app obliges you to publish nothing. Commercial use is fine, and so
+is selling it — what the AGPL forbids is redistributing the binaries *closed*, without their source.
+One caveat for network deployments: if you serve the app to other people (`--host 0.0.0.0`, or
+Docker on an office server) the AGPL's §13 asks you to offer them the corresponding source; running
+an unmodified build satisfies that by pointing here. The default bind is `127.0.0.1`, so ordinary
+desktop use never gets there.
+
+Full dependency-by-dependency breakdown, including the model weights and training data:
+**[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)**.
