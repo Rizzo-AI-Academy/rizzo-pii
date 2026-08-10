@@ -34,6 +34,26 @@ Scelte che contano:
 `Dockerfile.linux` resta quello che era: l'ambiente di **build** dei bundle .deb/AppImage, non
 un modo di far girare l'app. Il `.dockerignore` ora riammette `src/app/` (era `*`, pensato per
 il contesto vuoto di `Dockerfile.linux`, che infatti non fa nessun `COPY`).
+## 2026-08-04 — Un modello lento interrompeva la generazione dei template (`llm_template_bank.py`)
+
+Il timeout di lettura di `urllib` scade **dentro** `getresponse()` e solleva `TimeoutError`,
+che deriva da `OSError` e **non** da `urllib.error.URLError`. I due `except` intercettavano
+`(urllib.error.URLError, KeyError, IndexError)`: una singola generazione lenta — normale con
+un modello locale su CPU o molto quantizzato — non consumava un tentativo, propagava e
+fermava tutta l'esecuzione, buttando i template già scritti.
+
+Segnalato da **@p3pp01** con Gemma servito da Ollama, sulla PR #20.
+
+Ora si intercetta `OSError`, che è la classe base sia di `URLError` sia di `TimeoutError`, e
+copre per giunta la connessione rifiutata quando il server locale non è avviato. Il messaggio
+d'errore stampa anche il tipo dell'eccezione, che era l'informazione che mancava per capirlo.
+
+Test: `tests/test_backend_llm_timeout.py` sostituisce `urlopen` con quattro errori di rete
+(timeout, timeout come `OSError`, connessione rifiutata, host irraggiungibile) e verifica che
+la chiamata **ritorni `None`** invece di propagare, su entrambi i backend e su `call_llm()`.
+Senza la correzione i test danno 7 errori.
+
+---
 
 ## 2026-08-03 — `_merge()` era quadratica: 100 s su un documento lungo (`app.py`)
 
