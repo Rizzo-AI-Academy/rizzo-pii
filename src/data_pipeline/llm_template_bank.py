@@ -30,6 +30,7 @@ import argparse
 import io
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -66,11 +67,53 @@ SLOT_HINTS = """  {ORG}     = ragione sociale di una societa'/studio legale/banc
   {MATRICOLA} = matricola aziendale INPS/INAIL del datore di lavoro"""
 
 DOC_TYPES = [
+    # --- atti giudiziari civili ---
     "atto di citazione", "comparsa di costituzione e risposta", "sentenza civile",
     "decreto ingiuntivo", "contratto di locazione", "procura alle liti",
     "ricorso per decreto ingiuntivo", "verbale di udienza", "atto di diffida",
     "contratto di compravendita immobiliare",
+    # --- oltre il tribunale ---------------------------------------------------------
+    # Gli identificativi italiani (CF, P.IVA, catasto, IBAN, carta) compaiono anche fuori
+    # dagli atti civili, e il modello e' debole proprio sulle classi aperte -- ORG in testa
+    # (F1 .983 su 145 esempi di validazione), poi ZIPCODE/STREET/CITY. Questi domini portano
+    # ORG in contesti dove e' il soggetto naturale (appalti, banche, assicurazioni, condominio)
+    # e strutture di documento che gli atti civili non hanno (moduli, informative, capitolati).
+    "capitolato di appalto pubblico di lavori",
+    "perizia tecnica di stima immobiliare",
+    "atto di successione e dichiarazione di eredita'",
+    "contratto di lavoro subordinato a tempo indeterminato",
+    "lettera di contestazione disciplinare a un dipendente",
+    "verbale di assemblea condominiale",
+    "denuncia di sinistro assicurativo con controparte",
+    "contratto di mutuo ipotecario bancario",
+    "informativa privacy e consenso al trattamento dei dati (GDPR)",
+    "ricorso tributario alla Corte di Giustizia Tributaria",
+    "atto notarile di costituzione di societa' a responsabilita' limitata",
+    "istanza di accesso agli atti amministrativi",
+    "denuncia-querela per uso fraudolento di una carta di credito",
+    "reclamo all'Arbitro Bancario Finanziario per operazione non autorizzata su carta",
+    "verbale di sommarie informazioni testimoniali",
+    "atto di citazione per risarcimento danni da sinistro stradale",
+    "ricorso al Giudice di Pace in opposizione a sanzione amministrativa",
+    "consenso informato al trattamento sanitario",
+    "verbale di identificazione di persona sottoposta a controllo",
+    "domanda di ammissione a prestazione previdenziale",
 ]
+
+# quanti tipi campionare per run, quando non specificato
+DEFAULT_DOC_TYPES = 10
+
+
+def sample_doc_types(n=DEFAULT_DOC_TYPES):
+    """Sottoinsieme casuale dei tipi di documento (n=0 -> tutti).
+
+    Con 30 tipi, scrivere un template per OGNI tipo a ogni run triplicherebbe il costo
+    rispetto a prima -- e per chi usa Gemini il costo e' in euro. Campionarne 10 per run
+    tiene il costo invariato e fa si' che contributori diversi coprano domini diversi:
+    l'unione delle contribuzioni copre tutto senza che nessuno paghi per tutto."""
+    if not n or n >= len(DOC_TYPES):
+        return list(DOC_TYPES)
+    return random.sample(DOC_TYPES, n)
 
 # >>> incolla qui la tua chiave NUOVA (solo locale: non committare / non condividere questo file).
 # Lasciala "" per usare invece la variabile d'ambiente GEMINI_API_KEY.
@@ -310,6 +353,9 @@ def clean_and_validate(text):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--per-type", type=int, default=3, help="template per tipo documento")
+    ap.add_argument("--doc-types", type=int, default=DEFAULT_DOC_TYPES,
+                    help=f"quanti tipi di documento campionare per run "
+                         f"(0 = tutti i {len(DOC_TYPES)})")
     ap.add_argument("--out", default=str(ROOT / "dataset" / "synthetic" / "legal_templates.json"))
     ap.add_argument("--append", action="store_true", help="accoda al file esistente")
     args = ap.parse_args()
@@ -322,17 +368,18 @@ def main():
     base = len(templates)            # quanti c'erano gia'
     tid = len(templates)
 
-    total = len(DOC_TYPES) * args.per_type
+    doc_types = sample_doc_types(args.doc_types)
+    total = len(doc_types) * args.per_type
     done = ok = skip = 0
     t0 = time.time()
-    print(f"Genero {total} template ({len(DOC_TYPES)} tipi x {args.per_type}) "
-          f"con [{backend_name()}]\n")
+    print(f"Genero {total} template ({len(doc_types)} tipi su {len(DOC_TYPES)} "
+          f"x {args.per_type}) con [{backend_name()}]\n")
 
     def save():
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump(templates, f, ensure_ascii=False, indent=2)
 
-    for doc_type in DOC_TYPES:
+    for doc_type in doc_types:
         for _ in range(args.per_type):
             done += 1
             elapsed = time.time() - t0
