@@ -442,6 +442,33 @@ Motivazione: consentono di **arricchire il pool offline da 25 a 85 template senz
 `MIXEDLIST` e `PROVINCE`) per mitigare l'overfit strutturale sui tag IT-legali rari
 (`CATASTO`/`DOCID`/`CF`/`TARGA`). Complementare al percorso Gemini raccomandato in
 `CONTRIBUTING.md`, non sostitutivo. Nessun impatto sul training.
+## 2026-07-30 — 20 tipi di documento oltre il tribunale (a costo invariato)
+
+`DOC_TYPES` conteneva **10** tipi, tutti atti giudiziari civili. Ma gli identificativi italiani
+compaiono anche fuori da un'aula, e il modello è debole proprio sulle **classi aperte**: `ORG` è il
+tag peggiore (F1 .983 su 145 esempi di validazione), seguito da `ZIPCODE`/`STREET`/`CITY`. Restare
+sugli atti civili significa non mostrare mai `ORG` nei contesti dove è il soggetto naturale.
+
+Aggiunti **20 tipi**: appalti pubblici, perizia di stima, successioni, lavoro subordinato,
+contestazione disciplinare, assemblea condominiale, sinistro assicurativo, mutuo ipotecario,
+informativa GDPR, ricorso tributario, atto notarile di S.r.l., accesso agli atti, denuncia per uso
+fraudolento di carta, reclamo all'ABF, sommarie informazioni testimoniali, sinistro stradale,
+opposizione a sanzione, consenso informato sanitario, verbale di identificazione, prestazione
+previdenziale. Portano anche **strutture** che gli atti civili non hanno: moduli, informative,
+capitolati.
+
+**Il costo non aumenta.** Scrivere un template per ognuno dei 30 tipi a ogni run triplicherebbe le
+chiamate all'LLM — e per chi usa Gemini il costo è in euro. `sample_doc_types()` ne campiona **10
+per run** (`--doc-types N`, `0` = tutti): stesso numero di chiamate di prima, e contributori diversi
+coprono domini diversi. Due run consecutive differiscono di ~7 tipi su 10, quindi **l'unione delle
+contribuzioni copre tutto senza che nessuno paghi per tutto** — che è il modo giusto di far crescere
+un dataset comunitario.
+
+Nota per chi rivede: `find_stray_names()` è tarata sul lessico dei tribunali
+(`LEGAL_CAPITALIZED`) e nei domini nuovi scarta template validi perché legge come nomi di persona
+espressioni come *"Risorse Umane"*, *"Ufficio Protocollo"*, *"Sala Udienze"*. È perdita di recall,
+non un rischio di sicurezza (misurata: 8 template scartati su 44 in una banca di prova), ma conviene
+estendere il vocabolario insieme ai domini.
 
 ---
 

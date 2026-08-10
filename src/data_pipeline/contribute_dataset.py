@@ -228,7 +228,7 @@ def _validate_record(rec):
     return None
 
 
-def gen_new_templates(per_type, boost):
+def gen_new_templates(per_type, boost, n_doc_types=None):
     """Fa scrivere a Gemini NUOVI template legali (prosa con soli segnaposto).
 
     Ritorna la lista dei testi-template validi. Ogni esecuzione produce prosa
@@ -253,16 +253,20 @@ def gen_new_templates(per_type, boost):
         hint = ("\n\nIMPORTANTE: in questo documento usa PIU' VOLTE, in modo naturale, "
                 "i seguenti segnaposto: " + " ".join(f"{{{s}}}" for s in boost_slots) + ".")
 
-    total = len(tb.DOC_TYPES) * per_type
+    doc_types = tb.sample_doc_types(
+        tb.DEFAULT_DOC_TYPES if n_doc_types is None else n_doc_types)
+    total = len(doc_types) * per_type
     print(f"Scrivo {total} NUOVI template con [{tb.backend_name()}] "
-          f"({len(tb.DOC_TYPES)} tipi x {per_type}) ...")
+          f"({len(doc_types)} tipi su {len(tb.DOC_TYPES)} x {per_type}) ...")
 
     out, done, ok = [], 0, 0
-    for doc_type in tb.DOC_TYPES:
+    for doc_type in doc_types:
         for _ in range(per_type):
             done += 1
+            persona, stile = tb.registro(doc_type)
             prompt = tb.PROMPT.format(doc_type=doc_type, slot_list=slot_list,
-                                      slot_hints=tb.SLOT_HINTS) + hint
+                                      slot_hints=tb.SLOT_HINTS,
+                                      persona=persona, stile=stile) + hint
             text = tb.clean_and_validate(tb.call_llm(prompt))
             if text:
                 out.append(text)
@@ -312,7 +316,7 @@ STOP_TEMPLATE = 2_000
 
 
 def generate(n, seed, handle, per_type, offline, boost, out_path=None,
-             max_per_structure=25):
+             max_per_structure=25, n_doc_types=None):
     """Genera esempi sintetici tenendo solo le righe che aggiungono qualcosa.
 
     Perche' non semplicemente n righe: il testo di ogni riga e' unico (i valori cambiano
@@ -344,7 +348,7 @@ def generate(n, seed, handle, per_type, offline, boost, out_path=None,
     # Seed diverso per contributore => valori diversi => no duplicati nel dataset.
     random.seed(seed)
 
-    new_templates = [] if offline else gen_new_templates(per_type, boost)
+    new_templates = [] if offline else gen_new_templates(per_type, boost, n_doc_types)
     # i built-in garantiscono comunque la copertura dei tag rari (CATASTO/DOCID/CONTO...);
     # la NOVITA' del testo viene dai template freschi di Gemini.
     templates = new_templates + gen.TEMPLATES + gen.load_external_templates()
@@ -499,6 +503,8 @@ def main():
                     help="quanti NUOVI template per tipo documento far scrivere a Gemini (default 2)")
     ap.add_argument("--boost", nargs="*", metavar="TAG=PESO",
                     help="rinforza i tag sotto-rappresentati, es. --boost ORG=6 IBAN=4 CF=4")
+    ap.add_argument("--doc-types", type=int, default=None,
+                    help="quanti tipi di documento campionare per run (0 = tutti)")
     ap.add_argument("--offline", action="store_true",
                     help="non usare Gemini: genera dai soli template built-in (dati meno nuovi)")
     ap.add_argument("--no-upload", action="store_true",
@@ -548,7 +554,7 @@ def main():
     tmp_path = ROOT / "dataset" / "contributions" / f".{handle}-{stamp}.parziale.jsonl"
     _, counts, n_new, n_ok, from_new = generate(
         args.n, seed, handle, args.per_type, args.offline, boost, out_path=tmp_path,
-        max_per_structure=args.max_per_structure)
+        max_per_structure=args.max_per_structure, n_doc_types=args.doc_types)
     if n_new:
         print(f"\n{from_new}/{n_ok} esempi da template NUOVI di Gemini.")
     print(f"Generati {n_ok} esempi validi. Entita' per label:")
