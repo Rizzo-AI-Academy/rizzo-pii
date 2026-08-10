@@ -195,11 +195,13 @@ def _page_png(d, n, dpi=PREVIEW_DPI):
     if not (0 <= n < d["n_pages"]):
         return None
     key = (n, dpi)
-    png = d["pages"].get(key)
+    with _DOCS_LOCK:
+        png = d["pages"].get(key)
     if png is None:
         with fitz.open(stream=d["pdf"], filetype="pdf") as doc:
             png = doc.load_page(n).get_pixmap(dpi=dpi).tobytes("png")
-        d["pages"][key] = png
+        with _DOCS_LOCK:
+            d["pages"][key] = png
     return png
 
 
@@ -258,6 +260,13 @@ TAG_NAMES = [t[0] for t in TAGS]
 _prefs = server_config.load_prefs()
 EXCLUDED_TAGS = _prefs["excluded_tags"]
 MAPPING_ENABLED = _prefs["mapping_enabled"]
+_PREFS_LOCK = threading.Lock()   # protegge la lettura/scrittura ATOMICA della coppia sopra
+
+
+def _get_prefs():
+    """Snapshot coerente di (excluded_tags, mapping_enabled): mai una POST /settings a meta'."""
+    with _PREFS_LOCK:
+        return EXCLUDED_TAGS, MAPPING_ENABLED
 
 
 # --------------------------------------------------------------------------- #
@@ -480,6 +489,7 @@ def health():
     """Liveness/readiness SENZA inference: sonda economica per orchestratori e sidecar.
     200 = modello caricato e pronto; 503 = server su ma modello non disponibile."""
     ready = nlp is not None
+    excl, mapping = _get_prefs()
     body = {
         "status": "ok" if ready else "loading",
         "model_loaded": ready,
@@ -488,8 +498,8 @@ def health():
         "app_version": APP_VERSION,
         "device": "cuda" if device == 0 else "cpu",
         "tags": len(TAG_NAMES),
-        "excluded_tags": EXCLUDED_TAGS,
-        "mapping_enabled": MAPPING_ENABLED,
+        "excluded_tags": excl,
+        "mapping_enabled": mapping,
     }
     return jsonify(body), (200 if ready else 503)
 
@@ -552,9 +562,12 @@ def analyze_route():
         return jsonify({"error": "Nessun testo da analizzare."}), 400
 
     # override per-richiesta; senza override vale la configurazione del server
-    excl = server_config.parse_tag_list(raw_excl) if raw_excl is not None else EXCLUDED_TAGS
-    keep_map = (server_config.parse_bool(raw_map, MAPPING_ENABLED)
-                if raw_map is not None else MAPPING_ENABLED)
+    # (snapshot atomico: una POST /settings concorrente non deve far leggere
+    # un tag escluso aggiornato insieme a un mapping_enabled non ancora aggiornato, o viceversa)
+    default_excl, default_map = _get_prefs()
+    excl = server_config.parse_tag_list(raw_excl) if raw_excl is not None else default_excl
+    keep_map = (server_config.parse_bool(raw_map, default_map)
+                if raw_map is not None else default_map)
     out = analyze(text, excl, keep_map)
     out["source_text"] = text
     return jsonify(out)
@@ -625,7 +638,8 @@ def _build_anonymized_pdf():
     stem = os.path.splitext(_safe_name(name, "documento.pdf"))[0] or "documento"
     out_name = f"{stem}_anonimizzato.pdf"
 
-    excl = server_config.parse_tag_list(raw_excl) if raw_excl is not None else EXCLUDED_TAGS
+    excl = (server_config.parse_tag_list(raw_excl) if raw_excl is not None
+            else _get_prefs()[0])
     # mapping_enabled=True e' interno: il risultato non esce da questa funzione.
     res = analyze(text, excl, mapping_enabled=True)
     if not res["mapping"]:
@@ -743,10 +757,11 @@ def doc_file(doc_id):
 @app.route("/settings", methods=["GET"])
 @app.route("/tags", methods=["GET"])
 def settings_get():
+    excl, mapping = _get_prefs()
     return jsonify({
         "tags": [{"tag": t, "it": it, "en": en, "example": ex} for t, it, en, ex in TAGS],
-        "excluded_tags": EXCLUDED_TAGS,
-        "mapping_enabled": MAPPING_ENABLED,
+        "excluded_tags": excl,
+        "mapping_enabled": mapping,
         "config_path": str(server_config.prefs_path()),
         "env_override": "PII_EXCLUDE_TAGS" in os.environ or "PII_MAPPING" in os.environ,
     })
@@ -767,8 +782,9 @@ def settings_post():
     if tags is None and mapping is None:
         return jsonify({"error": "Niente da salvare: passa excluded_tags e/o mapping_enabled."}), 400
     saved = server_config.save_prefs(excluded_tags=tags, mapping_enabled=mapping)
-    EXCLUDED_TAGS = saved["excluded_tags"]
-    MAPPING_ENABLED = saved["mapping_enabled"]
+    with _PREFS_LOCK:
+        EXCLUDED_TAGS = saved["excluded_tags"]
+        MAPPING_ENABLED = saved["mapping_enabled"]
     return jsonify({"ok": True, "excluded_tags": EXCLUDED_TAGS,
                     "mapping_enabled": MAPPING_ENABLED})
 
