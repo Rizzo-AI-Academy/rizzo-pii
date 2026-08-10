@@ -13,7 +13,7 @@ Flusso d'uso:
 Tutto in locale: il testo e il dizionario {placeholder -> valore} non lasciano la macchina.
 
 Il modello e' affiancato da una rete REGEX + CHECKSUM (EMAIL, TELEFONO, IBAN, CF, PIVA,
-carta di credito, importi, targhe, URL). Le entita' validate matematicamente (IBAN/CF/
+carta di credito, importi, targhe, URL, IP). Le entita' validate matematicamente (IBAN/CF/
 PIVA/carta) hanno priorita' sul modello in caso di sovrapposizione.
 
 Il dizionario di ripristino si puo' DISATTIVARE (switch nell'UI, --no-mapping, PII_MAPPING=0):
@@ -206,8 +206,8 @@ def _page_png(d, n, dpi=PREVIEW_DPI):
 # --------------------------------------------------------------------------- #
 # Legenda dei tag + tag esclusi dall'anonimizzazione
 #
-# I 22 tag del modello (docs/TASSONOMIA_TAG.md) + URL, che e' solo-regex: il modello
-# non e' stato addestrato su di esso, lo trova la rete regex.
+# I 22 tag del modello (docs/TASSONOMIA_TAG.md) + URL e IPADDR, che sono solo-regex:
+# il modello non e' stato addestrato su di essi, li trova la rete regex.
 # L'utente puo' DESELEZIONARE un tag: le entita' di quel tipo vengono rilevate ma non
 # sostituite (restano in chiaro). Serve a chi deve confrontare gli importi (AMOUNT) o
 # tenere eta'/sesso in un caso clinico.
@@ -245,6 +245,8 @@ TAGS = [
      "Land registry data: sheet, parcel, subordinate", "Foglio 12, part. 345, sub. 6"),
     ("URL", "Indirizzo web (rilevato solo dalla rete regex, non dal modello)",
      "Web address (regex net only, not from the model)", "https://www.studiorossi.it"),
+    ("IPADDR", "Indirizzo IP, anche subnet CIDR o range (rilevato solo dalla rete regex)",
+     "IP address, including CIDR subnet or range (regex net only)", "192.168.1.1"),
 ]
 TAG_NAMES = [t[0] for t in TAGS]
 

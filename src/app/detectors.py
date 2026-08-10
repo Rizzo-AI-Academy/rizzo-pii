@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Rete REGEX + CHECKSUM che affianca il modello (EMAIL, TELEFONO, IBAN, CF, PIVA,
-carta di credito, importo, targa, URL).
+carta di credito, importo, targa, URL, indirizzo IP).
 
 Come `pdf_export`, questo modulo lavora solo su stringhe: nessun import di
 torch/transformers/fitz, quindi e' testabile in isolamento e senza il modello.
@@ -158,6 +158,24 @@ DETECTORS = [
                 r"|\b(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+"
                 r"(?:it|com|net|org|eu|info|io|dev|app|gov|edu|cloud|online|site|blog)"
                 r"\b(?:/[^\s<>\"']*)?", re.IGNORECASE),
+     None, True),
+    # IPADDR: quattro ottetti 0-255 separati da punto. Il vincolo sull'ottetto (non
+    # un \d{1,3} generico) e' cio' che tiene fuori le versioni software tipo "2.3.55.987":
+    # 987 non e' un ottetto valido, quindi l'intera stringa non matcha come IP.
+    # Copre anche le due notazioni con cui un IP compare in un log/config:
+    #   - CIDR:   192.168.1.0/24        (prefisso 0-32)
+    #   - range:  192.168.1.1-192.168.1.20
+    # Resta un limite noto (non risolvibile a regex, lo segnala anche l'issue): una
+    # versione software con tutti gli ottetti per caso <= 255 (es. "1.2.3.4") e'
+    # indistinguibile da un IP vero. Nessun falso negativo pero' sulle versioni con
+    # un numero fuori range, che sono la stragrande maggioranza dei casi reali.
+    ("IPADDR",
+     re.compile(r"\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
+                r"(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}"
+                r"(?:/(?:3[0-2]|[12]?\d))?"
+                r"(?:\s*-\s*(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
+                r"(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})?"
+                r"\b"),
      None, True),
     # DOCID: il codice di un atto e' scritto sempre dopo la sua sigla ("R.G. 1234/2024",
     # "Prot. 123/2024", "Rep. 45"). E' la sigla a renderlo riconoscibile: il numero da

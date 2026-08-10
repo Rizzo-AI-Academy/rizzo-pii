@@ -89,6 +89,17 @@ POSITIVI = [
      "PIVA", "00743110157"),
     ("piva_con_prefisso_it", "Partita IVA IT00743110157, sede in Milano.",
      "PIVA", "00743110157"),
+    # Indirizzo IP: forma semplice, subnet CIDR, range.
+    ("ip_semplice", "Il server risponde su 192.168.1.10 sulla rete interna.",
+     "IPADDR", "192.168.1.10"),
+    ("ip_pubblico", "Connessione in ingresso da 8.8.8.8 registrata nel log.",
+     "IPADDR", "8.8.8.8"),
+    ("ip_cidr", "La subnet 192.168.1.0/24 e' riservata al reparto IT.",
+     "IPADDR", "192.168.1.0/24"),
+    ("ip_range", "Range assegnato 192.168.1.1-192.168.1.20 per i client DHCP.",
+     "IPADDR", "192.168.1.1-192.168.1.20"),
+    ("ip_range_con_spazi", "Range assegnato 192.168.1.1 - 192.168.1.20 per i client.",
+     "IPADDR", "192.168.1.1 - 192.168.1.20"),
 ]
 
 # Valori con la forma giusta ma il checksum sbagliato: dove il detector e'
@@ -115,6 +126,13 @@ NEGATIVI = [
     ("sequenza_lunga_non_luhn", "Codice pratica 1234567890123456789 del 2024."),
     ("protocollo_con_punti", "Protocollo 2024.0001234.5678 del registro generale."),
     ("mandato_con_punti", "Mandato n. 12.345.678.901.234 del tesoriere."),
+]
+
+# Versioni software con un numero fuori range 0-255: non devono diventare IPADDR.
+# E' il caso esplicito segnalato nell'issue #83 (es. "2.3.55.987").
+IP_NEGATIVI = [
+    ("versione_software", "Aggiornata alla versione 2.3.55.987 del pacchetto."),
+    ("versione_a_5_cifre", "Changelog della build 10.20.30.40500 di oggi."),
 ]
 
 TAG_CON_CHECKSUM = ("IBAN", "CF", "PIVA", "CREDITCARDNUMBER")
@@ -161,6 +179,11 @@ class DetectorFormatTests(unittest.TestCase):
                       "Cfr. pagg. 12-15 e 20-24 della memoria."):
             with self.subTest(testo):
                 self.assertEqual([], spans(testo, "TELEPHONENUM"))
+
+    def test_versione_software_non_diventa_ip(self):
+        for nome, testo in IP_NEGATIVI:
+            with self.subTest(nome):
+                self.assertEqual([], spans(testo, "IPADDR"))
 
     def test_iban_non_ingoia_la_parola_successiva(self):
         # La regex raggruppata e' golosa: se assorbe il token dopo l'IBAN il
