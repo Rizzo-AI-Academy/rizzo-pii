@@ -442,6 +442,29 @@ Motivazione: consentono di **arricchire il pool offline da 25 a 85 template senz
 `MIXEDLIST` e `PROVINCE`) per mitigare l'overfit strutturale sui tag IT-legali rari
 (`CATASTO`/`DOCID`/`CF`/`TARGA`). Complementare al percorso Gemini raccomandato in
 `CONTRIBUTING.md`, non sostitutivo. Nessun impatto sul training.
+## 2026-07-30 — Concordanza articolo/nome nei template scritti dall'LLM
+
+Il `PROMPT` chiede all'LLM di scrivere `"il/la {LAWYER}"`, ma il modello scrive quasi sempre
+`"il {LAWYER}"`: con un nome femminile iniettato esce **"il Lara De Angelis"**. Misurato su una
+generazione reale da 5.000 esempi: **13,9%** delle entità persona ha l'articolo discordante,
+**26%** delle righe ne contiene almeno una. Le label restano esatte — è la prosa che non regge, e
+la plausibilità del contesto è il motivo per cui questi template esistono.
+
+`fix_concordanza()`, applicata da `clean_and_validate()`, riscrive il determinante davanti ai
+segnaposto di persona sfruttando una regola del linguaggio giuridico italiano: il **nome di ruolo**
+porta l'articolo maschile per entrambi i sessi. Così `"il {LAWYER}"` → `"l'avvocato {LAWYER}"`,
+`"del {JUDGE}"` → `"del giudice {JUDGE}"`, `"al {PLAINTIFF}"` → `"all'attore {PLAINTIFF}"`,
+`"dalla {DEFENDANT}"` → `"dal convenuto {DEFENDANT}"`. Per `{FULLNAME}`, che non ha un ruolo, il
+determinante si toglie: `"del {FULLNAME}"` → `"di {FULLNAME}"`, `"il {FULLNAME}"` → `"{FULLNAME}"`.
+
+Vale per qualsiasi backend (Gemini incluso): è l'LLM, non il modello locale, a produrre l'artefatto.
+
+**Resta noto e non risolto:** `"il Sig. {FULLNAME}"` — forma che il prompt suggerisce
+esplicitamente — con un nome femminile dà *"il Sig. Arianna Nardi"*. Non è correggibile a livello
+di template, perché il sesso si conosce solo quando il valore viene iniettato; servirebbe un
+titolo neutro nel prompt (`"il/la Sig."`) o un `{TITLE}` generato accanto al nome. Stessa natura
+il caso `"del {TRIBUNAL}"` → *"del Corte d'Appello di Sassari"*, dove `TRIBUNAL_TYPES` mescola
+generi (`Tribunale`, `Corte`, `Procura`).
 
 ---
 
