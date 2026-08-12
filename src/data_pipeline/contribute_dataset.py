@@ -349,7 +349,7 @@ def generate(n, seed, handle, per_type, offline, boost, out_path=None,
     # la NOVITA' del testo viene dai template freschi di Gemini.
     templates = new_templates + gen.TEMPLATES + gen.load_external_templates()
     print(f"\nTemplate nel pool: {len(templates)} "
-          f"({len(new_templates)} nuovi da Gemini + {len(gen.TEMPLATES)} built-in + "
+          f"({len(new_templates)} nuovi da {tb.backend_name()} + {len(gen.TEMPLATES)} built-in + "
           f"{len(templates) - len(new_templates) - len(gen.TEMPLATES)} locali)")
 
     # selezione pesata: i template che coprono i tag potenziati escono piu' spesso
@@ -550,7 +550,7 @@ def main():
         args.n, seed, handle, args.per_type, args.offline, boost, out_path=tmp_path,
         max_per_structure=args.max_per_structure)
     if n_new:
-        print(f"\n{from_new}/{n_ok} esempi da template NUOVI di Gemini.")
+        print(f"\n{from_new}/{n_ok} esempi da template NUOVI di {tb.backend_name()}.")
     print(f"Generati {n_ok} esempi validi. Entita' per label:")
     for label, c in sorted(counts.items(), key=lambda x: -x[1]):
         print(f"  {label:18s} {c}")
