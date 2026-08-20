@@ -5,6 +5,19 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-08-20 — `/tags`: gli esempi CF e PIVA ora passano il proprio checksum
+
+Gli esempi mostrati da `/tags`/`/settings` per `CF` (`RSSMRA85H12F205Z`) e `PIVA`
+(`12345678901`) erano etichettati "checksum verificato" ma non passavano `cf_ok()`/`piva_ok()`
+in `src/app/detectors.py`. Chi li usava per un primo test di `/analyze` (come in [issue #89](
+https://github.com/Rizzo-AI-Academy/rizzo-pii/issues/89)) vedeva sempre `validated: false` e
+concludeva che la validazione fosse rotta — non lo era, era solo l'esempio a essere sbagliato
+(`IBAN`, il cui esempio *è* valido, tornava `validated: true` sulla stessa richiesta).
+Sostituiti con `RSSMRA80A01H501U` (CF) e `12345678903` (PIVA), entrambi verificati contro i
+validatori dell'app.
+
+---
+
 ## 2026-08-07 — `Dockerfile`: l'app come webapp in un container
 
 Finora l'unico modo di far girare l'app era l'installer desktop o `python src/app/app.py` con
