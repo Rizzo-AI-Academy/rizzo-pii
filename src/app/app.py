@@ -227,7 +227,7 @@ TAGS = [
     ("EMAIL", "Email, PEC inclusa", "Email, certified mail included", "m.rossi@studio.it"),
     ("TELEPHONENUM", "Numero di telefono", "Phone number", "+39 333 1234567"),
     ("CF", "Codice fiscale (checksum verificato)", "Italian tax code (checksum verified)",
-     "RSSMRA80A01H501U"),
+     "RSSMRA85H12F205Y"),
     ("PIVA", "Partita IVA (checksum verificato)", "VAT number (checksum verified)", "12345678903"),
     ("ID_DOC", "Numero di documento d'identità (carta, passaporto, patente)",
      "Identity document number (ID card, passport, driving licence)", "CA12345AB"),

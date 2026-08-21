@@ -13,8 +13,9 @@ in `src/app/detectors.py`. Chi li usava per un primo test di `/analyze` (come in
 https://github.com/Rizzo-AI-Academy/rizzo-pii/issues/89)) vedeva sempre `validated: false` e
 concludeva che la validazione fosse rotta — non lo era, era solo l'esempio a essere sbagliato
 (`IBAN`, il cui esempio *è* valido, tornava `validated: true` sulla stessa richiesta).
-Sostituiti con `RSSMRA80A01H501U` (CF) e `12345678903` (PIVA), entrambi verificati contro i
-validatori dell'app.
+Sostituiti con `RSSMRA85H12F205Y` (CF) e `12345678903` (PIVA), gli stessi valori usati dalla
+PR #36 per i corrispondenti esempi in `README.md`/`docs/`, così l'esempio nell'API live e
+quello nella documentazione restano lo stesso codice fiscale.
 
 ---
 
