@@ -5,6 +5,19 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-08-23 — anteprima PDF: zoom sulle pagine ([issue #92](https://github.com/Rizzo-AI-Academy/rizzo-pii/issues/92))
+
+Le due colonne di anteprima PDF (documento originale e "PDF censurato") mostravano le pagine
+sempre alla stessa dimensione: su un documento con testo piccolo o un layout denso (moduli,
+tabelle) non c'era modo di ingrandire per verificare cosa fosse stato anonimizzato senza
+scaricare il file. Aggiunta una barra di zoom (`−`/`+`/percentuale, che resetta a 100%) sticky
+in alto a destra di ciascuna anteprima, più `Ctrl`/`Cmd` + rotellina come scorciatoia; le due
+colonne zoomano in modo indipendente, dal 50% al 300%. Puro frontend: le pagine restano le
+stesse PNG renderizzate server-side, lo zoom è solo CSS (`width` della pagina in funzione di
+una custom property `--z`) — nessuna modifica al backend, nessun modello coinvolto.
+
+---
+
 ## 2026-08-07 — `Dockerfile`: l'app come webapp in un container
 
 Finora l'unico modo di far girare l'app era l'installer desktop o `python src/app/app.py` con
