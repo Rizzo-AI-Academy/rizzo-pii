@@ -492,18 +492,36 @@ def text_to_pdf(text, margin=56.0, fontsize=10.5, leading=15.5):
     def tl(s):
         return fitz.get_text_length(s, fontname="helv", fontsize=fontsize)
 
+    # In una riga larga `width` non entrano piu' di `cap` caratteri, qualunque siano:
+    # oltre quel punto non c'e' niente da misurare. Serve perche' hard_split misurava
+    # e ricopiava TUTTA la stringa residua a ogni giro -> O(n^2): una "parola" senza
+    # spazi (JSON incollato, base64, riga di tabella coi soli tab) da 16.000 caratteri
+    # costava 15 s, da 128.000 un quarto d'ora.
+    # Il conto va fatto sul glifo PIU' STRETTO, non su "l": il testo e' gia' forzato in
+    # latin-1 poche righe sopra, quindi il repertorio e' chiuso e il minimo si misura.
+    # In helv e' l'apostrofo (2,0055 pt a corpo 10,5) contro i 2,331 di "l": con "l" cap
+    # varrebbe 209 dove in colonna ne entrano 240, la finestra ci starebbe, il ciclo
+    # uscirebbe subito e la coda finirebbe tutta su una riga larga oltre il bordo pagina.
+    stretto = min(tl(chr(c)) for c in list(range(32, 127)) + list(range(160, 256)))
+    cap = max(2, int(width / max(stretto, 0.1)) + 2)   # >= 2: con margini assurdi width <= 0
+
     def hard_split(line):
         """Spezza le 'parole' piu' larghe della riga (IBAN, URL...)."""
-        out = []
-        while tl(line) > width and len(line) > 1:
-            k = max(1, int(len(line) * width / tl(line)))
-            while k > 1 and tl(line[:k]) > width:
+        if tl(line) <= width:          # caso normale: la riga ci sta gia', una sola misura
+            return [line]
+        out, i = [], 0
+        while len(line) - i > 1:
+            head = line[i:i + cap]
+            if tl(head) <= width:
+                break
+            k = max(1, int(len(head) * width / tl(head)))
+            while k > 1 and tl(head[:k]) > width:
                 k -= 1
-            while k < len(line) and tl(line[:k + 1]) <= width:
+            while k < len(head) and tl(head[:k + 1]) <= width:
                 k += 1
-            out.append(line[:k])
-            line = line[k:]
-        out.append(line)
+            out.append(head[:k])
+            i += k
+        out.append(line[i:])
         return out
 
     def wrap(par):
