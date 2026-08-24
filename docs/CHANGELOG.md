@@ -34,6 +34,42 @@ Scelte che contano:
 `Dockerfile.linux` resta quello che era: l'ambiente di **build** dei bundle .deb/AppImage, non
 un modo di far girare l'app. Il `.dockerignore` ora riammette `src/app/` (era `*`, pensato per
 il contesto vuoto di `Dockerfile.linux`, che infatti non fa nessun `COPY`).
+## 2026-08-04 — Nelle tabelle il cognome resta in chiaro (`generate_synthetic_pii.py`)
+
+Un elenco esportato da un gestionale o da Excel tiene **nome e cognome in colonne separate**.
+Su una tabella di sei righe, con `analyze()` e il modello `rizzo-pii-0.3B`, i valori che
+restano leggibili sono:
+
+| separatore | colonne separate | nome e cognome nella stessa cella |
+|---|---:|---:|
+| tab | 7,9% (38/480) | 0/240 |
+| virgola | 12,9% (62/480) | 0/240 |
+| **punto e virgola** (il default di Excel italiano) | **17,1%** (82/480) | 0/240 |
+
+I numeri sono la somma di quattro semi: su un seme solo oscillano molto (2,5-15% col tab),
+il contrasto con la cella unica no — quello è zero su tutti.
+
+Il taglio esiste già nei sintetici ma è **raro**: su 20.000 esempi, `nome SEP cognome` compare
+714 volte contro le 3.767 di `cognome SEP nome` (che gli elenchi producono da soli), e col
+punto e virgola solo 216. Tre template a colonne portano il primo caso a 4.236 e il punto e
+virgola a 2.003.
+
+**Il caso col TAB resta scoperto, e questo generatore non può chiuderlo.** `TOKEN_RE` scarta
+gli spazi, quindi una riga separata da tab diventa la stessa sequenza di token di
+`Cognome Nome` e il tab non arriva mai al training: la prima riga della tabella qui sopra —
+il 7,9% — non è raggiungibile da nessun template. Per chiuderla servirebbe normalizzare i tab
+in `analyze()` prima di passare il testo al modello, che è un'altra modifica e un altro file.
+Le altre due righe (12,9% e 17,1%) sono quelle che i template nuovi possono spostare.
+
+Nella tabella dei pagamenti l'importo va **fra virgolette**: `{AMOUNT}` contiene sempre la
+virgola decimale (`€ 62.880,00`), quindi senza sarebbero cinque campi sotto un'intestazione di
+quattro — ed è anche ciò che scrive un export CSV vero.
+
+Verificato sui record dei tre template nuovi: 0 sequenze BIO non valide, 0 `I-` incoerenti,
+0 righe con un numero di campi diverso dall'intestazione; generatore eseguito end-to-end, 0
+anomalie. **Per avere effetto serve rigenerare i sintetici e riaddestrare.**
+
+---
 
 ## 2026-08-03 — `_merge()` era quadratica: 100 s su un documento lungo (`app.py`)
 
