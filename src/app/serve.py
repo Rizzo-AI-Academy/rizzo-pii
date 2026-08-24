@@ -17,7 +17,7 @@ Configurazione host/porta:
   4) default 127.0.0.1:5005
 
 NB: la 5000 su macOS e' occupata da AirPlay Receiver (ControlCenter) -\u003e pagina bianca.
-Log:   %LOCALAPPDATA%\\\\rizzo-pii\\\\backend.log
+Log:   %LOCALAPPDATA%\\\\rizzo-pii\\\\backend.log  (in append; oltre 1 MB ruota su backend.log.1)
 
 Il processo esce con codice 76 (EX_PROTOCOL) se la porta e' occupata: Tauri lo
 riconosce e mostra il form di configurazione nello splash screen.
@@ -25,14 +25,33 @@ riconosce e mostra il form di configurazione nello splash screen.
 
 import os
 import sys
+import time
 
 # --- log su file (windowed mode -> niente console) ------------------------- #
+# In APPEND: con "w" il rilancio del sidecar (retry_backend di Tauri, o l'utente che
+# riapre l'app) cancellava il log dell'avvio fallito, cioe' proprio quello che lo
+# splash chiede di andare a leggere quando il backend non parte. Il lato Rust (tlog)
+# gia' scrive in append. Rotazione a 1 MB su .1 perche' il file non cresca all'infinito.
+_LOG_MAX = 1_000_000
 _logdir = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "rizzo-pii")
+_logpath = os.path.join(_logdir, "backend.log")
 try:
     os.makedirs(_logdir, exist_ok=True)
-    _log = open(os.path.join(_logdir, "backend.log"), "w", encoding="utf-8", buffering=1)
+    _ruotato = False
+    try:
+        if os.path.getsize(_logpath) > _LOG_MAX:
+            os.replace(_logpath, _logpath + ".1")
+            _ruotato = True
+    except OSError:
+        pass  # log assente, o non spostabile: si accoda al file esistente
+    _log = open(_logpath, "a", encoding="utf-8", buffering=1)
     sys.stdout = _log
     sys.stderr = _log
+    print(f"\n===== avvio {time.strftime('%Y-%m-%d %H:%M:%S')} (pid {os.getpid()}) =====")
+    if _ruotato:
+        # senza questa riga, chi segue lo splash ("vedi backend.log") non trova la
+        # traccia dell'avvio fallito: la rotazione l'ha appena spostata in .1.
+        print("(il log precedente e' in backend.log.1)")
 except Exception:
     pass  # se non si puo' loggare, si prosegue comunque
 
