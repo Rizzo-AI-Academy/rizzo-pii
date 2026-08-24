@@ -183,12 +183,25 @@ DETECTORS = [
                 r"(?:0?[1-9]|1[0-2])[/.\-](?:19|20)\d{2}"
                 r"(?:\s+\d{1,2}[:.]\d{2})?(?!\d)"),
      None, True),
+    # ORA: il modello taglia i minuti ("09:50" -> "09:", "14:30" -> "14") e la meta'
+    # che resta finisce in chiaro accanto al placeholder. La forma coi due punti e'
+    # chiusa (0-23 : 0-59, secondi opzionali) e si presta a una regex deterministica.
+    # NON si accetta il punto ("10.30"): li' la forma e' la stessa di "versione 1.30",
+    # "capitolo 3.15", "euro 10.30" e delle coordinate.
+    # Sta in SOFT_REGEX_LABELS, come DATE: due punti fra due numeri non sono una prova.
+    # E' quello che tiene insieme il caso difficile, la data che INCLUDE l'ora: sul
+    # timestamp "2026-03-15T10:30:00" il modello marca tutto come DATE, e se TIME avesse
+    # la priorita' della rete regex scalzerebbe quella span lasciando "2026-03-" IN
+    # CHIARO. Da soft perde contro il modello e vince solo dove nessuno reclama l'ora.
+    ("TIME",
+     re.compile(r"(?<![\d.:/-])(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?!\d|[.:/-]\d)"),
+     None, True),
 ]
 
 # Label della rete regex SENZA validatore forte: la forma da sola non basta a dire
 # "e' certamente questo campo". In _merge non ereditano la priorita' della rete regex,
 # cosi' il modello puo' sovrascriverle.
-SOFT_REGEX_LABELS = {"DATE"}
+SOFT_REGEX_LABELS = {"DATE", "TIME"}
 
 # Punteggiatura che chiude la frase e non fa parte dell'URL: "vedi https://x.it/pagina."
 _URL_TRAIL = ".,;:!?)]}»\"'"
