@@ -506,9 +506,21 @@ def _text_from_bytes(name, data):
         with fitz.open(stream=data, filetype="pdf") as doc:
             return "\n".join(page.get_text() for page in doc)
     if ext in TEXT_EXTS or not ext:
-        for enc in ("utf-8-sig", "utf-16", "latin-1"):
+        # utf-16 solo col BOM: senza, il codec accetta qualunque sequenza di lunghezza pari
+        # e si mangia i .txt a 8 bit. cp1252 prima di latin-1: e' quello che scrivono Word
+        # e il Blocco note italiani, e i due differiscono su euro e virgolette tipografiche.
+        primo = ("utf-16",) if data[:2] in (b"\xff\xfe", b"\xfe\xff") else ()
+        for enc in primo + ("utf-8-sig", "cp1252", "latin-1"):
             try:
-                return data.decode(enc)
+                # Via i byte nulli. Un utf-16 SENZA BOM finisce per forza su una codifica a
+                # 8 bit e il testo esce "M\0a\0r\0i\0o": a schermo non si vede niente (in
+                # HTML il NUL e' invisibile), quindi l'utente legge il documento intero,
+                # non trova segnaposti e conclude che non ci fosse nulla da anonimizzare -
+                # mentre i rilevatori, che lavorano sul testo vero, non trovano niente.
+                # In un utf-16 latino il byte alto e' proprio quello nullo: tolto, il testo
+                # torna esatto e le PII tornano trovabili. Riconoscere l'utf-16 contando i
+                # byte nulli, invece, sbaglia in entrambe le direzioni.
+                return data.decode(enc).replace("\x00", "")
             except UnicodeDecodeError:
                 continue
     raise ValueError(
