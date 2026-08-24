@@ -1739,8 +1739,11 @@ function reverse(){
   let out=txt;
   for(const ph of keys){
     const inner=ph.slice(1,-1);                 // FULLNAME_1
-    // tollerante: parentesi opzionali / spazi, eventuale grassetto markdown
-    const rx=new RegExp('\\**\\[?\\s*'+inner.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\s*\\]?\\**','g');
+    // tollerante: parentesi opzionali / spazi, eventuale grassetto markdown.
+    // Gli spazi si consumano SOLO insieme alla parentesi: con '\[?\s*' un placeholder
+    // scritto senza parentesi si portava via anche gli spazi intorno, e "Il FULLNAME_1 ha"
+    // tornava "IlMario Rossiha". Con un tab o un a-capo spariva la colonna o la riga.
+    const rx=new RegExp('\\**(?:\\[\\s*)?'+inner.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?:\\s*\\])?\\**','g');
     out=out.replace(rx,MAP[ph].replace(/\$/g,'$$$$'));
   }
   const o=$('rout');o.textContent=out;o._raw=out;

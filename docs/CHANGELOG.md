@@ -34,6 +34,27 @@ Scelte che contano:
 `Dockerfile.linux` resta quello che era: l'ambiente di **build** dei bundle .deb/AppImage, non
 un modo di far girare l'app. Il `.dockerignore` ora riammette `src/app/` (era `*`, pensato per
 il contesto vuoto di `Dockerfile.linux`, che infatti non fa nessun `COPY`).
+## 2026-08-04 — Il ripristino incollava le parole fra loro (`app.py`)
+
+`reverse()` accetta il placeholder anche **senza parentesi** — l'LLM a volte le toglie — ma la
+regex era `\[?\s*NOME\s*\]?`: senza parentesi lo `\s*` si portava via anche gli spazi
+**intorno**, e il testo ripristinato tornava con le parole attaccate.
+
+    'Il FULLNAME_1 ha firmato.'  ->  'IlMario Rossiha firmato.'
+    'col1	FULLNAME_1	col3'     ->  'col1Mario Rossicol3'   (la tabella perde le colonne)
+    'riga
+FULLNAME_1
+riga'     ->  'rigaMario Rossiriga'   (e il testo perde le righe)
+
+Ora gli spazi si consumano **solo insieme alla parentesi**: `(?:\[\s*)?NOME(?:\s*\])?`. Con
+le parentesi non cambia niente, senza non si tocca quello che c'è intorno.
+
+Eseguendo la `reverse()` vera, presa dal file prima e dopo, su 17 casi (parentesi presenti,
+assenti, solo aperta, solo chiusa, grassetto markdown, spazi dentro, a-capo e tab intorno,
+`_1` accanto a `_10`, valori con `$` e con parentesi quadre, placeholder attaccati fra loro):
+**7 sbagliati prima, 0 dopo.**
+
+---
 
 ## 2026-08-03 — `_merge()` era quadratica: 100 s su un documento lungo (`app.py`)
 
