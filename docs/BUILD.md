@@ -21,6 +21,25 @@ impacchettato con PyInstaller. Con Tauri la finestra nativa lo lancia come **pro
 
 ---
 
+## Dipendenza di sistema: Tesseract (OCR per PDF scannerizzati)
+
+L'OCR di fallback sui PDF scannerizzati usa **Tesseract**, un binario di **sistema** (non una
+libreria Python): pytesseract lo cerca nel PATH, la parte Python (`pytesseract` + `Pillow`) arriva
+con `requirements.txt`. Senza il binario (o senza la lingua) l'app risponde con un errore chiaro
+nell'UI, non crasha.
+
+- **Windows** — eseguibile installatore da [UB Mannheim](https://github.com/UB-Mannheim/tesseract/wiki)
+  (o equivalente). All'installazione spuntare il pacchetto di lingua **`ita`** oltre all'inglese.
+  Se tesseract non è nel PATH, forzare il percorso con la variabile d'ambiente **`TESSERACT_CMD`**
+  (punto al file `tesseract.exe`).
+- **Debian/Ubuntu** — `sudo apt install tesseract-ocr tesseract-ocr-ita`
+- **macOS** — `brew install tesseract tesseract-lang`
+
+Nel build Tauri/PyInstaller il binario **non** viene bundlato: resta una dipendenza di sistema.
+L'impacchettato lo trova nel PATH o via `TESSERACT_CMD` (configurabile esternamente).
+
+---
+
 ## App Tauri (finestra nativa + installer NSIS)
 
 ### Prerequisiti (una volta)

@@ -447,8 +447,13 @@ python src/app/app.py            # http://127.0.0.1:5005  (paste text or upload 
 
 The web app assigns every PII a **reversible ID** (`[FULLNAME_1]`, `[IBAN_1]`…) plus a local
 dictionary, pairing the model with the regex/checksum net. You copy the anonymized text into an LLM
-and **restore** the real values from the response. Input: pasted text, a **PDF**, or a
-**`.md` / `.txt`** file.
+and **restore** the real values from the response. Input: pasted text, a **PDF** (even **scanned**:
+pages without a text layer are run through **Tesseract OCR**), or a **`.md` / `.txt`** file.
+You can drop **several files at once**: they are anonymized as a **group** with **one shared
+dictionary**, so the same person gets the same placeholder across all documents (a per-file map
+tells you which placeholders belong to which file). A **crop** box (top/bottom, % of the page)
+lets you cut headers/footers from every page before extraction or OCR; with a group, **each
+file has its own crop** (shown next to its name).
 
 ### The local HTTP API
 
@@ -459,6 +464,11 @@ curl localhost:5005/health                      # readiness, no inference: 200 =
 curl -X POST localhost:5005/analyze -H 'Content-Type: application/json' \
      -d '{"text": "Mario Rossi, IBAN IT60X0542811101000000123456"}'
 curl -F "file=@atto.pdf" localhost:5005/analyze  # .pdf, .md, .txt
+curl -F "pdf=@atto1.pdf" -F "pdf=@atto2.pdf" localhost:5005/analyze \
+     -F "crop_top=8" -F "crop_bottom=6"          # group with one shared dictionary + header/footer crop
+curl -F "pdf=@a.pdf" -F "crop_top_0=8" -F "crop_bottom_0=6" \
+     -F "pdf=@b.pdf" -F "crop_top_1=0" -F "crop_bottom_1=0" localhost:5005/analyze \
+                                                  # per-file crops: crop_top_{i} / crop_bottom_{i}
 curl -F "file=@atto.pdf" localhost:5005/pdf -o atto_anonimizzato.pdf   # anonymized PDF back
 curl localhost:5005/settings                     # tag legend, excluded tags, dictionary state
 ```
@@ -526,6 +536,28 @@ curl -X POST localhost:5005/settings -H 'Content-Type: application/json' \
      -d '{"excluded_tags": ["AMOUNT"]}'             # persisted to prefs.json
 curl -X POST localhost:5005/analyze -H 'Content-Type: application/json' \
      -d '{"text": "…", "exclude_tags": ["AMOUNT"]}' # per-request override
+```
+
+**Not every single value, either.** Detection errs in both directions, and until now the only way
+out was fixing the text by hand. In the dictionary card you can correct it without leaving the app:
+
+- **False positive** — a value that is not sensitive got masked? Hit 🚫 on its dictionary row:
+  that exact value stays in clear (matched after normalization, so casing/spacing don't matter).
+- **False negative** — a sensitive value slipped through untouched? Type it in the bar at the top
+  of the card, pick its type, add it: every occurrence gets a placeholder like any other, even on
+  top of an excluded tag.
+
+Each correction **re-runs the analysis**, so the dictionary, the counts, the group provenance and
+the redacted PDF all stay consistent with what you see. Corrections apply to the whole file group,
+live only for the current session, and are cleared by *Clear* or new input. The API takes them as
+lists in the JSON body — or as JSON strings in multipart fields (`ignore_values`, `custom_values`),
+and `/pdf` + `/pdf/preview` accept them too:
+
+```bash
+curl -X POST localhost:5005/analyze -H 'Content-Type: application/json' \
+     -d '{"text": "…",
+          "ignore_values": ["Studio Associato Rossi"],
+          "custom_values": [{"value": "Mario Rossi", "tag": "FULLNAME"}]}'
 ```
 
 ---
