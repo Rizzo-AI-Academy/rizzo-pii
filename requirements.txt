@@ -29,5 +29,10 @@ python-dotenv
 flask
 pymupdf
 
+# OCR fallback per i PDF scannerizzati (pytesseract richiede il binario
+# tesseract-ocr installato a SISTEMA; Pillow serve per il rendering pagina->immagine)
+pytesseract
+Pillow
+
 # Loss / metric plots produced by the training script
 matplotlib

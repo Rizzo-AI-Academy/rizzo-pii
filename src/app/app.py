@@ -16,15 +16,37 @@ Il modello e' affiancato da una rete REGEX + CHECKSUM (EMAIL, TELEFONO, IBAN, CF
 carta di credito, importi, targhe, URL). Le entita' validate matematicamente (IBAN/CF/
 PIVA/carta) hanno priorita' sul modello in caso di sovrapposizione.
 
+I PDF possono essere scannerizzati: se una pagina non ha un layer testuale (vuota o
+quasi), il testo lo produce Tesseract (OCR), pagina per pagina. Un PDF misto esce
+nativo dove possibile e OCR solo sulle pagine necessarie. Inoltre si puo' tagliare
+verticalmente ogni pagina (crop_top / crop_bottom, % dall'alto e dal basso), sia per
+il testo nativo (blocchi nelle fasce scartati) sia per l'OCR (immagine ritagliata).
+L'upload accetta PIU' file contemporaneamente (PDF e/o testo): il gruppo viene
+anonimizzato con UNA mappa di placeholder condivisa, quindi lo stesso valore reale in
+piu' file riceve lo stesso placeholder, esattamente come le occorrenze ripetute dentro
+un singolo documento. Il dizionario scaricabile resta la mappa piatta {placeholder ->
+valore} (compatibile col ripristino) e si accompagna, per i gruppi, a una mappa di
+provenienza {nome_file: [placeholder...]}. Le preferenze di anonimizzazione (precedenza):
+campo nella richiesta > CLI --exclude-tags/--no-mapping > env PII_EXCLUDE_TAGS/
+PII_MAPPING > prefs.json > default.
+
 Il dizionario di ripristino si puo' DISATTIVARE (switch nell'UI, --no-mapping, PII_MAPPING=0):
 l'anonimizzazione diventa definitiva, nessuna chiave placeholder->valore viene costruita.
 
 Endpoint HTTP:
   GET  /health    liveness/readiness senza inference (200 = modello caricato, 503 = no)
-  POST /analyze   {"text": ...} oppure multipart con un file (.pdf/.md/.txt); campi
-                  opzionali "exclude_tags" e "include_mapping" per override per-richiesta
+  POST /analyze   {"text": ...} oppure multipart con uno o piu' file (.pdf/.md/.txt);
+                  campi opzionali "exclude_tags", "include_mapping" per override
+                  per-richiesta, e i crop (percentuali 0..100) per tagliare
+                  intestazioni/piè di pagina dai PDF: "crop_top"/"crop_bottom"
+                  per tutti i file, oppure "crop_top_{i}"/"crop_bottom_{i}" per
+                  un crop DIVERSO per ogni file i-esimo del gruppo;
+                  correzioni utente: "ignore_values" (valori da NON anonimizzare,
+                  falsi positivi) e "custom_values" ([{value, tag}] da anonimizzare
+                  a prescindere, falsi negativi)
   POST /pdf       stesso input di /analyze -> scarica il PDF ANONIMIZZATO (redazione
-                  vera del PDF caricato, oppure PDF ricostruito dal testo)
+                  vera del PDF caricato, oppure PDF ricostruito dal testo; per il
+                  singolo file, non per i gruppi)
   POST /preview   multipart con un .pdf -> lo tiene in memoria per l'ANTEPRIMA a video e
                   ritorna {doc_id, n_pages, text}
   POST /pdf/preview  come /pdf, ma invece del binario ritorna {doc_id, n_pages, ...}:
@@ -44,6 +66,7 @@ Preferenze di anonimizzazione (precedenza): campo nella richiesta > CLI --exclud
 """
 
 import bisect
+import json
 import os
 import re
 import secrets
@@ -58,6 +81,7 @@ from flask import (Flask, jsonify, render_template_string, request,
                    send_from_directory)
 
 import pdf_export
+import pdf_text
 import server_config
 # Rete REGEX + CHECKSUM: modulo a parte, senza dipendenze dal modello. I nomi
 # restano importabili da qui (`app.detect_regex`) per non rompere chi li usa.
@@ -248,6 +272,60 @@ TAGS = [
 ]
 TAG_NAMES = [t[0] for t in TAGS]
 
+
+# --------------------------------------------------------------------------- #
+# Correzioni utente sul risultato: falsi positivi da ignorare e valori da
+# anonimizzare a prescindere (falsi negativi)
+# --------------------------------------------------------------------------- #
+MAX_ADJUST_ITEMS = 200    # quante correzioni per richiesta, al massimo
+MAX_ADJUST_LEN = 300      # quanto lungo puo' essere un singolo valore
+
+
+def _parse_adjust(raw):
+    """Correzioni dal client: lista Python (body JSON) oppure stringa JSON
+    (campo di un form multipart). Scarta gli elementi vuoti o malformati; per i
+    falsi negativi ({value, tag}) un tag non valido ricade su FULLNAME."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return []
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for item in raw[:MAX_ADJUST_ITEMS]:
+        if isinstance(item, dict):
+            val = str(item.get("value", ""))[:MAX_ADJUST_LEN].strip()
+            if not val:
+                continue
+            tag = str(item.get("tag", "")).strip().upper()
+            out.append({"value": val,
+                        "tag": tag if tag in TAG_NAMES else "FULLNAME"})
+        else:
+            val = str(item)[:MAX_ADJUST_LEN].strip()
+            if val:
+                out.append(val)
+    return out
+
+
+def _custom_entities(text, custom):
+    """Occorrenze letterali dei valori aggiunti a mano (falsi negativi): entrano
+    tra i candidati come le altre entita', quindi _merge risolve le sovrapposizioni
+    e la numerazione dei placeholder si integra con quella di modello e regex."""
+    ents = []
+    for cv in custom:
+        if not isinstance(cv, dict) or not cv.get("value"):
+            continue
+        tag = str(cv.get("tag", "")).strip().upper()
+        rx = re.compile(re.escape(str(cv["value"])), re.IGNORECASE)
+        for m in rx.finditer(text):
+            ents.append({"start": m.start(), "end": m.end(),
+                         "label": tag if tag in TAG_NAMES else "FULLNAME",
+                         "source": "utente", "validated": False, "score": 1.0})
+    return ents
+
 # Preferenze di default del server (env > prefs.json). Gli argomenti CLI le sovrascrivono
 # all'avvio; ogni singola richiesta puo' comunque passare le proprie.
 #
@@ -310,14 +388,17 @@ def _is_word(ch):
 
 
 def _merge(cands, text):
-    """Greedy senza overlap. Priorita': checksum-valido > regex (non soft) > score
-    > lunghezza.
+    """Greedy senza overlap. Priorita': utente (aggiunta esplicita) > checksum-valido
+    > regex (non soft) > score > lunghezza.
     La rete regex copre campi a forma molto specifica: per quegli span e' piu' affidabile
     del modello (evita la frammentazione di CF/IBAN/carta in piu' pezzi). Fanno eccezione
-    i tag in SOFT_REGEX_LABELS, dove la forma non ha un checksum a confermarla."""
+    i tag in SOFT_REGEX_LABELS, dove la forma non ha un checksum a confermarla.
+    Le entita' "utente" (valori aggiunti a mano, vedi _custom_entities) stanno sopra a
+    tutto: se il cliente le chiede a prescindere, nessun detector le deve sovrascrivere."""
     order = sorted(
         cands,
-        key=lambda e: (1 if e["validated"] else 0,
+        key=lambda e: (1 if e["source"] == "utente" else 0,
+                       1 if e["validated"] else 0,
                        1 if (e["source"] == "regex"
                              and e["label"] not in SOFT_REGEX_LABELS) else 0,
                        e["score"], e["end"] - e["start"]),
@@ -374,9 +455,12 @@ def _norm(s):
     return re.sub(r"\s+", " ", s.strip()).casefold()
 
 
-def analyze(text, excluded=None, mapping_enabled=True):
+def analyze(text, excluded=None, mapping_enabled=True, ignore=None, custom=None):
     """excluded = tag da NON anonimizzare: le entita' di quel tipo vengono scartate
     prima della fusione, quindi il valore resta in chiaro nel testo di output.
+
+    ignore/custom = correzioni puntuali dell'utente sul risultato (vedi
+    _analyze_core): valori da lasciare in chiaro o da anonimizzare a prescindere.
 
     mapping_enabled=False -> anonimizzazione DEFINITIVA: nessun dizionario
     placeholder->valore, e i segmenti-entita' non riportano il testo originale
@@ -384,14 +468,53 @@ def analyze(text, excluded=None, mapping_enabled=True):
     La numerazione dei placeholder resta: dice che due occorrenze sono lo stesso
     soggetto, ma da sola non fa risalire al valore."""
     excluded = set(excluded or ())
+    state = {"counters": {}, "seen": {}, "mapping": {}}
+    r = _analyze_core(text, excluded, mapping_enabled, state,
+                      ignore=ignore, custom=custom)
+    return {
+        "segments": r["segments"],
+        "anonymized_text": r["anonymized_text"],
+        "mapping": state["mapping"],
+        "mapping_enabled": mapping_enabled,
+        "n_chunks": r["n_chunks"],
+        "n_chars": r["n_chars"],
+        "n_entities": r["n_entities"],
+        "n_unique": len(state["seen"]),
+        "by_label": r["by_label"],
+        "by_source": r["by_source"],
+        "excluded_tags": sorted(excluded),
+    }
+
+
+def _analyze_core(text, excluded, mapping_enabled, state, ignore=None, custom=None):
+    """analyze su UN testo, usando lo stato condiviso del gruppo:
+    state = {"counters": {label: n}, "seen": {(label, val_norm): ph},
+             "mapping": {ph: val}}.
+
+    Lo stato e' l'unico posto dove vive la mappa placeholder->valore: passando lo
+    stesso `state` a piu' testi, un valore uguale in piu' file riceve lo stesso
+    placeholder (identita' esatta, non solo "primo valore incontrato").
+
+    `ignore` = valori (stringhe) marcati come falsi positivi: le entita' con quel
+    valore esatto (a normalizzazione pari) vengono scartate DOPO la fusione e il
+    valore resta in chiaro.  `custom` = valori da anonimizzare a prescindere
+    ([{value, tag}]): entrano tra i candidati PRIMA della fusione, quindi una
+    aggiunta esplicita dell'utente vince anche su un tag escluso."""
     model_ents, n_chunks = detect_model(text)
     cands = model_ents + detect_regex(text)
     if excluded:
         cands = [e for e in cands if e["label"] not in excluded]
+    if custom:
+        cands = cands + _custom_entities(text, custom)
     kept = _merge(cands, text)
+    if ignore:
+        ign = {_norm(v) for v in ignore}
+        kept = [e for e in kept
+                if _norm(text[e["start"]:e["end"]]) not in ign]
 
-    # ID reversibili: stesso (label, valore-normalizzato) -> stesso placeholder.
-    counters, seen, mapping = {}, {}, {}
+    # ID reversibili: stesso (label, valore-normalizzato) -> stesso placeholder,
+    # anche attraverso i file del gruppo (counters/seen/mapping sono condivisi).
+    counters, seen, mapping = state["counters"], state["seen"], state["mapping"]
     for e in kept:
         val = text[e["start"]:e["end"]]
         key = (e["label"], _norm(val))
@@ -431,15 +554,80 @@ def analyze(text, excluded=None, mapping_enabled=True):
     return {
         "segments": segments,
         "anonymized_text": "".join(anon),
-        "mapping": mapping,
-        "mapping_enabled": mapping_enabled,
         "n_chunks": n_chunks,
         "n_chars": len(text),
         "n_entities": len(kept),
-        "n_unique": len(seen),
+        "by_label": dict(sorted(by_label.items(), key=lambda x: -x[1])),
+        "by_source": by_source,
+    }
+
+
+def _provenance(files):
+    """{nome_file: [placeholder, ...]} - da quale file proviene ciascuna entita'
+    (audit/ripristino mirato). Il dizionario scaricabile resta invece la mappa
+    piatta {placeholder -> valore}, compatibile col restore."""
+    out = {}
+    for f in files:
+        if not f.get("name"):
+            continue
+        phs = [s["ph"] for s in f.get("segments", []) if s.get("label")]
+        out[f["name"]] = list(dict.fromkeys(phs))
+    return out
+
+
+def analyze_group(texts, names=None, excluded=None, mapping_enabled=True,
+                  ignore=None, custom=None):
+    """Gruppo di testi (da piu' file) anonimizzati con UNA mappa di placeholder
+    condivisa: lo stesso valore reale in piu' file riceve lo stesso placeholder,
+    esattamente come le occorrenze ripetute dentro un singolo documento.
+
+    Le correzioni utente (ignore/custom) valgono per TUTTO il gruppo: coerente
+    con la mappa condivisa, un valore marcato come falso positivo sparisce da
+    ogni file che lo contiene.
+    Ritorna la struttura di /analyze estesa con `files` (per-file: testo,
+    segments, anonimizzato, statistiche) e `provenance`. `mapping` resta la mappa
+    piatta dell'intero gruppo: identica per forma al caso a file singolo, quindi
+    il ripristino funziona senza modifiche anche incollando la risposta dell'LLM
+    riferita a piu' file del gruppo."""
+    excluded = set(excluded or ())
+    state = {"counters": {}, "seen": {}, "mapping": {}}
+    files, tot_chars, tot_ent = [], 0, 0
+    by_label, by_source = {}, {}
+    for i, text in enumerate(texts):
+        r = _analyze_core(text, excluded, mapping_enabled, state,
+                          ignore=ignore, custom=custom)
+        name = names[i] if names and i < len(names) else None
+        files.append({
+            "name": name,
+            "source_text": text,
+            "segments": r["segments"],
+            "anonymized_text": r["anonymized_text"],
+            "n_chunks": r["n_chunks"],
+            "n_chars": r["n_chars"],
+            "n_entities": r["n_entities"],
+            "by_label": r["by_label"],
+            "by_source": r["by_source"],
+        })
+        tot_chars += r["n_chars"]
+        tot_ent += r["n_entities"]
+        for k, v in r["by_label"].items():
+            by_label[k] = by_label.get(k, 0) + v
+        for k, v in r["by_source"].items():
+            by_source[k] = by_source.get(k, 0) + v
+    return {
+        "group": True,
+        "files": files,
+        "anonymized_text": "\n\n".join(
+            f["anonymized_text"] for f in files if f["anonymized_text"]),
+        "mapping": state["mapping"],
+        "mapping_enabled": mapping_enabled,
+        "n_entities": tot_ent,
+        "n_unique": len(state["seen"]),
+        "n_chars": tot_chars,
         "by_label": dict(sorted(by_label.items(), key=lambda x: -x[1])),
         "by_source": by_source,
         "excluded_tags": sorted(excluded),
+        "provenance": _provenance(files),
     }
 
 
@@ -498,17 +686,22 @@ def _is_pdf(name, data):
     return os.path.splitext((name or "").lower())[1] == ".pdf" or data[:5] == b"%PDF-"
 
 
-def _text_from_bytes(name, data):
-    """Testo dai bytes di un upload: PDF via PyMuPDF, .md/.txt come testo puro."""
+def _text_from_bytes(name, data, crop_top=0, crop_bottom=0):
+    """Testo dai bytes di un upload. Ritorna (text, info).
+
+    - PDF: estrazione PyMuPDF con crop verticale (crop_top/crop_bottom, % di
+      pagina) e fallback OCR (Tesseract) sulle pagine scannerizzate (vedi
+      pdf_text.extract_pdf_text);
+    - .md/.txt: testo puro (il crop non ha effetto)."""
     name = (name or "").lower()
     ext = os.path.splitext(name)[1]
     if _is_pdf(name, data):
-        with fitz.open(stream=data, filetype="pdf") as doc:
-            return "\n".join(page.get_text() for page in doc)
+        return pdf_text.extract_pdf_text(data, crop_top, crop_bottom)
     if ext in TEXT_EXTS or not ext:
         for enc in ("utf-8-sig", "utf-16", "latin-1"):
             try:
-                return data.decode(enc)
+                return data.decode(enc), {"pages": 0, "ocr_pages": 0,
+                                          "page_methods": []}
             except UnicodeDecodeError:
                 continue
     raise ValueError(
@@ -517,46 +710,93 @@ def _text_from_bytes(name, data):
     )
 
 
-def _extract_upload(fs):
-    """Testo da un file caricato (consuma lo stream)."""
-    return _text_from_bytes(fs.filename, fs.read())
+def _extract_upload(fs, crop_top=0, crop_bottom=0):
+    """Testo da un file caricato (consuma lo stream). Ritorna (text, info)."""
+    return _text_from_bytes(fs.filename, fs.read(), crop_top, crop_bottom)
 
 
 def _uploaded_file():
-    """Il file dell'upload, se c'e'. "pdf" e' il nome storico del campo (l'UI lo
-    usa ancora), "file" e' l'alias nuovo."""
+    """Il PRIMO file dell'upload, se c'e'. "pdf" e' il nome storico del campo
+    (l'UI lo usa ancora), "file" e' l'alias nuovo."""
     return next((request.files[k] for k in ("pdf", "file")
                  if k in request.files and request.files[k].filename), None)
 
 
+def _uploaded_files():
+    """TUTTI i file dell'upload, in ordine di arrivo. Supporta piu' file con lo
+    stesso nome di campo (multipart) oltre che i due alias "pdf"/"file"."""
+    files = []
+    for k in ("pdf", "file"):
+        files.extend(f for f in request.files.getlist(k) if f.filename)
+    return files
+
+
+def _per_file_crop(i, form):
+    """Crop del file i-esimo del gruppo: preferisce i campi dedicati
+    "crop_top_{i}"/"crop_bottom_{i}" (crop DIVERSO per ogni file), senza i quali
+    ripiega sui campi globali "crop_top"/"crop_bottom" (upload di un solo file o
+    client che non inviano i campi per-file)."""
+    top = form.get(f"crop_top_{i}")
+    bot = form.get(f"crop_bottom_{i}")
+    if top is None and bot is None:
+        top, bot = form.get("crop_top"), form.get("crop_bottom")
+    return pdf_text.parse_crop(top), pdf_text.parse_crop(bot)
+
+
 @app.route("/analyze", methods=["POST"])
 def analyze_route():
-    up = _uploaded_file()
-    if up is not None:
-        try:
-            text = _extract_upload(up)
-        except ValueError as e:
-            return jsonify({"error": str(e)}), 400
-        except Exception as e:                       # PDF corrotto / protetto
-            return jsonify({"error": f"Impossibile leggere il file: {e}"}), 400
+    ups = _uploaded_files()
+    if ups:
         raw_excl = request.form.get("exclude_tags")
         raw_map = request.form.get("include_mapping")
+        raw_ign = request.form.get("ignore_values")
+        raw_cus = request.form.get("custom_values")
+        texts, names, info = [], [], {}
+        for i, up in enumerate(ups):
+            crop_top, crop_bottom = _per_file_crop(i, request.form)
+            try:
+                text, inf = _extract_upload(up, crop_top, crop_bottom)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+            except Exception as e:                       # PDF corrotto / protetto
+                return jsonify({"error": f"Impossibile leggere il file: {e}"}), 400
+            texts.append(text)
+            names.append(up.filename)
+            if inf.get("ocr_pages"):
+                info["ocr_pages"] = info.get("ocr_pages", 0) + inf["ocr_pages"]
     else:
         payload = request.get_json(silent=True) or {}
-        text = payload.get("text", "")
+        texts = [payload.get("text", "")]
+        names = [None]
         raw_excl = payload.get("exclude_tags")
         raw_map = payload.get("include_mapping")
+        raw_ign = payload.get("ignore_values")
+        raw_cus = payload.get("custom_values")
+        crop_top = pdf_text.parse_crop(payload.get("crop_top"))
+        crop_bottom = pdf_text.parse_crop(payload.get("crop_bottom"))
+        info = {}
 
-    text = (text or "").strip()
-    if not text:
+    texts = [(t or "").strip() for t in texts]
+    if not any(texts):
         return jsonify({"error": "Nessun testo da analizzare."}), 400
+    for nm, t in zip(names, texts):          # un file del gruppo vuoto -> errore chiaro
+        if not t:
+            return jsonify({"error":
+                            f"Nessun testo estraibile da {nm or 'file'}."}), 400
 
     # override per-richiesta; senza override vale la configurazione del server
     excl = server_config.parse_tag_list(raw_excl) if raw_excl is not None else EXCLUDED_TAGS
     keep_map = (server_config.parse_bool(raw_map, MAPPING_ENABLED)
                 if raw_map is not None else MAPPING_ENABLED)
-    out = analyze(text, excl, keep_map)
-    out["source_text"] = text
+    ign, cus = _parse_adjust(raw_ign), _parse_adjust(raw_cus)
+
+    if len(texts) == 1:
+        out = analyze(texts[0], excl, keep_map, ignore=ign, custom=cus)
+        out["source_text"] = texts[0]
+    else:
+        out = analyze_group(texts, names, excl, keep_map, ignore=ign, custom=cus)
+    if info:
+        out["ocr_pages"] = info["ocr_pages"]
     return jsonify(out)
 
 
@@ -603,11 +843,19 @@ def _build_anonymized_pdf():
 
     Ritorna (bytes, report, n_redazioni, nome_file). Solleva _ReqError sugli errori.
     """
-    up = _uploaded_file()
-    if up is not None:
-        name, data = up.filename, up.read()
+    ups = _uploaded_files()
+    if ups:
+        if len(ups) > 1:
+            raise _ReqError(
+                "Il PDF anonimizzato si genera per un singolo file: per un gruppo "
+                "di file usa 'Anonimizza' e copia il testo anonimizzato.")
+        name, data = ups[0].filename, ups[0].read()
+        crop_top = pdf_text.parse_crop(request.form.get("crop_top"))
+        crop_bottom = pdf_text.parse_crop(request.form.get("crop_bottom"))
+        raw_ign = request.form.get("ignore_values")
+        raw_cus = request.form.get("custom_values")
         try:
-            text = _text_from_bytes(name, data)
+            text, _info = _text_from_bytes(name, data, crop_top, crop_bottom)
         except ValueError as e:
             raise _ReqError(str(e))
         except Exception as e:                       # PDF corrotto / protetto
@@ -617,6 +865,8 @@ def _build_anonymized_pdf():
         payload = request.get_json(silent=True) or {}
         name, data, text = "", b"", payload.get("text", "")
         raw_excl = payload.get("exclude_tags")
+        raw_ign = payload.get("ignore_values")
+        raw_cus = payload.get("custom_values")
 
     text = (text or "").strip()
     if not text:
@@ -626,8 +876,9 @@ def _build_anonymized_pdf():
     out_name = f"{stem}_anonimizzato.pdf"
 
     excl = server_config.parse_tag_list(raw_excl) if raw_excl is not None else EXCLUDED_TAGS
+    ign, cus = _parse_adjust(raw_ign), _parse_adjust(raw_cus)
     # mapping_enabled=True e' interno: il risultato non esce da questa funzione.
-    res = analyze(text, excl, mapping_enabled=True)
+    res = analyze(text, excl, mapping_enabled=True, ignore=ign, custom=cus)
     if not res["mapping"]:
         raise _ReqError("Nessuna PII trovata: non c'e' niente da "
                         "anonimizzare in questo documento.", 422)
@@ -700,13 +951,20 @@ def preview_route():
     name, data = up.filename, up.read()
     if not _is_pdf(name, data):
         return jsonify({"error": "L'anteprima renderizzata vale solo per i PDF."}), 400
+    crop_top = pdf_text.parse_crop(request.form.get("crop_top"))
+    crop_bottom = pdf_text.parse_crop(request.form.get("crop_bottom"))
     try:
-        text = _text_from_bytes(name, data)
+        text, info = _text_from_bytes(name, data, crop_top, crop_bottom)
         doc_id, n_pages = _store_doc(data, name)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:                           # PDF corrotto / protetto
         return jsonify({"error": f"Impossibile leggere il file: {e}"}), 400
-    return jsonify({"doc_id": doc_id, "n_pages": n_pages,
-                    "filename": _safe_name(name), "text": text})
+    out = {"doc_id": doc_id, "n_pages": n_pages,
+           "filename": _safe_name(name), "text": text}
+    if info.get("ocr_pages"):
+        out["ocr_pages"] = info["ocr_pages"]
+    return jsonify(out)
 
 
 @app.route("/doc/<doc_id>/page/<int:n>.png")
@@ -991,6 +1249,33 @@ PAGE = r"""
   .dict .legend{padding:0 16px 12px;border-top:none}
   .dict .tablewrap{max-height:300px;overflow:auto;padding:0 16px 16px}
 
+  /* correzioni utente nella card dizionario */
+  .adj{display:flex;gap:8px;padding:0 16px 10px}
+  .adj input[type=text]{flex:1;min-width:120px;border:1px solid var(--line);border-radius:9px;
+       padding:8px 11px;font-size:13px;font-family:inherit;color:var(--ink);background:#fff}
+  .adj input[type=text]:focus{outline:none;border-color:var(--brand)}
+  .adj select{max-width:190px;border:1px solid var(--line);border-radius:9px;padding:8px 6px;
+       font-size:12.5px;font-family:inherit;color:var(--ink);background:#fff}
+  .adj .adjbtn{white-space:nowrap;border-radius:9px;padding:8px 13px;font-weight:600;
+       font-size:13px;cursor:pointer}
+  .adj .adjbtn:hover{border-color:#cfd5e0}
+  .igchips{display:flex;gap:7px;flex-wrap:wrap;align-items:center;padding:0 16px 12px;
+       font-size:12.5px;color:var(--muted)}
+  .igchip{display:inline-flex;align-items:center;gap:6px;border:1px dashed #d9b44a;border-radius:999px;
+       padding:3px 4px 3px 10px;background:#fffaf0;color:#8a6414;max-width:300px}
+  .igchip b{font-weight:600;text-decoration:line-through;overflow:hidden;text-overflow:ellipsis;
+       white-space:nowrap;max-width:240px}
+  .igchip.cus{border-color:#9fc99f;background:#f2faf2;color:#2e6b2e}
+  .igchip.cus i{font-style:normal;text-decoration:none;font-weight:700;font-size:11px;opacity:.75}
+  .igchip button{border:none;background:none;cursor:pointer;font-size:14px;line-height:1;
+       color:inherit;opacity:.65;padding:2px 5px;border-radius:999px}
+  .igchip button:hover{opacity:1;background:rgba(0,0,0,.07)}
+  td.act{text-align:right;white-space:nowrap;width:1%}
+  .rowx{border:none;background:none;cursor:pointer;font-size:13px;line-height:1;padding:4px 7px;
+        border-radius:7px;color:var(--soft);transition:.12s}
+  tr:hover .rowx{background:#f1f3f8;color:var(--muted)}
+  .rowx:hover{background:#ffe9e6 !important;color:#c0392b}
+
   /* reverse panel */
   .pane{display:none}
   .pane.on{display:flex;flex-direction:column;flex:1;min-height:0}
@@ -1099,6 +1384,53 @@ PAGE = r"""
   .tg-row .ex{font-size:11.5px;color:var(--soft)}
   .tg-row.off{opacity:.55}
   .tg-row.off .nm{text-decoration:line-through}
+
+  /* crop verticale (intestazione / piè di pagina): due campi % + slider; le
+     fasce si vedono anche sull'anteprima PDF (strisce rosse sulle pagine) */
+  .cropbox{margin-top:11px;border:1px solid var(--line);border-radius:11px;
+           background:#fcfcfe;padding:9px 13px}
+  .croprow{display:flex;align-items:center;gap:9px;font-size:12.5px;
+           color:var(--muted);margin-bottom:6px}
+  .croprow:last-child{margin-bottom:0}
+  .croprow label{font-weight:600;min-width:150px}
+  .croprow input[type=range]{flex:1;accent-color:var(--brand)}
+  .croprow input[type=number]{width:66px;border:1px solid var(--line);
+           border-radius:8px;padding:4px 6px;font:inherit;font-size:13px;
+           color:var(--ink);background:#fff}
+  .croprow input[type=number]:focus{outline:none;border-color:var(--brand);
+           box-shadow:0 0 0 3px rgba(124,58,158,.13)}
+  .crophint{font-size:11.5px;color:var(--soft);margin-top:5px}
+  .pg .cropstrip{position:absolute;left:0;right:0;pointer-events:none;z-index:3;
+           background:repeating-linear-gradient(45deg,rgba(220,38,38,.22),
+           rgba(220,38,38,.22) 9px,rgba(220,38,38,.10) 9px,
+           rgba(220,38,38,.10) 18px)}
+  .pg .cropstrip.top{top:0}
+  .pg .cropstrip.bottom{bottom:0}
+
+  /* file selezionati nel gruppo (chip rimovibili, ognuno col proprio crop) */
+  .fchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:11px}
+  .fchip{display:inline-flex;align-items:center;gap:6px;background:#f4f2f9;
+         border:1px solid var(--line);border-radius:10px;padding:4px 8px;
+         font-size:12px;font-weight:600;color:var(--ink)}
+  .fchip .fn{max-width:200px;overflow:hidden;text-overflow:ellipsis;
+         white-space:nowrap}
+  .fchip .cc{display:inline-flex;align-items:center;gap:2px;color:var(--muted);
+         font-weight:600}
+  .fchip .cc input{width:46px;border:1px solid var(--line);border-radius:7px;
+         padding:2px 4px;font:inherit;font-size:12px;font-weight:500;
+         color:var(--ink);background:#fff}
+  .fchip .cc input:focus{outline:none;border-color:var(--brand);
+         box-shadow:0 0 0 2px rgba(124,58,158,.13)}
+  .fchip .x{cursor:pointer;color:var(--muted);font-weight:700;padding:0 2px}
+  .fchip .x:hover{color:#b91c1c}
+  .fchip.on{border-color:var(--brand);background:#f3edfa}
+
+  /* selettore del file corrente nel risultato di un gruppo */
+  .groupbar{display:flex;flex-wrap:wrap;gap:6px;padding:0 16px 10px}
+  .groupbar .mini{background:#fff;color:var(--muted);border:1px solid var(--line);
+         border-radius:8px;padding:5px 10px;font-size:12.5px;font-weight:600}
+  .groupbar .mini:hover{border-color:#cfd5e0;color:var(--ink)}
+  .groupbar .mini.on{background:var(--brand);color:#fff;border-color:var(--brand)}
 </style>
 </head>
 <body>
@@ -1149,9 +1481,25 @@ PAGE = r"""
           <textarea id="src" data-i18n-ph="src_ph" placeholder="Incolla qui il testo dell'atto, del contratto o della sentenza…&#10;&#10;Oppure trascina un PDF nell'area qui sotto."></textarea>
           <label class="drop" id="drop">
             <span class="ic">📄</span>
-            <span id="dropTxt">Trascina un <b>PDF</b> o un <b>.md</b> qui, oppure <b>scegli un file</b></span>
-            <input type="file" id="pdf" accept=".pdf,.md,.markdown,.txt,application/pdf,text/markdown,text/plain" hidden>
+            <span id="dropTxt">Trascina uno o più <b>PDF</b> o <b>.md</b> qui, oppure <b>scegli i file</b></span>
+            <input type="file" id="pdf" accept=".pdf,.md,.markdown,.txt,application/pdf,text/markdown,text/plain" multiple hidden>
           </label>
+          <div class="fchips" id="fileChips" style="display:none"></div>
+          <div class="cropbox" id="cropBox">
+            <div class="croprow">
+              <label for="cropTop">✂️ <span data-i18n="crop_top">Taglia dall'alto</span></label>
+              <input type="range" id="cropTopR" min="0" max="30" step="1" value="0" aria-label="Taglia dall'alto">
+              <input type="number" id="cropTop" min="0" max="100" step="0.5" value="0">
+              <span>%</span>
+            </div>
+            <div class="croprow">
+              <label for="cropBottom">✂️ <span data-i18n="crop_bottom">Taglia dal basso</span></label>
+              <input type="range" id="cropBottomR" min="0" max="30" step="1" value="0" aria-label="Taglia dal basso">
+              <input type="number" id="cropBottom" min="0" max="100" step="0.5" value="0">
+              <span>%</span>
+            </div>
+            <div class="crophint" data-i18n="crop_hint">% della pagina, tagliata da ogni pagina. 0 = nessun crop. Con più file ogni file ha il proprio crop accanto al nome.</div>
+          </div>
           <div class="mapsw" id="mapSw">
             <button class="tsw" id="mapToggle" role="switch" aria-checked="true"
                     aria-labelledby="mapTtl" onclick="toggleMapping()"><span class="knob"></span></button>
@@ -1182,6 +1530,7 @@ PAGE = r"""
           </div>
         </div>
         <div class="bd">
+          <div class="groupbar" id="groupBar" style="display:none"></div>
           <div class="view" id="viewPrev">
             <div class="empty" id="emptyPrev">
               <img src="/assets/mascot_doc.png" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'big',textContent:'🕵️'}))">
@@ -1195,6 +1544,7 @@ PAGE = r"""
           <div class="row">
             <button class="btn" id="copy">📋 <span data-i18n="copy">Copia per ChatGPT</span></button>
             <button class="ghost" id="dlpdf">📄 <span data-i18n="dlpdf">Scarica PDF anonimizzato</span></button>
+            <button class="ghost" id="dlprov" style="display:none">🗂️ <span data-i18n="dlprov">Scarica mappa file</span></button>
             <button class="ghost" id="dl">⬇️ <span data-i18n="dl">Scarica dizionario</span></button>
             <span class="hint" id="ulock"></span>
           </div>
@@ -1214,8 +1564,16 @@ PAGE = r"""
         <div class="callout" id="dictNone" style="display:none;margin:0 16px 14px">
           <span class="ic">🔒</span><div data-i18n="dict_off">Nessun dizionario: l'anonimizzazione di questo testo è <b>definitiva</b>.</div>
         </div>
+        <!-- correzioni utente: aggiunta manuale di valori persi + falsi positivi esclusi -->
+        <div class="adj" id="adjBar">
+          <input type="text" id="fnVal" autocomplete="off" data-i18n-ph="fn_ph"
+                 placeholder="Un valore sensibile è rimasto in chiaro? Scrivilo qui e verrà anonimizzato…">
+          <select id="fnTag"></select>
+          <button class="ghost adjbtn" id="fnAdd">＋ <span data-i18n="fn_add">Aggiungi</span></button>
+        </div>
+        <div class="igchips" id="igChips" style="display:none"></div>
         <div class="tablewrap" id="tablewrap">
-          <table><thead><tr><th data-i18n="th_id">ID</th><th data-i18n="th_val">Valore originale</th><th data-i18n="th_type">Tipo</th></tr></thead>
+          <table><thead><tr><th data-i18n="th_id">ID</th><th data-i18n="th_val">Valore originale</th><th data-i18n="th_type">Tipo</th><th></th></tr></thead>
           <tbody id="maprows"></tbody></table>
         </div>
       </div>
@@ -1326,6 +1684,11 @@ let MAPPING = true;        // dizionario reversibile on/off (switch nella card d
 let SRC_DOC = null;        // PDF caricato, renderizzato dal server (colonna sinistra)
 let OUT_DOC = null;        // PDF anonimizzato (colonna destra), generato pigramente
 let VIEW = 'prev';         // vista attiva a destra: prev | text | pdf
+let FILES = [];            // file selezionati per l'analisi (gruppo; 1 solo = come prima)
+let CURF = 0;              // file corrente nel risultato di un gruppo
+let SRC_IDX = 0;           // file corrente nell'ANTEPRIMA (sx): quello su cui si ritaglia
+let IGN = [];              // correzioni utente: valori da NON anonimizzare (falsi positivi)
+let CUS = [];              // correzioni utente: valori da anonimizzare a prescindere [{value,tag}]
 
 /* ---- i18n (IT default, EN opzionale) ---- */
 const T = {
@@ -1335,7 +1698,7 @@ const T = {
   tab1:"Anonimizza", tab2:"Ripristina la risposta",
   in_title:"① Il tuo documento", in_hint:"incolla testo o trascina un PDF / .md",
   src_ph:"Incolla qui il testo dell'atto, del contratto o della sentenza…\n\nOppure trascina un PDF o un file .md nell'area qui sotto.",
-  drop:"Trascina un <b>PDF</b> o un <b>.md</b> qui, oppure <b>scegli un file</b>",
+  drop:"Trascina uno o più <b>PDF</b> o <b>.md</b> qui, oppure <b>scegli i file</b>",
   go:"Anonimizza", clear:"Pulisci",
   out_title:"② Risultato", v_prev:"Anteprima", v_text:"Testo da copiare",
   v_pdf:"Anteprima PDF", v_raw:"Testo", v_opdf:"PDF censurato",
@@ -1366,6 +1729,12 @@ const T = {
   t_nothing_copy:"Niente da copiare", t_restored_copied:"Testo ripristinato copiato",
   t_dict_loaded:"Dizionario caricato", t_json_invalid:"JSON non valido",
   t_drag_pdf:"Formato non supportato: usa PDF, .md o .txt",
+  crop_top:"Taglia dall'alto", crop_bottom:"Taglia dal basso",
+  crop_hint:"% della pagina, tagliata da ogni pagina. 0 = nessun crop. Con più file ogni file ha il proprio crop accanto al nome.",
+  t_ocr_used:n=>"OCR applicato a "+n+" pagine scannerizzate",
+  t_pdf_group:"Il PDF censurato è disponibile solo per un singolo file",
+  dlprov:"Scarica mappa file",
+  g_files:"file",
   pii_found:(n,u)=>n+" PII trovate · "+u+" valori unici",
   dict_n:n=>n+" ID nel dizionario",
   dict_loaded_n:n=>"dizionario caricato · "+n+" ID",
@@ -1391,6 +1760,17 @@ const T = {
   dict_off:"Nessun dizionario: l'anonimizzazione di questo testo è <b>definitiva</b>.",
   dict_off_hint:"lo switch è su DISATTIVO",
   r_off:"Lo switch <b>Dizionario reversibile</b> è su DISATTIVO: le nuove anonimizzazioni non producono chiavi. Qui puoi comunque ripristinare con un dizionario <b>.json salvato in precedenza</b>.",
+  fn_ph:"Un valore sensibile è rimasto in chiaro? Scrivilo qui e verrà anonimizzato…",
+  fn_add:"Aggiungi",
+  fp_flag:"Non è un dato sensibile: riportalo in chiaro",
+  fp_undo:"Annulla: torna ad anonimizzarlo",
+  cus_rm:"Rimuovi questa regola",
+  ig_title:"Correzioni applicate:",
+  t_fp_ok:"Valore escluso dall'anonimizzazione: ri-analizzo…",
+  t_cus_removed:"Regola personalizzata rimossa: ri-analizzo…",
+  t_fn_ok:"Valore aggiunto all'anonimizzazione: ri-analizzo…",
+  t_fn_empty:"Scrivi prima il valore da anonimizzare",
+  t_fn_dup:"Valore già presente tra le aggiunte",
  },
  en:{
   tagline:"local model on CPU · GDPR compliant", badge:"100% local",
@@ -1398,7 +1778,7 @@ const T = {
   tab1:"Anonymize", tab2:"Restore the answer",
   in_title:"① Your document", in_hint:"paste text or drop a PDF / .md",
   src_ph:"Paste here the text of the deed, contract or judgment…\n\nOr drop a PDF or a .md file onto the area below.",
-  drop:"Drop a <b>PDF</b> or a <b>.md</b> here, or <b>choose a file</b>",
+  drop:"Drop one or more <b>PDF</b>s or <b>.md</b>s here, or <b>choose files</b>",
   go:"Anonymize", clear:"Clear",
   out_title:"② Result", v_prev:"Preview", v_text:"Text to copy",
   v_pdf:"PDF preview", v_raw:"Text", v_opdf:"Redacted PDF",
@@ -1429,6 +1809,12 @@ const T = {
   t_nothing_copy:"Nothing to copy", t_restored_copied:"Restored text copied",
   t_dict_loaded:"Dictionary loaded", t_json_invalid:"Invalid JSON",
   t_drag_pdf:"Unsupported format: use PDF, .md or .txt",
+  crop_top:"Crop from top", crop_bottom:"Crop from bottom",
+  crop_hint:"% of the page, cut from every page. 0 = no crop. With multiple files each file has its own crop next to its name.",
+  t_ocr_used:n=>"OCR applied to "+n+" scanned pages",
+  t_pdf_group:"The redacted PDF is only available for a single file",
+  dlprov:"Download file map",
+  g_files:"files",
   pii_found:(n,u)=>n+" PII found · "+u+" unique values",
   dict_n:n=>n+" IDs in the dictionary",
   dict_loaded_n:n=>"dictionary loaded · "+n+" IDs",
@@ -1454,6 +1840,17 @@ const T = {
   dict_off:"No dictionary: anonymization of this text is <b>irreversible</b>.",
   dict_off_hint:"the switch is OFF",
   r_off:"The <b>Reversible dictionary</b> switch is OFF: new anonymizations produce no keys. You can still restore here using a <b>.json dictionary saved earlier</b>.",
+  fn_ph:"A sensitive value left in clear? Type it here and it will be anonymized…",
+  fn_add:"Add",
+  fp_flag:"Not sensitive data: keep it in clear text",
+  fp_undo:"Undo: anonymize it again",
+  cus_rm:"Remove this rule",
+  ig_title:"Applied corrections:",
+  t_fp_ok:"Value excluded from anonymization: re-analyzing…",
+  t_cus_removed:"Custom rule removed: re-analyzing…",
+  t_fn_ok:"Value added to the anonymization: re-analyzing…",
+  t_fn_empty:"Type the value to anonymize first",
+  t_fn_dup:"Value already among the custom rules",
  }
 };
 const tt=k=>T[L][k];
@@ -1470,9 +1867,10 @@ function applyLang(l){
     const v=T[L][el.getAttribute('data-i18n')]; if(v!=null) el.innerHTML=v;});
   document.querySelectorAll('[data-i18n-ph]').forEach(el=>{
     const v=T[L][el.getAttribute('data-i18n-ph')]; if(v!=null) el.placeholder=v;});
-  if(!$('pdf').files.length) $('dropTxt').innerHTML=tt('drop');   // dropzone: solo se nessun file
+  if(!FILES.length) $('dropTxt').innerHTML=tt('drop');   // dropzone: solo se nessun file
   if(!$('rout')._raw) $('rout').innerHTML=routEmpty();
   renderMapping();
+  fillFnTag();                                           // etichette dei tipi nella lingua giusta
   if(TAGS.length && $('tagsOverlay').classList.contains('open')) renderTags();
   if(DATA) render();
 }
@@ -1529,7 +1927,9 @@ function showTab(n){
    Appena si sceglie un PDF lo si manda a /preview: il server lo tiene in memoria,
    ne ritorna il testo estratto e le pagine da renderizzare. Da li' in poi la
    colonna sinistra ha due viste, "Anteprima PDF" (default) e "Testo".
-   Per .md/.txt non c'e' niente da renderizzare: resta la sola textarea. */
+   Per .md/.txt non c'e' niente da renderizzare: resta la sola textarea.
+   Con piu' file (gruppo) l'anteprima renderizzata vale per il primo PDF; il
+   resto del gruppo lo analizza il server. */
 function setSrcView(v){
   const p=(v==='pdf'&&SRC_DOC);
   $('sPdf').classList.toggle('on',!!p);$('sText').classList.toggle('on',!p);
@@ -1537,49 +1937,163 @@ function setSrcView(v){
   $('src').style.display=p?'none':'';
 }
 
-async function onFile(f){
-  $('dropTxt').innerHTML='📎 <b>'+escapeHtml(f.name)+'</b>';
-  SRC_DOC=null;$('srcTabs').style.display='none';$('inHint').style.display='';
-  setSrcView('text');
-  if(!(f.type==='application/pdf'||/\.pdf$/i.test(f.name)))return;
+function renderFileChips(){
+  const el=$('fileChips');el.innerHTML='';
+  const show=FILES.length>1;
+  el.style.display=show?'':'none';
+  $('cropBox').style.display=show?'none':'';      // gruppo: crop per-file nei chip
+  if(!show){updateCropOverlay();return;}
+  FILES.forEach((f,i)=>{
+    const c=document.createElement('span');c.className='fchip'+(i===SRC_IDX?' on':'');
+    const nm=document.createElement('span');nm.className='fn';
+    nm.textContent=escapeHtml(f.name);nm.title=tt('crop_hint');
+    c.appendChild(nm);
+    const mk=(cls,prop,arrow,key)=>{
+      const l=document.createElement('label');l.className='cc';l.title=tt(key);
+      const sp=document.createElement('span');sp.textContent=arrow;
+      l.appendChild(sp);
+      const inp=document.createElement('input');inp.type='number';inp.min=0;inp.max=100;inp.step=0.5;
+      inp.className=cls;inp.value=f[prop]||0;
+      inp.addEventListener('focus',()=>{if(i!==SRC_IDX)showFile(i);});
+      inp.addEventListener('input',()=>{FILES[i][prop]=parseFloat(inp.value)||0;
+        if(i===SRC_IDX)updateCropOverlay();});
+      l.appendChild(inp);
+      const pc=document.createElement('span');pc.textContent='%';
+      l.appendChild(pc);
+      c.appendChild(l);return inp;
+    };
+    mk('ct','cropTop','▲','crop_top');
+    mk('cb','cropBottom','▼','crop_bottom');
+    const x=document.createElement('span');x.className='x';x.textContent='×';
+    x.title=tt('clear');
+    x.onclick=()=>{FILES.splice(i,1);
+      if(SRC_IDX>i)SRC_IDX--;
+      if(SRC_IDX>=FILES.length)SRC_IDX=FILES.length-1;
+      if(FILES.length){renderFileChips();showFile(SRC_IDX);return;}
+      $('dropTxt').innerHTML=tt('drop');renderFileChips();
+      SRC_DOC=null;SRC_IDX=0;$('srcTabs').style.display='none';setSrcView('text');$('src').value='';};
+    c.onclick=e=>{if(e.target.closest('.x')||e.target.closest('input'))return;showFile(i);};
+    c.appendChild(x);el.appendChild(c);
+  });
+  updateCropOverlay();
+}
+
+/* evidenzia il chip del file ANTEPRIMATO senza ricostruire i chip (non perde il
+   focus dell'input crop in cui l'utente sta scrivendo) */
+function markActiveChip(){
+  document.querySelectorAll('#fileChips .fchip').forEach((el,j)=>el.classList.toggle('on',j===SRC_IDX));
+}
+
+function cropVal(id){return parseFloat($(id).value)||0;}
+function syncCrop(){
+  $('cropTopR').value=cropVal('cropTop');$('cropBottomR').value=cropVal('cropBottom');
+  updateCropOverlay();
+}
+/* crop in vigore per il file ANTEPRIMATO (SRC_IDX): in un gruppo è il file che
+   si sta ritagliando, da solo vale la scatola globale cropTop/cropBottom */
+function currentCrop(){
+  if(FILES.length>1)return {top:(FILES[SRC_IDX]&&FILES[SRC_IDX].cropTop)||0,
+                            bottom:(FILES[SRC_IDX]&&FILES[SRC_IDX].cropBottom)||0};
+  return {top:cropVal('cropTop'),bottom:cropVal('cropBottom')};
+}
+function updateCropOverlay(){
+  const t=currentCrop().top,b=currentCrop().bottom;
+  document.querySelectorAll('#pdfSrcView .pg').forEach(pg=>{
+    let s=pg.querySelector('.cropstrip.top');
+    if(!s){s=document.createElement('div');s.className='cropstrip top';pg.appendChild(s);}
+    let s2=pg.querySelector('.cropstrip.bottom');
+    if(!s2){s2=document.createElement('div');s2.className='cropstrip bottom';pg.appendChild(s2);}
+    s.style.display=t>0?'':'none';s.style.height=t+'%';
+    s2.style.display=b>0?'':'none';s2.style.height=b+'%';
+  });
+}
+
+/* mostra nell'anteprima (sx) il file i-esimo del gruppo, col suo crop: è il file
+   su cui l'utente sta ritagliando. Da solo, comportamento storico (crop globale). */
+let PREV_T=0;                      // guardia anti-race: clic rapidi su chip diversi
+async function showFile(i){
+  if(!FILES.length)return;
+  const f=FILES[i];
+  SRC_IDX=i;markActiveChip();
+  if(FILES.length===1)$('dropTxt').innerHTML='📎 <b>'+escapeHtml(f.name)+'</b>';
+  else $('dropTxt').innerHTML='📎 <b>'+FILES.length+'</b> '+tt('g_files');
+  const myT=++PREV_T;
+  if(!(f.type==='application/pdf'||/\.pdf$/i.test(f.name))){
+    SRC_DOC=null;$('srcTabs').style.display='none';setSrcView('text');
+    $('src').value='';$('pdfSrcView').innerHTML='';
+    $('inHint').innerHTML=tt('in_hint');$('inHint').style.display='';
+    return;
+  }
   $('inHint').textContent=tt('t_prev_loading');
   busy($('pdfSrcView'),tt('t_prev_loading'));
   $('srcTabs').style.display='';$('pdfSrcView').style.display='';$('src').style.display='none';
   $('sPdf').classList.add('on');$('sText').classList.remove('on');
   try{
     const fd=new FormData();fd.append('pdf',f);
+    const cr=currentCrop();
+    fd.append('crop_top',cr.top);fd.append('crop_bottom',cr.bottom);
     const r=await fetch('/preview',{method:'POST',body:fd});
     const d=await r.json();
+    if(myT!==PREV_T)return;                        // intanto si è scelto un altro file
     if(!r.ok)throw new Error(d.error||'');
     SRC_DOC=d;$('src').value=d.text||'';
-    renderPages($('pdfSrcView'),d);
+    renderPages($('pdfSrcView'),d);updateCropOverlay();
     $('inHint').style.display='none';
+    if(d.ocr_pages)toast(T[L].t_ocr_used(d.ocr_pages),true,4500);
   }catch(e){
+    if(myT!==PREV_T)return;
     SRC_DOC=null;$('srcTabs').style.display='none';setSrcView('text');
     $('inHint').innerHTML=tt('in_hint');$('inHint').style.display='';
     toast(tt('t_prev_err'),false);          // il file resta valido: l'analisi funziona lo stesso
   }
 }
 
+async function onFiles(files){
+  FILES=Array.from(files||[]);
+  for(const f of FILES){f.cropTop=cropVal('cropTop');f.cropBottom=cropVal('cropBottom');}
+  SRC_DOC=null;SRC_IDX=0;$('srcTabs').style.display='none';
+  IGN=[];CUS=[];$('fnVal').value='';   // documento nuovo -> le correzioni precedenti non valgono piu'
+  renderFileChips();
+  setSrcView('text');
+  if(!FILES.length){$('dropTxt').innerHTML=tt('drop');$('src').value='';return;}
+  showFile(0);
+}
+
 /* ---- analyze ---- */
 async function run(){
-  const file=$('pdf').files[0];const text=$('src').value.trim();
-  if(!file&&!text){toast(tt('t_need_input'),false);return;}
+  const files=FILES.length?FILES:null;const text=$('src').value.trim();
+  if(!files&&!text){toast(tt('t_need_input'),false);return;}
   $('go').disabled=true;const old=$('go').innerHTML;
   $('go').innerHTML='<span class="spin"></span> '+tt('analyzing');
   try{
     let resp;
     // override della UI. Se /settings non ha risposto non mandiamo nulla: comanda il server.
     const excl=TAGS_LOADED?[...EXCL]:null;
-    if(file){const fd=new FormData();fd.append('pdf',file);
+    if(files){
+      // gruppo: tutti i file in multipart -> il server li anonimizza con UNA mappa condivisa
+      const fd=new FormData();
+      for(const f of files)fd.append('pdf',f);
+      if(files.length>1){
+        // crop PER-FILE nel gruppo: ogni file ha il suo taglio (crop_top_i / crop_bottom_i)
+        for(let i=0;i<files.length;i++){
+          fd.append('crop_top_'+i,files[i].cropTop||0);
+          fd.append('crop_bottom_'+i,files[i].cropBottom||0);}
+      }else{
+        // file singolo: resta la scatola di crop globale (come /preview e /pdf)
+        fd.append('crop_top',cropVal('cropTop'));fd.append('crop_bottom',cropVal('cropBottom'));}
       if(excl){fd.append('exclude_tags',excl.join(','));fd.append('include_mapping',MAPPING?'1':'0');}
+      if(IGN.length)fd.append('ignore_values',JSON.stringify(IGN));
+      if(CUS.length)fd.append('custom_values',JSON.stringify(CUS));
       resp=await fetch('/analyze',{method:'POST',body:fd});}
     else{const body={text};if(excl){body.exclude_tags=excl;body.include_mapping=MAPPING;}
+      if(IGN.length)body.ignore_values=IGN;
+      if(CUS.length)body.custom_values=CUS;
       resp=await fetch('/analyze',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify(body)});}
     const d=await resp.json();
     if(!resp.ok){toast(d.error||tt('t_error'),false);return;}
-    if(d.source_text&&file)$('src').value=d.source_text;
+    if(d.group){CURF=0;}
+    else if(d.source_text&&files)$('src').value=d.source_text;
     DATA=d;off.clear();
     // senza dizionario non tocchiamo MAP ne' il localStorage: nessuna chiave nuova nasce
     if(d.mapping_enabled!==false){MAP=d.mapping;localStorage.setItem('pii_map',JSON.stringify(MAP));}
@@ -1589,14 +2103,9 @@ async function run(){
   finally{$('go').disabled=false;$('go').innerHTML=old;}
 }
 
-function render(){
-  const d=DATA;
-  OUT_DOC=null;$('pdfOutView').innerHTML='';  // risultato nuovo -> il PDF censurato va rifatto
-  $('dictCard').style.display='';            // mostra la card dizionario (sotto le due colonne)
-  document.querySelector('.app').classList.add('has-result');  // -> scroll pagina, niente schiacciamento
-  // preview evidenziata
-  const prev=$('prev');prev.innerHTML='';prev.style.display='';$('emptyPrev').style.display='none';
-  for(const s of d.segments){
+function buildPreview(container,segments){
+  container.innerHTML='';container.style.display='';$('emptyPrev').style.display='none';
+  for(const s of segments){
     if(s.label){
       const c=colors(s.label);const sp=document.createElement('span');
       sp.className='ph'+(off.has(s.label)?' dim':'');
@@ -1604,12 +2113,11 @@ function render(){
       // senza dizionario il server non manda il valore originale: niente da mostrare al passaggio
       sp.title=(s.t?s.t+'\n':'')+`(${s.src}${s.validated?' · checksum ✓':''})`;
       sp.innerHTML=s.ph.replace(/[\[\]]/g,'')+(s.validated?'<span class="ck">✓</span>':'');
-      prev.appendChild(sp);
-    }else prev.appendChild(document.createTextNode(s.t));
+      container.appendChild(sp);
+    }else container.appendChild(document.createTextNode(s.t));
   }
-  // testo da copiare
-  $('anon').value=d.anonymized_text;
-  // meta
+}
+function buildMeta(d){
   $('meta').innerHTML=
     `<span class="stat"><b>${d.n_entities}</b> ${tt('st_ent')}</span>`+
     `<span class="stat"><b>${d.n_unique}</b> ${tt('st_uniq')}</span>`+
@@ -1617,8 +2125,10 @@ function render(){
     `<span class="stat"><b>${(d.by_source.regex||0)}</b> ${tt('st_regex')}</span>`+
     `<span class="stat"><b>${T[L].chars(d.n_chars)}</b> ${tt('st_chars')}</span>`+
     ((d.excluded_tags&&d.excluded_tags.length)
-      ? `<span class="stat" title="${d.excluded_tags.join(', ')}"><b>${d.excluded_tags.length}</b> ${tt('st_excl')}</span>` : '');
-  // legenda cliccabile (toggle highlight)
+      ? `<span class="stat" title="${d.excluded_tags.join(', ')}"><b>${d.excluded_tags.length}</b> ${tt('st_excl')}</span>` : '')+
+    (d.ocr_pages?`<span class="stat" title="OCR"><b>${d.ocr_pages}</b> OCR</span>`:'');
+}
+function buildLegend(d){
   const lg=$('legend');lg.innerHTML='';
   for(const [k,v] of Object.entries(d.by_label)){
     const c=colors(k);const el=document.createElement('span');
@@ -1627,6 +2137,8 @@ function render(){
     el.onclick=()=>{off.has(k)?off.delete(k):off.add(k);render();};
     lg.appendChild(el);
   }
+}
+function buildDict(d){
   // dizionario (assente quando lo switch e' su DISATTIVO)
   const hasMap=d.mapping_enabled!==false;
   const rows=$('maprows');rows.innerHTML='';
@@ -1635,13 +2147,112 @@ function render(){
   $('dictNone').style.display=hasMap?'none':'';
   $('dictHint').innerHTML=hasMap?tt('dict_hint'):tt('dict_off_hint');
   $('dl').style.display=hasMap?'':'none';
-  for(const ph of keys){const lab=ph.slice(1,ph.lastIndexOf('_'));const c=colors(lab);
+  $('dlprov').style.display=(hasMap&&d.group)?'':'none';
+  for(const ph of keys){const val=d.mapping[ph];
+    const lab=ph.slice(1,ph.lastIndexOf('_'));const c=colors(lab);
+    const isCus=CUS.some(x=>normVal(x.value)===normVal(val));
     const tr=document.createElement('tr');
     tr.innerHTML=`<td class="k" style="color:${c.tx}">${ph}</td>`+
-      `<td class="v">${escapeHtml(d.mapping[ph])}</td>`+
-      `<td><span class="chip" style="cursor:default"><span class="sw" style="background:${c.bd}"></span>${lab}</span></td>`;
+      `<td class="v">${escapeHtml(val)}</td>`+
+      `<td><span class="chip" style="cursor:default"><span class="sw" style="background:${c.bd}"></span>${lab}</span></td>`+
+      `<td class="act"><button class="rowx" title="${isCus?tt('fp_undo'):tt('fp_flag')}">${isCus?'↩':'🚫'}</button></td>`;
+    tr.querySelector('.rowx').onclick=()=>flagValue(val);
     rows.appendChild(tr);}
   $('ulock').textContent=keys.length?T[L].dict_n(keys.length):'';
+  renderIgChips();
+}
+
+/* ---- correzioni utente sul risultato ---------------------------------------
+   FALSO POSITIVO: il pulsante 🚫 su una riga del dizionario mette il valore in
+   IGN -> alla ri-analisi resta in chiaro. Se la riga nasceva da una regola
+   personale (CUS), lo stesso pulsante la rimuove.
+   FALSO NEGATIVO: la barra "Aggiungi" inserisce il valore in CUS con un tipo a
+   scelta -> alla ri-analisi ogni sua occorrenza diventa un placeholder.
+   In entrambi i casi si rilancia l'analisi: cosi' dizionario, conteggi,
+   provenienza e PDF censurato restano tutti coerenti. ----------------------- */
+function normVal(s){return String(s).toLowerCase().replace(/\s+/g,' ').trim();}
+function rerun(){if(!$('go').disabled)run();}
+
+function fillFnTag(){
+  const sel=$('fnTag'),cur=sel.value;sel.innerHTML='';
+  const src=TAGS.length?TAGS:[{tag:'FULLNAME',it:'Persona (nome completo)',en:'Full name'}];
+  for(const t of src){const o=document.createElement('option');
+    o.value=t.tag;o.textContent=(L==='en'?t.en:t.it)+' · '+t.tag;sel.appendChild(o);}
+  sel.value=[...sel.options].some(o=>o.value===cur)?cur:src[0].tag;
+}
+function flagValue(val){
+  const nv=normVal(val);
+  const ci=CUS.findIndex(c=>normVal(c.value)===nv);
+  if(ci>=0){CUS.splice(ci,1);toast(tt('t_cus_removed'),true,2600);}
+  else{IGN.push(val);toast(tt('t_fp_ok'),true,2600);}
+  rerun();
+}
+function addCustom(){
+  const inp=$('fnVal'),v=inp.value.trim();
+  if(!v){toast(tt('t_fn_empty'),false);return;}
+  if(CUS.some(c=>normVal(c.value)===normVal(v))||IGN.some(x=>normVal(x)===normVal(v))){
+    toast(tt('t_fn_dup'),false);return;}
+  CUS.push({value:v,tag:$('fnTag').value||'FULLNAME'});
+  inp.value='';
+  toast(tt('t_fn_ok'),true,2600);
+  rerun();
+}
+function renderIgChips(){
+  const box=$('igChips');
+  if(!IGN.length&&!CUS.length){box.style.display='none';box.innerHTML='';return;}
+  box.style.display='';box.innerHTML=`<b>${tt('ig_title')}</b>`;
+  for(const c of CUS){const s=document.createElement('span');s.className='igchip cus';
+    s.title=tt('cus_rm');
+    s.innerHTML=`${escapeHtml(c.value)}&nbsp;<i>${c.tag}</i><button title="${tt('cus_rm')}">×</button>`;
+    s.querySelector('button').onclick=()=>{CUS.splice(CUS.indexOf(c),1);rerun();};
+    box.appendChild(s);}
+  for(const v of IGN){const s=document.createElement('span');s.className='igchip';
+    s.title=tt('fp_undo');
+    s.innerHTML=`<b>${escapeHtml(v)}</b><button title="${tt('fp_undo')}">×</button>`;
+    s.querySelector('button').onclick=()=>{IGN.splice(IGN.indexOf(v),1);rerun();};
+    box.appendChild(s);}
+}
+
+/* risultato di un GRUPPO di file: selettore del file + preview per-file;
+   "testo da copiare" e dizionario valgono per il gruppo intero */
+function renderGroup(){
+  const d=DATA;
+  $('groupBar').style.display='';
+  const gb=$('groupBar');gb.innerHTML='';
+  d.files.forEach((f,i)=>{
+    const c=document.createElement('button');c.className='mini'+(i===CURF?' on':'');
+    c.textContent=f.name||('file '+(i+1));
+    c.onclick=()=>{CURF=i;renderGroup();};
+    gb.appendChild(c);
+  });
+  const f=d.files[CURF]||d.files[0];
+  $('src').value=f.source_text||'';
+  setSrcView('text');$('srcTabs').style.display='none';$('inHint').style.display='none';
+  buildPreview($('prev'),f.segments);
+  $('anon').value=d.anonymized_text;           // "testo da copiare" = gruppo intero
+  buildMeta(d);
+  buildLegend(d);
+  buildDict(d);
+  if(VIEW==='pdf')setView('prev');             // niente PDF censurato per i gruppi
+}
+
+function render(){
+  const d=DATA;
+  OUT_DOC=null;$('pdfOutView').innerHTML='';  // risultato nuovo -> il PDF censurato va rifatto
+  $('dictCard').style.display='';            // mostra la card dizionario (sotto le due colonne)
+  document.querySelector('.app').classList.add('has-result');  // -> scroll pagina, niente schiacciamento
+  if(d.group){renderGroup();return;}
+  $('groupBar').style.display='none';
+  // preview evidenziata
+  buildPreview($('prev'),d.segments);
+  // testo da copiare
+  $('anon').value=d.anonymized_text;
+  // meta
+  buildMeta(d);
+  // legenda cliccabile (toggle highlight)
+  buildLegend(d);
+  // dizionario
+  buildDict(d);
   if(VIEW==='pdf')setView('pdf');            // stavo guardando il PDF: lo rigenero
 }
 
@@ -1649,7 +2260,8 @@ function escapeHtml(s){return s.replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>
 
 /* ---- view toggle (dx): anteprima con i tag | testo da copiare | PDF censurato ---- */
 async function setView(v){
-  if(v==='pdf'&&!DATA&&!$('pdf').files.length&&!$('src').value.trim()){
+  if(v==='pdf'&&DATA&&DATA.group){toast(tt('t_pdf_group'),false);return;}
+  if(v==='pdf'&&!DATA&&!FILES.length&&!$('src').value.trim()){
     toast(tt('t_need_anon'),false);return;}
   VIEW=v;
   $('vPrev').classList.toggle('on',v==='prev');
@@ -1679,16 +2291,23 @@ let PDF_JOB=null;
 function buildOutPdf(){
   if(OUT_DOC)return Promise.resolve(OUT_DOC);
   if(PDF_JOB)return PDF_JOB;                 // click su tab + download insieme -> una richiesta sola
-  const file=$('pdf').files[0];const text=$('src').value.trim();
-  if(!DATA&&!file&&!text){toast(tt('t_need_anon'),false);return Promise.resolve(null);}
+  const files=FILES.length?FILES:null;const text=$('src').value.trim();
+  if(!DATA&&!files&&!text){toast(tt('t_need_anon'),false);return Promise.resolve(null);}
+  if(files&&files.length>1){toast(tt('t_pdf_group'),false);return Promise.resolve(null);}
+  const file=files?files[0]:null;
   const excl=TAGS_LOADED?[...EXCL]:null;
   PDF_JOB=(async()=>{
     try{
       let resp;
       if(file){const fd=new FormData();fd.append('pdf',file);
+        fd.append('crop_top',cropVal('cropTop'));fd.append('crop_bottom',cropVal('cropBottom'));
         if(excl)fd.append('exclude_tags',excl.join(','));
+        if(IGN.length)fd.append('ignore_values',JSON.stringify(IGN));
+        if(CUS.length)fd.append('custom_values',JSON.stringify(CUS));
           resp=await fetch('/pdf/preview',{method:'POST',body:fd});}
       else{const body={text};if(excl)body.exclude_tags=excl;
+        if(IGN.length)body.ignore_values=IGN;
+        if(CUS.length)body.custom_values=CUS;
           resp=await fetch('/pdf/preview',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify(body)});}
       const d=await resp.json();
@@ -1707,6 +2326,11 @@ $('dl').onclick=()=>{if(!DATA||!Object.keys(MAP).length){toast(tt('t_nothing_dl'
   const blob=new Blob([JSON.stringify(MAP,null,2)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
   a.download='dizionario_anonimizzazione.json';a.click();URL.revokeObjectURL(a.href);
+  toast(tt('t_dl_ok'));};
+$('dlprov').onclick=()=>{if(!DATA||!DATA.provenance){toast(tt('t_nothing_dl'),false);return;}
+  const blob=new Blob([JSON.stringify(DATA.provenance,null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download='provenienza_gruppo.json';a.click();URL.revokeObjectURL(a.href);
   toast(tt('t_dl_ok'));};
 
 /* ---- PDF anonimizzato (issue #7): redazione vera del PDF caricato, oppure PDF
@@ -1760,9 +2384,16 @@ $('dictFile').onchange=e=>{const f=e.target.files[0];if(!f)return;
 
 /* ---- input helpers ---- */
 $('go').onclick=run;
+$('fnAdd').onclick=addCustom;
+$('fnVal').addEventListener('keydown',e=>{if(e.key==='Enter')addCustom();});
 $('clear').onclick=()=>{$('src').value='';$('pdf').value='';$('dropTxt').innerHTML=tt('drop');
+  FILES=[];CURF=0;SRC_IDX=0;$('fileChips').innerHTML='';$('fileChips').style.display='none';
+  $('groupBar').style.display='none';
+  $('cropTop').value=0;$('cropBottom').value=0;$('cropTopR').value=0;$('cropBottomR').value=0;
+  $('cropBox').style.display='';
   DATA=null;$('prev').style.display='none';$('emptyPrev').style.display='';
   $('anon').value='';$('meta').innerHTML='';$('legend').innerHTML='';
+  IGN=[];CUS=[];$('fnVal').value='';renderIgChips();   // le correzioni valgono per quel documento
   $('dictCard').style.display='none';$('ulock').textContent='';
   // la card era solo nascosta: senza queste tre righe il dizionario resta in MAP e su
   // disco, e al riavvio ricompare zitto al posto di quello del documento nuovo
@@ -1773,16 +2404,22 @@ $('clear').onclick=()=>{$('src').value='';$('pdf').value='';$('dropTxt').innerHT
   document.querySelector('.app').classList.remove('has-result');};
 $('src').addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter')run();});
 
-/* pdf picker + dropzone */
+/* pdf picker + dropzone (uno o piu' file: gruppo) */
 const drop=$('drop');
-$('pdf').onchange=e=>{const f=e.target.files[0];if(f)onFile(f);};
+$('pdf').onchange=e=>{const fs=Array.from(e.target.files);if(fs.length)onFiles(fs);};
 ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hot');}));
 ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hot');}));
 const OK_EXT=/\.(pdf|md|markdown|txt|text)$/i;
-drop.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];
-  if(f&&(f.type==='application/pdf'||OK_EXT.test(f.name))){
-    const dt=new DataTransfer();dt.items.add(f);$('pdf').files=dt.files;
-    onFile(f);}else toast(tt('t_drag_pdf'),false);});
+drop.addEventListener('drop',e=>{
+  const ok=Array.from(e.dataTransfer.files).filter(f=>f.type==='application/pdf'||OK_EXT.test(f.name));
+  if(!ok.length){toast(tt('t_drag_pdf'),false);return;}
+  const dt=new DataTransfer();ok.forEach(f=>dt.items.add(f));$('pdf').files=dt.files;
+  onFiles(ok);});
+/* crop: slider <-> numero sincronizzati; overlay sulle pagine dell'anteprima PDF */
+for(const [r,n] of [['cropTopR','cropTop'],['cropBottomR','cropBottom']]){
+  $(r).addEventListener('input',e=>{$(n).value=e.target.value;syncCrop();});
+  $(n).addEventListener('input',e=>{syncCrop();});
+}
 
 /* scroll sincronizzato: editor (sx) <-> anteprima e testo (dx) */
 linkScroll($('src'),$('viewPrev'));linkScroll($('viewPrev'),$('src'));
@@ -1855,6 +2492,7 @@ async function loadTags(){
     const d=await (await fetch('/settings')).json();
     TAGS=d.tags||[];EXCL=new Set(d.excluded_tags||[]);TAGS_META=d;TAGS_LOADED=true;
     MAPPING=d.mapping_enabled!==false;renderMapping();
+    fillFnTag();
   }catch(e){/* server vecchio o offline: si continua con il comportamento di default */}
 }
 function renderTags(){
