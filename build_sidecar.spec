@@ -17,6 +17,11 @@ for pkg in ("transformers", "tokenizers", "safetensors", "huggingface_hub", "reg
 datas += [("models/rizzo-pii-0.3B-v1.5.0", "pii_model")]
 datas += [("src/app/assets", "assets")]
 hiddenimports += ["fitz", "flask", "sklearn.utils._typedefs"]
+hiddenimports += ["PIL", "PIL._tkinter_finder", "pytesseract", "pytesseract.pytesseract"]
+
+# NB: il BINARIO tesseract resta una dipendenza di SISTEMA (non bundlato con
+# PyInstaller): pytesseract lo cerca nel PATH. In un ambiente Tauri si puo'
+# forzare il path esatto con la variabile TESSERACT_CMD (vedi docs/BUILD.md).
 
 excludes = [
     "tensorflow", "tensorflow_intel", "tf_keras", "keras", "jax", "jaxlib", "flax",
