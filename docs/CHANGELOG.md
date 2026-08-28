@@ -5,6 +5,61 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-08-22 — Correzioni utente sul risultato: falsi positivi e falsi negativi (`app.py`)
+
+Il rilevamento sbaglia in entrambe le direzioni e finora l'unica via d'uscita era correggere il
+testo a mano. Ora la card "Dizionario reversibile" permette di correggere il risultato senza uscire
+dall'app:
+
+- **falso positivo** (pulsante 🚫 sulla riga del dizionario): il valore marcato viene scartato
+  dopo la fusione (`_analyze_core(..., ignore=...)`, match esatto a normalizzazione pari: spazi
+  collassati + casefold) e resta in chiaro nel testo anonimizzato, fuori dal dizionario;
+- **falso negativo** (barra "Aggiungi" con tipo a scelta): il valore diventa un'entità candidate
+  come le altre PRIMA della fusione (`_custom_entities`, ricerca letterale case-insensitive, fonte
+  `utente`, priorità massima in `_merge`): ogni occorrenza riceve il suo placeholder anche se
+  modello e regex non l'hanno vista, e vince anche su un tag escluso per tipo.
+
+Ogni correzione rilancia l'analisi — `ignore_values` / `custom_values` su `/analyze`, `/pdf` e
+`/pdf/preview`; liste JSON nel body o stringhe JSON nei campi multipart (parser `_parse_adjust`,
+cap 200 valori × 300 caratteri, tag sconosciuto → FULLNAME) — così dizionario, conteggi,
+provenienza del gruppo e PDF censurato restano coerenti con quanto mostrato. Nel gruppo le
+correzioni valgono per tutti i file; nella UI durano fino a "Pulisci" o al cambio di documento.
+Test: `tests/test_correzioni_utente.py`.
+
+## 2026-08-17 — OCR per PDF scannerizzati, upload multi-file, crop intestazioni/piè di pagina (`app.py`)
+
+Tre richieste arrivano insieme sul percorso di input dell'app (la pipeline di anonimizzazione,
+NER/regex/checksum e i placeholder `[TAG_N]` non cambiano):
+
+1. **OCR di fallback (Tesseract)** — prima un PDF scannerizzato (nessun layer testuale) finiva
+   in `_text_from_bytes` come testo vuoto → "Nessun testo da analizzare". Ora ogni pagina senza
+   testo nativo (sotto `OCR_MIN_CHARS` = 40) viene renderizzata a 300 dpi e passata a Tesseract,
+   pagina per pagina; i PDF misti escono nativi dove possibile, OCR solo dove serve. Nuovo modulo
+   `src/app/pdf_text.py` (dipende solo da PyMuPDF + pytesseract/Pillow lazy, testabile in isolamento).
+   Tesseract è un binario di sistema: senza, si solleva `OcrUnavailableError` → errore JSON chiaro,
+   mai un crash. Path forzabile con `TESSERACT_CMD`.
+2. **Upload multi-file (gruppo)** — l'input accetta più PDF/.md/.txt insieme; il gruppo viene
+   anonimizzato con **una mappa condivisa** (stesso `[PERSON_1]` per la stessa persona in tutti i
+   file), `mapping` resta piatta e la nuova risposta `provenance` dice quali placeholder appartengono
+   a quale file (`/analyze` ritorna `group:true` + `files[]` per-file; il flusso singolo file è
+   invariato). `POST /pdf` (PDF censurato) resta per un solo file.
+3. **Crop verticale** — `crop_top` / `crop_bottom` (percentuali 0..100, default 0) tagliano
+   intestazione e piè di pagina da ogni pagina del batch: sui PDF nativi i blocchi nelle fasce
+   vengono scartati, sull'OCR l'immagine viene ritagliata prima di Tesseract. La soglia "quasi
+   vuoto" si valuta sul testo **non** filtrato, così svuotare una pagina col crop non riattiva l'OCR.
+
+UI: dropzone e selezione multipla con chip dei file, box di crop con slider sincronizzati e
+overlay delle fasce sull'anteprima PDF, selettore per-file nel risultato del gruppo, download
+della mappa file (`provenienza_gruppo.json`), i18n estesa. Dipendenze nuove: `pytesseract`,
+`Pillow`; `build_sidecar.spec` aggiornato (binario tesseract non bundlato).
+
+## 2026-08-17 — Crop personalizzato per ogni file del gruppo (`app.py`)
+
+Nel gruppo ogni file ha ora il **proprio** crop, indicato accanto al nome (chip ↑/↓ in
+percentuale): `/analyze` accetta i campi per-file `crop_top_{i}` / `crop_bottom_{i}` (i = ordine
+di arrivo); senza, ripiega sui campi globali `crop_top`/`crop_bottom`, quindi il flusso singolo
+file e i client esistenti restano invariati. L'anteprima mostra il crop del primo file.
+
 ## 2026-08-07 — `Dockerfile`: l'app come webapp in un container
 
 Finora l'unico modo di far girare l'app era l'installer desktop o `python src/app/app.py` con

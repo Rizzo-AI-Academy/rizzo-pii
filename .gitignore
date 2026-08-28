@@ -24,6 +24,10 @@ build/
 dist/
 installer_out/
 build_env/
+# artefatti di distribuzione generati (portable + installer + zip, ~2 GB)
+release/
+# PDF generati dagli script/tool di test (make_test_pdfs.py, test_pdf_text.py)
+test_output/
 
 # ─── Desktop app build — Tauri ───
 tauri/node_modules/
