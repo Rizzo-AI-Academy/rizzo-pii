@@ -65,6 +65,8 @@ from detectors import (DETECTORS, SOFT_REGEX_LABELS, cf_ok,  # noqa: F401
                        detect_iban, detect_regex, iban_ok, luhn_ok, piva_ok)
 from transformers import pipeline
 
+import document_verification
+
 
 def _resource_path(rel):
     """Percorso risorsa valido sia in sviluppo sia dentro l'exe PyInstaller."""
@@ -532,6 +534,7 @@ def _uploaded_file():
 @app.route("/analyze", methods=["POST"])
 def analyze_route():
     up = _uploaded_file()
+    verify_requested = False
     if up is not None:
         try:
             text = _extract_upload(up)
@@ -541,11 +544,13 @@ def analyze_route():
             return jsonify({"error": f"Impossibile leggere il file: {e}"}), 400
         raw_excl = request.form.get("exclude_tags")
         raw_map = request.form.get("include_mapping")
+        verify_requested = request.form.get("verify") in ("1", "true", "yes")
     else:
         payload = request.get_json(silent=True) or {}
         text = payload.get("text", "")
         raw_excl = payload.get("exclude_tags")
         raw_map = payload.get("include_mapping")
+        verify_requested = bool(payload.get("verify"))
 
     text = (text or "").strip()
     if not text:
@@ -557,6 +562,36 @@ def analyze_route():
                 if raw_map is not None else MAPPING_ENABLED)
     out = analyze(text, excl, keep_map)
     out["source_text"] = text
+
+    # Optional document-authenticity verification (Stipple add-on).
+    # Needs the original file: only possible for uploads, and only when
+    # requested (verify=1 / "verify": true) or globally enabled. Best-effort:
+    # any failure just omits the block.
+    if verify_requested or document_verification.enabled():
+        upload_path = None
+        if up is not None:
+            try:
+                import tempfile
+                suffix = os.path.splitext(up.filename)[1] or ".pdf"
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                up.stream.seek(0)
+                tmp.write(up.stream.read())
+                tmp.close()
+                upload_path = Path(tmp.name)
+            except Exception:                    # noqa: BLE001 - best-effort
+                upload_path = None
+        try:
+            dv = document_verification.verification_block(
+                upload_path, force=verify_requested
+            )
+            if dv is not None:
+                out["document_verification"] = dv
+        finally:
+            if upload_path is not None:
+                try:
+                    upload_path.unlink()
+                except OSError:
+                    pass
     return jsonify(out)
 
 
