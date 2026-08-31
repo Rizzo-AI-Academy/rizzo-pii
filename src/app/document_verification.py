@@ -44,9 +44,10 @@ def _headers() -> dict:
     return headers
 
 
-def _post_file(endpoint: str, file_path: Path) -> Optional[dict]:
+def _post_file(endpoint: str, file_path: str | Path) -> Optional[dict]:
     """POST a document as multipart to a Stipple endpoint. Best-effort."""
     try:
+        file_path = Path(file_path)  # accept str or Path
         boundary = "----rizzo-stipple" + uuid.uuid4().hex
         with open(file_path, "rb") as f:
             content = f.read()
