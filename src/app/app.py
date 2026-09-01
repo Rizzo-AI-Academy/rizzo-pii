@@ -58,6 +58,7 @@ from flask import (Flask, jsonify, render_template_string, request,
                    send_from_directory)
 
 import pdf_export
+import pdf_text
 import server_config
 # Rete REGEX + CHECKSUM: modulo a parte, senza dipendenze dal modello. I nomi
 # restano importabili da qui (`app.detect_regex`) per non rompere chi li usa.
@@ -499,12 +500,19 @@ def _is_pdf(name, data):
 
 
 def _text_from_bytes(name, data):
-    """Testo dai bytes di un upload: PDF via PyMuPDF, .md/.txt come testo puro."""
+    """Testo dai bytes di un upload: PDF via PyMuPDF, .md/.txt come testo puro.
+
+    Per i PDF non basta `page.get_text()`: nei moduli AcroForm il valore sta
+    nei widget (issue #85). `pdf_text.collect_readable_text` allinea
+    l'estrazione a quanto `pdf_export` gia' ispezionava per i residui.
+    """
     name = (name or "").lower()
     ext = os.path.splitext(name)[1]
     if _is_pdf(name, data):
         with fitz.open(stream=data, filetype="pdf") as doc:
-            return "\n".join(page.get_text() for page in doc)
+            # Non solo page.get_text(): nei PDF fillable il valore sta nei
+            # widget AcroForm (issue #85). Stesso contratto di pdf_export.
+            return pdf_text.collect_readable_text(doc)
     if ext in TEXT_EXTS or not ext:
         for enc in ("utf-8-sig", "utf-16", "latin-1"):
             try:
