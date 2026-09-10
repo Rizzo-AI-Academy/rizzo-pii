@@ -1733,24 +1733,49 @@ $('dlpdf').onclick=async()=>{
 function reverse(){
   const txt=$('rin').value;
   if(!txt.trim()){toast(tt('t_paste_restore'),false);return;}
-  if(!Object.keys(MAP).length){toast(tt('t_no_dict'),false);return;}
-  // placeholder piu' lunghi prima (evita FULLNAME_1 dentro FULLNAME_10)
-  const keys=Object.keys(MAP).sort((a,b)=>b.length-a.length);
-  let out=txt;
-  for(const ph of keys){
+  const keys=Object.keys(MAP);
+  if(!keys.length){toast(tt('t_no_dict'),false);return;}
+  // Una sola passata sul testo ORIGINALE, non N replace() sequenziali su un
+  // `out` che si accumula: se il valore sostituito per una chiave contenesse
+  // per caso il nome di una chiave successiva (es. una ragione sociale con
+  // dentro "CF_2"), il replace seguente lo ri-sostituiva -- un falso positivo
+  // di secondo ordine che nessuna delle due chiavi, prese da sole, produce.
+  // Il lookup avviene ricostruendo il nome dal testo appena matchato, quindi
+  // l'ordine delle chiavi nella mappa e' ora irrilevante (non serve piu'
+  // ordinare per lunghezza: parentesi TUTTO-O-NIENTE e confine di parola
+  // bastano a evitare che FULLNAME_1 matchi dentro FULLNAME_10, si veda sotto).
+  const byInner=new Map(keys.map(ph=>[ph.slice(1,-1),MAP[ph]]));
+  const alts=keys.map(ph=>{
     const inner=ph.slice(1,-1);                 // FULLNAME_1
+    const esc=inner.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
     // tollerante: parentesi o forma nuda, spazi, eventuale grassetto markdown.
     // Gli spazi si consumano SOLO insieme alla parentesi: con '\[?\s*' un placeholder
     // scritto senza parentesi si portava via anche gli spazi intorno, e "Il FULLNAME_1 ha"
     // tornava "IlMario Rossiha". Con un tab o un a-capo spariva la colonna o la riga.
-    // E le parentesi sono TUTTO-O-NIENTE, con \b sulla forma nuda: se ognuna e' opzionale
-    // per conto suo, con CF_1 in mappa un indice inventato dal modello ([CF_12]) matcha
-    // per meta' e il ripristino scrive un codice fiscale SBAGLIATO - un segnaposto rimasto
-    // si vede, un valore sbagliato no.
-    const esc=inner.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-    const rx=new RegExp('\\**(?:\\[\\s*'+esc+'\\s*\\]|\\b'+esc+'\\b)\\**','g');
-    out=out.replace(rx,MAP[ph].replace(/\$/g,'$$$$'));
-  }
+    // E le parentesi sono TUTTO-O-NIENTE, con un confine di parola sulla forma nuda:
+    // se ognuna e' opzionale per conto suo, con CF_1 in mappa un indice inventato dal
+    // modello ([CF_12]) matcha per meta' e il ripristino scrive un codice fiscale
+    // SBAGLIATO - un segnaposto rimasto si vede, un valore sbagliato no.
+    // Il confine e' Unicode-aware (specchia _is_word() lato Python, che tratta le
+    // lettere accentate come interne alla parola): \b di JS e' ASCII-only, quindi
+    // su "CF_1e' gia'" non vedeva un confine e il valore tornava incollato alla
+    // lettera accentata -- lo stesso difetto che questa funzione deve evitare,
+    // riaperto in modo asimmetrico solo per le parole italiane.
+    return '\\[\\s*'+esc+'\\s*\\]|(?<![\\p{L}\\p{N}_])'+esc+'(?![\\p{L}\\p{N}_])';
+  }).join('|');
+  // Gli asterischi di grassetto markdown si assorbono in coppie SIMMETRICHE
+  // (stesso numero prima e dopo, fino a 2, col backreference \1): una sequenza
+  // di asterischi condivisa fra due placeholder adiacenti si divide cosi' in
+  // modo deterministico, invece di dipendere da quale chiave viene elaborata
+  // prima (con N pattern separati, un lato mangiava tutta la sequenza e
+  // lasciava l'altro placeholder non risolto o incollato al primo valore).
+  const rx=new RegExp('(\\*{0,2})(?:'+alts+')\\1','gu');
+  const out=txt.replace(rx,(m)=>{
+    const core=m.replace(/^\*+|\*+$/g,'');
+    const br=core.match(/^\[\s*([\s\S]*?)\s*\]$/);
+    const val=byInner.get(br?br[1]:core);
+    return val===undefined?m:val;               // per costruzione sempre trovato
+  });
   const o=$('rout');o.textContent=out;o._raw=out;
   toast(tt('t_restored'));
 }
@@ -1761,8 +1786,16 @@ $('rclear').onclick=()=>{$('rin').value='';$('rout').innerHTML=routEmpty();$('ro
 
 /* ---- carica dizionario da file (per sessioni diverse) ---- */
 $('dictFile').onchange=e=>{const f=e.target.files[0];if(!f)return;
-  const r=new FileReader();r.onload=()=>{try{MAP=JSON.parse(r.result);
-    $('dictInfo').textContent=T[L].dict_loaded_n(Object.keys(MAP).length);
+  const r=new FileReader();r.onload=()=>{try{
+    const parsed=JSON.parse(r.result);
+    const dictKeys=parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?Object.keys(parsed):[];
+    // Un file dizionario corrotto/troncato con una chiave vuota o non testuale
+    // degenera il pattern di reverse() in un match quasi universale e corrompe
+    // l'intero documento al ripristino, non solo un placeholder.
+    const valid=dictKeys.length>0&&dictKeys.every(k=>/^\[.+\]$/.test(k)&&typeof parsed[k]==='string');
+    if(!valid){toast(tt('t_json_invalid'),false);return;}
+    MAP=parsed;
+    $('dictInfo').textContent=T[L].dict_loaded_n(dictKeys.length);
     toast(tt('t_dict_loaded'));}catch{toast(tt('t_json_invalid'),false);}};
   r.readAsText(f);};
 
