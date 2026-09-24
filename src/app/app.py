@@ -441,6 +441,7 @@ def analyze(text, excluded=None, mapping_enabled=True):
         "by_label": dict(sorted(by_label.items(), key=lambda x: -x[1])),
         "by_source": by_source,
         "excluded_tags": sorted(excluded),
+        "source_text": text if mapping_enabled else None
     }
 
 
@@ -575,8 +576,11 @@ def analyze_route():
     excl = server_config.parse_tag_list(raw_excl) if raw_excl is not None else EXCLUDED_TAGS
     keep_map = (server_config.parse_bool(raw_map, MAPPING_ENABLED)
                 if raw_map is not None else MAPPING_ENABLED)
-    out = analyze(text, excl, keep_map)
-    out["source_text"] = text
+    out = analyze(
+        text, 
+        excl, 
+        keep_map
+        )
     return jsonify(out)
 
 
