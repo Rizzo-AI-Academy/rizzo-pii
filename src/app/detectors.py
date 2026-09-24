@@ -267,6 +267,38 @@ def detect_iban(text):
     return [e for e in ents if e["end"] > e["start"]]
 
 
+# Dalla piu' lunga: le stesse lunghezze che accetta luhn_ok, cosi' un PAN non viene
+# tagliato a una lunghezza piu' corta che passa il Luhn per caso (con 17 fuori dalla
+# lista, di un PAN di 17 cifre se ne coprivano 16 e l'ultima restava in chiaro).
+_CARD_LEN = (19, 18, 17, 16, 15, 14, 13)
+_CARD_CODA = 4                     # cifre di coda ammesse: la scadenza, "12/26" o "12 26"
+
+
+def _card_scadenza(coda):
+    """La coda deve somigliare a una scadenza: due-quattro cifre, col mese fra 1 e 12.
+    E' il vincolo che tiene bassi i falsi positivi: senza, un numero lungo qualsiasi
+    trova per caso un prefisso che passa il Luhn. Una sola cifra non e' mai una
+    scadenza, e ammetterla faceva passare 9 code su 10."""
+    return 2 <= len(coda) <= 4 and 1 <= int(coda[:2]) <= 12
+
+
+def _card_senza_scadenza(text, start, end):
+    """La scadenza attaccata al numero ("4111 1111 1111 1111 12/26") entra nel match:
+    il Luhn fallisce, strict lo scarta e la carta resta IN CHIARO. Qui si riprova
+    tagliando la coda, ma solo su un separatore gia' presente e solo se quel che resta
+    fuori e' un mese plausibile."""
+    s = text[start:end]
+    d = [i for i, c in enumerate(s) if c.isdigit()]
+    for n in _CARD_LEN:
+        if not 0 < len(d) - n <= _CARD_CODA:
+            continue
+        taglio = d[n - 1] + 1
+        if (s[taglio] in " .-" and _card_scadenza(re.sub(r"\D", "", s[taglio:]))
+                and luhn_ok(s[:taglio])):
+            return start + taglio, True
+    return end, False
+
+
 def detect_regex(text):
     """Entita' della rete regex. validated=True solo quando il checksum passa."""
     ents = detect_iban(text)
@@ -279,6 +311,8 @@ def detect_regex(text):
                 if end <= start:
                     continue
             ok = validator(m.group(0)) if validator else False
+            if not ok and label == "CREDITCARDNUMBER":
+                end, ok = _card_senza_scadenza(text, start, end)
             if validator and strict and not ok:
                 continue
             ents.append({
