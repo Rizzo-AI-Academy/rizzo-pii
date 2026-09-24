@@ -5,6 +5,21 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-09-01 — PDF fillable: i campi modulo entrano in `/analyze` (`pdf_text.py`)
+
+`_text_from_bytes` leggeva solo `page.get_text()`. Nei PDF con AcroForm (moduli
+pagoPA, dichiarazioni compilabili) il valore sta nel widget, non nel content
+stream: l'estrazione tornava vuota e `POST /analyze` rispondeva 400
+"Nessun testo da analizzare" (issue #85, secondo punto).
+
+`pdf_export._readable_text` gia' raccoglieva widget, annotazioni e segnalibri,
+ma solo *dopo* l'analisi, per i residui. La stessa raccolta e' ora in
+`src/app/pdf_text.py` (niente fitz/torch: testabile in CI) e la usano sia
+l'estrazione per `/analyze`/`/preview` sia la verifica residui.
+
+Non risolve il primo punto della issue (FULLNAME spezzato su campi Nome/Cognome):
+quello e' un limite del modello, non dell'estrazione.
+
 ## 2026-08-07 — `Dockerfile`: l'app come webapp in un container
 
 Finora l'unico modo di far girare l'app era l'installer desktop o `python src/app/app.py` con

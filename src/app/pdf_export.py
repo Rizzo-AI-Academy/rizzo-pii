@@ -50,6 +50,7 @@ import re
 import unicodedata
 
 import fitz  # PyMuPDF
+import pdf_text
 
 
 class PdfError(ValueError):
@@ -320,28 +321,7 @@ def _readable_text(doc):
     modulo + segnalibri. E' la base della verifica dei residui: se un valore
     compare qui, l'anonimizzazione NON e' completa.
     NB: non vede il testo dentro immagini raster (loghi, firme, scansioni)."""
-    parts = []
-    for page in doc:
-        parts.append(page.get_text())
-        try:
-            for a in page.annots():
-                if a.type[0] == fitz.PDF_ANNOT_REDACT:
-                    continue
-                info = a.info
-                parts.extend(str(info.get(k) or "") for k in ("content", "subject", "title"))
-        except Exception:
-            pass
-        try:
-            for w in page.widgets():
-                if isinstance(w.field_value, str):
-                    parts.append(w.field_value)
-        except Exception:
-            pass
-    try:
-        parts.extend(str(e[1] or "") for e in doc.get_toc(simple=True))
-    except Exception:
-        pass
-    return "\n".join(parts)
+    return pdf_text.collect_readable_text(doc, redact_annot_type=fitz.PDF_ANNOT_REDACT)
 
 
 def _verify_residuals(pdf_bytes, items):
