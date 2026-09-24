@@ -44,6 +44,7 @@ Preferenze di anonimizzazione (precedenza): campo nella richiesta > CLI --exclud
 """
 
 import bisect
+import json
 import os
 import re
 import secrets
@@ -374,9 +375,32 @@ def _norm(s):
     return re.sub(r"\s+", " ", s.strip()).casefold()
 
 
-def analyze(text, excluded=None, mapping_enabled=True):
+def parse_keep_values(raw):
+    """Valori da lasciare in chiaro: lista JSON (body JSON o campo form con una
+    stringa JSON). Non si usa la lista separata da virgole dei tag: un valore puo'
+    contenere virgole ("Via Roma, 10")."""
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raise ValueError("keep_values: serve una lista JSON di stringhe.")
+    if not isinstance(raw, list) or not all(isinstance(v, str) for v in raw):
+        raise ValueError("keep_values: serve una lista JSON di stringhe.")
+    return raw
+
+
+def analyze(text, excluded=None, mapping_enabled=True, keep_values=None):
     """excluded = tag da NON anonimizzare: le entita' di quel tipo vengono scartate
     prima della fusione, quindi il valore resta in chiaro nel testo di output.
+
+    keep_values = valori che l'utente ha giudicato NON personali ("Tribunale di
+    Milano" preso per un'ORG): ogni occorrenza di quel valore (confronto con _norm,
+    qualunque tag) resta in chiaro e non entra nel dizionario. Il filtro agisce
+    DOPO la numerazione: i placeholder rimasti hanno gli stessi numeri che avrebbero
+    senza keep_values, cosi' il PDF censurato coincide con l'anteprima dell'UI, che
+    applica lo stesso filtro lato client sul risultato completo.
 
     mapping_enabled=False -> anonimizzazione DEFINITIVA: nessun dizionario
     placeholder->valore, e i segmenti-entita' non riportano il testo originale
@@ -384,6 +408,7 @@ def analyze(text, excluded=None, mapping_enabled=True):
     La numerazione dei placeholder resta: dice che due occorrenze sono lo stesso
     soggetto, ma da sola non fa risalire al valore."""
     excluded = set(excluded or ())
+    keep = {k for k in (_norm(v) for v in keep_values or ()) if k}
     model_ents, n_chunks = detect_model(text)
     cands = model_ents + detect_regex(text)
     if excluded:
@@ -391,19 +416,27 @@ def analyze(text, excluded=None, mapping_enabled=True):
     kept = _merge(cands, text)
 
     # ID reversibili: stesso (label, valore-normalizzato) -> stesso placeholder.
-    counters, seen, mapping = {}, {}, {}
+    counters, seen = {}, {}
     for e in kept:
-        val = text[e["start"]:e["end"]]
-        key = (e["label"], _norm(val))
+        key = (e["label"], _norm(text[e["start"]:e["end"]]))
         if key in seen:
             e["ph"] = seen[key]
         else:
             counters[e["label"]] = counters.get(e["label"], 0) + 1
-            ph = f"[{e['label']}_{counters[e['label']]}]"
-            seen[key] = ph
-            if mapping_enabled:
-                mapping[ph] = val
-            e["ph"] = ph
+            seen[key] = e["ph"] = f"[{e['label']}_{counters[e['label']]}]"
+
+    n_kept = 0
+    if keep:
+        before = len(kept)
+        kept = [e for e in kept if _norm(text[e["start"]:e["end"]]) not in keep]
+        n_kept = before - len(kept)
+
+    # tutte le occorrenze di un placeholder hanno lo stesso valore normalizzato:
+    # il dizionario tiene la grafia della prima, come prima di keep_values
+    mapping = {}
+    if mapping_enabled:
+        for e in kept:
+            mapping.setdefault(e["ph"], text[e["start"]:e["end"]])
 
     # segmenti per la preview + testo anonimizzato + statistiche
     segments, anon, by_label, by_source, pos = [], [], {}, {}, 0
@@ -436,7 +469,8 @@ def analyze(text, excluded=None, mapping_enabled=True):
         "n_chunks": n_chunks,
         "n_chars": len(text),
         "n_entities": len(kept),
-        "n_unique": len(seen),
+        "n_unique": len({e["ph"] for e in kept}),
+        "n_kept": n_kept,
         "by_label": dict(sorted(by_label.items(), key=lambda x: -x[1])),
         "by_source": by_source,
         "excluded_tags": sorted(excluded),
@@ -541,21 +575,27 @@ def analyze_route():
             return jsonify({"error": f"Impossibile leggere il file: {e}"}), 400
         raw_excl = request.form.get("exclude_tags")
         raw_map = request.form.get("include_mapping")
+        raw_keep = request.form.get("keep_values")
     else:
         payload = request.get_json(silent=True) or {}
         text = payload.get("text", "")
         raw_excl = payload.get("exclude_tags")
         raw_map = payload.get("include_mapping")
+        raw_keep = payload.get("keep_values")
 
     text = (text or "").strip()
     if not text:
         return jsonify({"error": "Nessun testo da analizzare."}), 400
+    try:
+        keep_vals = parse_keep_values(raw_keep)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
     # override per-richiesta; senza override vale la configurazione del server
     excl = server_config.parse_tag_list(raw_excl) if raw_excl is not None else EXCLUDED_TAGS
     keep_map = (server_config.parse_bool(raw_map, MAPPING_ENABLED)
                 if raw_map is not None else MAPPING_ENABLED)
-    out = analyze(text, excl, keep_map)
+    out = analyze(text, excl, keep_map, keep_vals)
     out["source_text"] = text
     return jsonify(out)
 
@@ -613,21 +653,27 @@ def _build_anonymized_pdf():
         except Exception as e:                       # PDF corrotto / protetto
             raise _ReqError(f"Impossibile leggere il file: {e}")
         raw_excl = request.form.get("exclude_tags")
+        raw_keep = request.form.get("keep_values")
     else:
         payload = request.get_json(silent=True) or {}
         name, data, text = "", b"", payload.get("text", "")
         raw_excl = payload.get("exclude_tags")
+        raw_keep = payload.get("keep_values")
 
     text = (text or "").strip()
     if not text:
         raise _ReqError("Nessun testo da anonimizzare.")
+    try:
+        keep_vals = parse_keep_values(raw_keep)
+    except ValueError as e:
+        raise _ReqError(str(e))
 
     stem = os.path.splitext(_safe_name(name, "documento.pdf"))[0] or "documento"
     out_name = f"{stem}_anonimizzato.pdf"
 
     excl = server_config.parse_tag_list(raw_excl) if raw_excl is not None else EXCLUDED_TAGS
     # mapping_enabled=True e' interno: il risultato non esce da questa funzione.
-    res = analyze(text, excl, mapping_enabled=True)
+    res = analyze(text, excl, mapping_enabled=True, keep_values=keep_vals)
     if not res["mapping"]:
         raise _ReqError("Nessuna PII trovata: non c'e' niente da "
                         "anonimizzare in questo documento.", 422)
@@ -951,11 +997,35 @@ PAGE = r"""
   .pdfbusy .spin{border-color:rgba(124,58,158,.25);border-top-color:var(--brand)}
 
   .preview{white-space:pre-wrap;word-wrap:break-word;font-size:14.5px;line-height:1.7}
-  .ph{border-radius:6px;padding:1px 7px 2px;font-weight:600;font-size:12.5px;cursor:help;
+  .ph{border-radius:6px;padding:1px 7px 2px;font-weight:600;font-size:12.5px;cursor:pointer;
       border:1px solid;white-space:nowrap;display:inline-block;line-height:1.4;
       transition:.12s}
+  .ph:hover{filter:brightness(.96);box-shadow:0 0 0 2px rgba(124,58,158,.12)}
   .ph .ck{font-size:10px;opacity:.8;margin-left:3px}
   .ph.dim{opacity:.25;filter:grayscale(.6)}
+  /* valore che l'utente ha tolto dall'anonimizzazione: testo vero, sottolineato,
+     cliccabile per rimetterlo sotto placeholder */
+  .kept{border-bottom:1.5px dashed #c2410c;background:#fff7ed;border-radius:3px;cursor:pointer}
+  .kept:hover{background:#ffedd5}
+
+  /* menu del singolo segnaposto (clic nell'anteprima) */
+  .phmenu{position:fixed;z-index:80;width:290px;background:#fff;border:1px solid var(--line);
+          border-radius:12px;box-shadow:0 12px 32px rgba(33,26,48,.16);padding:12px 13px;
+          display:none}
+  .phmenu.open{display:block}
+  .phmenu .pm-v{font-weight:700;font-size:14px;word-break:break-word}
+  .phmenu .pm-m{font-size:12px;color:var(--muted);margin:2px 0 8px}
+  .phmenu .pm-h{font-size:12px;color:var(--soft);line-height:1.45;margin-bottom:10px}
+  .phmenu button{width:100%;justify-content:center;padding:8px 12px;font-size:13.5px}
+
+  /* dizionario: pulsante per riga "mostra in chiaro" / "anonimizza di nuovo" */
+  td.act{text-align:right;white-space:nowrap;width:1%}
+  .rowbtn{background:#fff;color:var(--muted);border:1px solid var(--line);border-radius:8px;
+          padding:4px 10px;font-size:12.5px;font-weight:600}
+  .rowbtn:hover{border-color:#cfd5e0;color:var(--ink)}
+  .rowbtn.on{background:#fff7ed;border-color:#fde6c8;color:#9a3412}
+  .rowbtn.on:hover{border-color:#f3c98b}
+  tr.kept-row td.k{text-decoration:line-through;opacity:.55}
   .empty{color:var(--soft);display:flex;flex-direction:column;align-items:center;justify-content:center;
          height:100%;gap:9px;text-align:center;font-size:14px}
   .empty .big{font-size:34px;opacity:.6}
@@ -1215,7 +1285,7 @@ PAGE = r"""
           <span class="ic">🔒</span><div data-i18n="dict_off">Nessun dizionario: l'anonimizzazione di questo testo è <b>definitiva</b>.</div>
         </div>
         <div class="tablewrap" id="tablewrap">
-          <table><thead><tr><th data-i18n="th_id">ID</th><th data-i18n="th_val">Valore originale</th><th data-i18n="th_type">Tipo</th></tr></thead>
+          <table><thead><tr><th data-i18n="th_id">ID</th><th data-i18n="th_val">Valore originale</th><th data-i18n="th_type">Tipo</th><th data-i18n="th_act">In chiaro</th></tr></thead>
           <tbody id="maprows"></tbody></table>
         </div>
       </div>
@@ -1270,6 +1340,7 @@ PAGE = r"""
 </div>
 
 <div id="toast"></div>
+<div class="phmenu" id="phMenu" role="dialog"></div>
 
 <!-- config modal -->
 <div class="cfg-overlay" id="cfgOverlay">
@@ -1315,7 +1386,9 @@ PAGE = r"""
 
 <script>
 const $ = id => document.getElementById(id);
-let DATA = null;            // ultimo risultato analyze
+let DATA = null;            // ultimo risultato analyze, COMPLETO (senza KEEP applicato)
+let RES = null;             // DATA con KEEP applicato: e' quello che si vede e si copia
+const KEEP = new Map();     // valori tolti dall'anonimizzazione: norm(valore) -> valore
 let MAP = {};              // {placeholder -> valore} sessione corrente
 const off = new Set();     // label nascoste nella preview
 let L = 'it';              // lingua UI corrente
@@ -1391,6 +1464,16 @@ const T = {
   dict_off:"Nessun dizionario: l'anonimizzazione di questo testo è <b>definitiva</b>.",
   dict_off_hint:"lo switch è su DISATTIVO",
   r_off:"Lo switch <b>Dizionario reversibile</b> è su DISATTIVO: le nuove anonimizzazioni non producono chiavi. Qui puoi comunque ripristinare con un dizionario <b>.json salvato in precedenza</b>.",
+  ph_click:"clic per mostrarlo in chiaro",
+  ph_reveal:n=>"👁️ Mostra in chiaro"+(n>1?" ("+n+" occorrenze)":""),
+  ph_reveal_h:"Non è un dato personale? Resterà leggibile nel testo, nel PDF censurato e non entrerà nel dizionario.",
+  ph_hide:"🛡️ Anonimizza di nuovo", ph_hide_h:"Lasciato in chiaro da te.",
+  t_kept:v=>"«"+v+"» lasciato in chiaro", t_rehidden:v=>"«"+v+"» di nuovo anonimizzato",
+  t_no_value:"Con il dizionario reversibile disattivato l'app non conserva i valori, quindi non può rimetterne uno in chiaro: riattiva il dizionario e rianonimizza, oppure escludi l'intero tag (🏷️).",
+  kept_tip:"clic per anonimizzare di nuovo", st_kept:"in chiaro", th_act:"In chiaro",
+  row_show:"👁️ Mostra", row_hide:"🛡️ Anonimizza",
+  row_show_tip:"Non è un dato personale: lascialo in chiaro (tutte le occorrenze)",
+  row_hide_tip:"Rimetti il placeholder al posto del valore",
  },
  en:{
   tagline:"local model on CPU · GDPR compliant", badge:"100% local",
@@ -1454,6 +1537,16 @@ const T = {
   dict_off:"No dictionary: anonymization of this text is <b>irreversible</b>.",
   dict_off_hint:"the switch is OFF",
   r_off:"The <b>Reversible dictionary</b> switch is OFF: new anonymizations produce no keys. You can still restore here using a <b>.json dictionary saved earlier</b>.",
+  ph_click:"click to show it in clear",
+  ph_reveal:n=>"👁️ Show in clear"+(n>1?" ("+n+" occurrences)":""),
+  ph_reveal_h:"Not personal data? It will stay readable in the text and in the redacted PDF, and it won't enter the dictionary.",
+  ph_hide:"🛡️ Anonymize again", ph_hide_h:"Left in clear by you.",
+  t_kept:v=>"“"+v+"” left in clear", t_rehidden:v=>"“"+v+"” anonymized again",
+  t_no_value:"With the reversible dictionary off the app keeps no values, so it cannot put one back in clear: turn the dictionary on and anonymize again, or exclude the whole tag (🏷️).",
+  kept_tip:"click to anonymize again", st_kept:"in clear", th_act:"In clear",
+  row_show:"👁️ Show", row_hide:"🛡️ Anonymize",
+  row_show_tip:"Not personal data: leave it in clear (every occurrence)",
+  row_hide_tip:"Put the placeholder back instead of the value",
  }
 };
 const tt=k=>T[L][k];
@@ -1539,6 +1632,7 @@ function setSrcView(v){
 
 async function onFile(f){
   $('dropTxt').innerHTML='📎 <b>'+escapeHtml(f.name)+'</b>';
+  KEEP.clear();                              // documento nuovo: le scelte del precedente non valgono
   SRC_DOC=null;$('srcTabs').style.display='none';$('inHint').style.display='';
   setSrcView('text');
   if(!(f.type==='application/pdf'||/\.pdf$/i.test(f.name)))return;
@@ -1581,29 +1675,87 @@ async function run(){
     if(!resp.ok){toast(d.error||tt('t_error'),false);return;}
     if(d.source_text&&file)$('src').value=d.source_text;
     DATA=d;off.clear();
-    // senza dizionario non tocchiamo MAP ne' il localStorage: nessuna chiave nuova nasce
-    if(d.mapping_enabled!==false){MAP=d.mapping;localStorage.setItem('pii_map',JSON.stringify(MAP));}
-    render();
-    toast(T[L].pii_found(d.n_entities,d.n_unique));
+    render();syncMap();
+    toast(T[L].pii_found(RES.n_entities,RES.n_unique));
   }catch(e){toast(tt('t_error')+': '+e.message,false);}
   finally{$('go').disabled=false;$('go').innerHTML=old;}
 }
 
+/* ---- valori lasciati in chiaro dall'utente ("questo non e' un dato personale") ----
+   Il server manda sempre il risultato COMPLETO (DATA) e il filtro si applica qui:
+   mostrare/rinascondere un valore e' istantaneo (niente seconda inferenza) e si puo'
+   annullare. Il PDF censurato, generato lato server, riceve la stessa lista
+   (keep_values) e applica lo stesso filtro dopo la numerazione: i placeholder
+   coincidono con quelli a video. La chiave e' il VALORE, non il placeholder: si
+   libera ogni occorrenza di quel testo, e mai un valore diverso se il testo cambia. */
+const nrm=s=>s.trim().replace(/\s+/g,' ').toLowerCase();   // come _norm() del server
+function applyKeep(d){
+  const segs=[],anon=[],byL={},byS={},mapping={},uniq=new Set();let n=0,kept=0;
+  for(const s of d.segments){
+    if(!s.label){segs.push(s);anon.push(s.t);continue;}
+    if(s.t!=null&&KEEP.has(nrm(s.t))){        // senza dizionario non c'e' t: niente da liberare
+      segs.push({...s,kept:true});anon.push(s.t);kept++;continue;}
+    segs.push(s);anon.push(s.ph);n++;uniq.add(s.ph);
+    byL[s.label]=(byL[s.label]||0)+1;byS[s.src]=(byS[s.src]||0)+1;
+    if(d.mapping&&s.ph in d.mapping)mapping[s.ph]=d.mapping[s.ph];
+  }
+  return {...d,segments:segs,anonymized_text:anon.join(''),mapping,n_entities:n,
+    n_unique:uniq.size,n_kept:kept,by_source:byS,
+    by_label:Object.fromEntries(Object.entries(byL).sort((a,b)=>b[1]-a[1]))};
+}
+// dizionario di sessione = quello del risultato visibile. Senza dizionario non
+// tocchiamo MAP ne' il localStorage: nessuna chiave nuova nasce.
+function syncMap(){
+  if(!RES||RES.mapping_enabled===false)return;
+  MAP=RES.mapping;localStorage.setItem('pii_map',JSON.stringify(MAP));
+  $('dictInfo').textContent='';
+}
+function toggleKeep(v){
+  const k=nrm(v);
+  if(KEEP.has(k)){KEEP.delete(k);toast(T[L].t_rehidden(v));}
+  else{KEEP.set(k,v);toast(T[L].t_kept(v));}
+  render();syncMap();
+}
+
+function closePhMenu(){$('phMenu').classList.remove('open');}
+function openPhMenu(el,s){
+  if(s.t==null){toast(tt('t_no_value'),false,6000);return;}
+  const m=$('phMenu'),k=nrm(s.t);
+  const n=DATA.segments.filter(x=>x.label&&x.t!=null&&nrm(x.t)===k).length;
+  m.innerHTML=`<div class="pm-v">${escapeHtml(s.t)}</div>`+
+    `<div class="pm-m">${s.ph.replace(/[\[\]]/g,'')} · ${s.src}${s.validated?' · checksum ✓':''}</div>`+
+    `<div class="pm-h">${s.kept?tt('ph_hide_h'):tt('ph_reveal_h')}</div>`+
+    `<button class="${s.kept?'btn':'ghost'}">${s.kept?tt('ph_hide'):T[L].ph_reveal(n)}</button>`;
+  m.querySelector('button').onclick=()=>{closePhMenu();toggleKeep(s.t);};
+  m.classList.add('open');
+  const r=el.getBoundingClientRect(),w=m.offsetWidth,h=m.offsetHeight;
+  m.style.left=Math.max(8,Math.min(r.left,innerWidth-w-8))+'px';
+  m.style.top=(r.bottom+6+h>innerHeight?Math.max(8,r.top-h-6):r.bottom+6)+'px';
+}
+
+let GEN=0;                   // cresce a ogni render: un PDF chiesto prima e' superato
 function render(){
-  const d=DATA;
+  const d=RES=applyKeep(DATA);GEN++;closePhMenu();
   OUT_DOC=null;$('pdfOutView').innerHTML='';  // risultato nuovo -> il PDF censurato va rifatto
   $('dictCard').style.display='';            // mostra la card dizionario (sotto le due colonne)
   document.querySelector('.app').classList.add('has-result');  // -> scroll pagina, niente schiacciamento
   // preview evidenziata
   const prev=$('prev');prev.innerHTML='';prev.style.display='';$('emptyPrev').style.display='none';
   for(const s of d.segments){
-    if(s.label){
+    if(s.kept){
+      const sp=document.createElement('span');sp.className='kept';
+      sp.textContent=s.t;sp.title=`${s.label} · ${tt('kept_tip')}`;
+      sp.onclick=e=>{e.stopPropagation();openPhMenu(sp,s);};
+      prev.appendChild(sp);
+    }else if(s.label){
       const c=colors(s.label);const sp=document.createElement('span');
       sp.className='ph'+(off.has(s.label)?' dim':'');
       sp.style.background=c.bg;sp.style.borderColor=c.bd;sp.style.color=c.tx;
       // senza dizionario il server non manda il valore originale: niente da mostrare al passaggio
-      sp.title=(s.t?s.t+'\n':'')+`(${s.src}${s.validated?' · checksum ✓':''})`;
+      sp.title=(s.t?s.t+'\n':'')+`(${s.src}${s.validated?' · checksum ✓':''})`+
+        (s.t!=null?'\n'+tt('ph_click'):'');
       sp.innerHTML=s.ph.replace(/[\[\]]/g,'')+(s.validated?'<span class="ck">✓</span>':'');
+      sp.onclick=e=>{e.stopPropagation();openPhMenu(sp,s);};
       prev.appendChild(sp);
     }else prev.appendChild(document.createTextNode(s.t));
   }
@@ -1617,7 +1769,8 @@ function render(){
     `<span class="stat"><b>${(d.by_source.regex||0)}</b> ${tt('st_regex')}</span>`+
     `<span class="stat"><b>${T[L].chars(d.n_chars)}</b> ${tt('st_chars')}</span>`+
     ((d.excluded_tags&&d.excluded_tags.length)
-      ? `<span class="stat" title="${d.excluded_tags.join(', ')}"><b>${d.excluded_tags.length}</b> ${tt('st_excl')}</span>` : '');
+      ? `<span class="stat" title="${d.excluded_tags.join(', ')}"><b>${d.excluded_tags.length}</b> ${tt('st_excl')}</span>` : '')+
+    (d.n_kept ? `<span class="stat"><b>${d.n_kept}</b> ${tt('st_kept')}</span>` : '');
   // legenda cliccabile (toggle highlight)
   const lg=$('legend');lg.innerHTML='';
   for(const [k,v] of Object.entries(d.by_label)){
@@ -1630,18 +1783,29 @@ function render(){
   // dizionario (assente quando lo switch e' su DISATTIVO)
   const hasMap=d.mapping_enabled!==false;
   const rows=$('maprows');rows.innerHTML='';
-  const keys=hasMap?Object.keys(d.mapping):[];
+  // la tabella elenca TUTTE le voci del risultato completo (DATA), anche quelle lasciate
+  // in chiaro: e' da qui che si mostrano/nascondono una per una. Il dizionario vero
+  // (MAP, download, ripristino) resta quello di RES, senza le voci in chiaro.
+  const full=hasMap?(DATA.mapping||{}):{};
+  const keys=Object.keys(full);
   $('tablewrap').style.display=keys.length?'':'none';
   $('dictNone').style.display=hasMap?'none':'';
   $('dictHint').innerHTML=hasMap?tt('dict_hint'):tt('dict_off_hint');
   $('dl').style.display=hasMap?'':'none';
   for(const ph of keys){const lab=ph.slice(1,ph.lastIndexOf('_'));const c=colors(lab);
-    const tr=document.createElement('tr');
+    const v=full[ph],isKept=KEEP.has(nrm(v));
+    const tr=document.createElement('tr');if(isKept)tr.className='kept-row';
     tr.innerHTML=`<td class="k" style="color:${c.tx}">${ph}</td>`+
-      `<td class="v">${escapeHtml(d.mapping[ph])}</td>`+
-      `<td><span class="chip" style="cursor:default"><span class="sw" style="background:${c.bd}"></span>${lab}</span></td>`;
+      `<td class="v">${isKept?'<span class="kept">'+escapeHtml(v)+'</span>':escapeHtml(v)}</td>`+
+      `<td><span class="chip" style="cursor:default"><span class="sw" style="background:${c.bd}"></span>${lab}</span></td>`+
+      `<td class="act"><button class="rowbtn${isKept?' on':''}"></button></td>`;
+    const b=tr.querySelector('button');
+    b.textContent=isKept?tt('row_hide'):tt('row_show');
+    b.title=isKept?tt('row_hide_tip'):tt('row_show_tip');
+    b.onclick=()=>toggleKeep(v);
     rows.appendChild(tr);}
-  $('ulock').textContent=keys.length?T[L].dict_n(keys.length):'';
+  const nMap=Object.keys(d.mapping||{}).length;
+  $('ulock').textContent=nMap?T[L].dict_n(nMap):'';
   if(VIEW==='pdf')setView('pdf');            // stavo guardando il PDF: lo rigenero
 }
 
@@ -1667,6 +1831,7 @@ async function setView(v){
   const d=await buildOutPdf();
   if(VIEW!=='pdf')return;                    // l'utente ha cambiato vista nel frattempo
   if(!d){setView('prev');return;}
+  if(d!==OUT_DOC)return;                     // superato (un valore mostrato/nascosto nel frattempo)
   renderPages($('pdfOutView'),d);
   if(d.residual+d.skipped>0)toast(T[L].t_pdf_warn(d.residual,d.skipped),false,9000);
 }
@@ -1675,34 +1840,42 @@ async function setView(v){
    serve sia l'anteprima a destra sia il download (una sola inferenza).
    Come /pdf, il dizionario non viene inviato: il server lo ricostruisce e lo
    butta, quindi funziona anche con lo switch "dizionario" su DISATTIVO. */
-let PDF_JOB=null;
+let PDF_JOB=null,PDF_GEN=-1;
 function buildOutPdf(){
   if(OUT_DOC)return Promise.resolve(OUT_DOC);
-  if(PDF_JOB)return PDF_JOB;                 // click su tab + download insieme -> una richiesta sola
+  // click su tab + download insieme -> una richiesta sola (se nel frattempo non e'
+  // cambiato niente: dopo un "mostra in chiaro" il PDF in corso non vale piu')
+  if(PDF_JOB&&PDF_GEN===GEN)return PDF_JOB;
   const file=$('pdf').files[0];const text=$('src').value.trim();
   if(!DATA&&!file&&!text){toast(tt('t_need_anon'),false);return Promise.resolve(null);}
   const excl=TAGS_LOADED?[...EXCL]:null;
-  PDF_JOB=(async()=>{
+  const keep=[...KEEP.values()],gen=GEN;
+  let job;
+  job=(async()=>{
     try{
       let resp;
       if(file){const fd=new FormData();fd.append('pdf',file);
         if(excl)fd.append('exclude_tags',excl.join(','));
+        if(keep.length)fd.append('keep_values',JSON.stringify(keep));
           resp=await fetch('/pdf/preview',{method:'POST',body:fd});}
       else{const body={text};if(excl)body.exclude_tags=excl;
+          if(keep.length)body.keep_values=keep;
           resp=await fetch('/pdf/preview',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify(body)});}
       const d=await resp.json();
       if(!resp.ok){toast(d.error||tt('t_pdf_err'),false);return null;}
-      OUT_DOC=d;return d;
+      if(gen===GEN)OUT_DOC=d;
+      return d;
     }catch(e){toast(tt('t_pdf_err')+': '+e.message,false);return null;}
-    finally{PDF_JOB=null;}
+    finally{if(PDF_JOB===job)PDF_JOB=null;}
   })();
-  return PDF_JOB;
+  PDF_JOB=job;PDF_GEN=gen;
+  return job;
 }
 
 /* ---- copy / download ---- */
-$('copy').onclick=()=>{if(!DATA){toast(tt('t_need_anon'),false);return;}
-  navigator.clipboard.writeText(DATA.anonymized_text).then(()=>toast(tt('t_copied')));};
+$('copy').onclick=()=>{if(!RES){toast(tt('t_need_anon'),false);return;}
+  navigator.clipboard.writeText(RES.anonymized_text).then(()=>toast(tt('t_copied')));};
 $('dl').onclick=()=>{if(!DATA||!Object.keys(MAP).length){toast(tt('t_nothing_dl'),false);return;}
   const blob=new Blob([JSON.stringify(MAP,null,2)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
@@ -1761,7 +1934,8 @@ $('dictFile').onchange=e=>{const f=e.target.files[0];if(!f)return;
 /* ---- input helpers ---- */
 $('go').onclick=run;
 $('clear').onclick=()=>{$('src').value='';$('pdf').value='';$('dropTxt').innerHTML=tt('drop');
-  DATA=null;$('prev').style.display='none';$('emptyPrev').style.display='';
+  DATA=null;RES=null;KEEP.clear();closePhMenu();
+  $('prev').style.display='none';$('emptyPrev').style.display='';
   $('anon').value='';$('meta').innerHTML='';$('legend').innerHTML='';
   $('dictCard').style.display='none';$('ulock').textContent='';
   // la card era solo nascosta: senza queste tre righe il dizionario resta in MAP e su
@@ -1797,8 +1971,12 @@ applyLang(localStorage.getItem('pii_lang')||'it');
 /* avviso: popup a click (non hover), si chiude cliccando fuori o con Esc */
 $('infoBtn').addEventListener('click',e=>{e.stopPropagation();$('infoBtn').classList.toggle('open');});
 $('infoBtn').addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();$('infoBtn').classList.toggle('open');}});
-document.addEventListener('click',e=>{if(!$('infoBtn').contains(e.target))$('infoBtn').classList.remove('open');});
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('infoBtn').classList.remove('open');closeConfig();closeTags();}});
+document.addEventListener('click',e=>{if(!$('infoBtn').contains(e.target))$('infoBtn').classList.remove('open');
+  if(!$('phMenu').contains(e.target))closePhMenu();});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('infoBtn').classList.remove('open');closeConfig();closeTags();closePhMenu();}});
+/* il menu del segnaposto e' position:fixed: se sotto scorre qualcosa resterebbe staccato */
+$('viewPrev').addEventListener('scroll',closePhMenu);
+addEventListener('scroll',closePhMenu);addEventListener('resize',closePhMenu);
 
 /* ---- config modal ---- */
 async function openConfig(){
