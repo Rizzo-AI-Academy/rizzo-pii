@@ -200,6 +200,40 @@ test fallisce, e mostra `2026-03-15T10:30:00` che diventa `TIME '15T10:30:00'`.
 
 ---
 
+---
+
+## 2026-08-04 — Il ripristino incollava le parole fra loro (`app.py`)
+
+`reverse()` accetta il placeholder anche **senza parentesi** — l'LLM a volte le toglie — ma la
+regex era `\[?\s*NOME\s*\]?`: senza parentesi lo `\s*` si portava via anche gli spazi
+**intorno**, e il testo ripristinato tornava con le parole attaccate.
+
+    'Il FULLNAME_1 ha firmato.'  ->  'IlMario Rossiha firmato.'
+    'col1	FULLNAME_1	col3'     ->  'col1Mario Rossicol3'   (la tabella perde le colonne)
+    'riga
+FULLNAME_1
+riga'     ->  'rigaMario Rossiriga'   (e il testo perde le righe)
+
+La stessa riga aveva un **secondo difetto, peggiore**, segnalato in review da @LangiuAlessio:
+con ogni parentesi opzionale per conto suo, un indice che il modello **si inventa** matchava a
+metà. Con `CF_1` in mappa e `[CF_12]` nella risposta, il ripristino scriveva
+`RSSMRA78S03L750K2]`: non un segnaposto saltato — quello si vede — ma un **codice fiscale
+sbagliato scritto con sicurezza**.
+
+La forma finale chiude entrambi: `(?:\[\s*NOME\s*\]|\bNOME\b)`. Gli spazi si consumano **solo
+dentro le parentesi**, le parentesi ci sono **entrambe o nessuna**, e la forma nuda ha i
+confini di parola — così anche `CF_1a` e `ilCF_1` (suffisso o prefisso incollati) restano
+com'erano invece di diventare valori.
+
+Eseguendo la `reverse()` vera, presa dal file prima e dopo, su una matrice di casi (parentesi
+presenti, assenti, grassetto markdown, spazi dentro, a-capo e tab intorno, `_1` accanto a
+`_10`, indici inventati con e senza parentesi, valori con `$` e con quadre) più 20.000
+documenti generati con le sole forme legittime: **le forme legittime escono identiche, gli
+indici inventati restano intatti**. Unico cambio voluto: con mezza parentesi (`CF_1]`) il
+valore torna ma la parentesi orfana resta **visibile** invece di essere assorbita.
+
+---
+
 ## 2026-08-03 — `_merge()` era quadratica: 100 s su un documento lungo (`app.py`)
 
 Il controllo delle sovrapposizioni confrontava **ogni** candidato con **tutta** la lista già

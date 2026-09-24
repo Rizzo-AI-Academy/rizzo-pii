@@ -1759,8 +1759,16 @@ function reverse(){
   let out=txt;
   for(const ph of keys){
     const inner=ph.slice(1,-1);                 // FULLNAME_1
-    // tollerante: parentesi opzionali / spazi, eventuale grassetto markdown
-    const rx=new RegExp('\\**\\[?\\s*'+inner.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\s*\\]?\\**','g');
+    // tollerante: parentesi o forma nuda, spazi, eventuale grassetto markdown.
+    // Gli spazi si consumano SOLO insieme alla parentesi: con '\[?\s*' un placeholder
+    // scritto senza parentesi si portava via anche gli spazi intorno, e "Il FULLNAME_1 ha"
+    // tornava "IlMario Rossiha". Con un tab o un a-capo spariva la colonna o la riga.
+    // E le parentesi sono TUTTO-O-NIENTE, con \b sulla forma nuda: se ognuna e' opzionale
+    // per conto suo, con CF_1 in mappa un indice inventato dal modello ([CF_12]) matcha
+    // per meta' e il ripristino scrive un codice fiscale SBAGLIATO - un segnaposto rimasto
+    // si vede, un valore sbagliato no.
+    const esc=inner.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    const rx=new RegExp('\\**(?:\\[\\s*'+esc+'\\s*\\]|\\b'+esc+'\\b)\\**','g');
     out=out.replace(rx,MAP[ph].replace(/\$/g,'$$$$'));
   }
   const o=$('rout');o.textContent=out;o._raw=out;
