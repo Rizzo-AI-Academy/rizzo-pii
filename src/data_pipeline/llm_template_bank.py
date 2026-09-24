@@ -159,8 +159,14 @@ def call_local_openai(prompt, retries=3):
             print("  risposta vuota dal modello locale")
         except urllib.error.HTTPError as e:
             print(f"  HTTP {e.code}: {e.read().decode()[:200]}")
-        except (urllib.error.URLError, KeyError, IndexError) as e:
-            print(f"  errore: {e}")
+        # OSError e non urllib.error.URLError: un modello locale lento fa scadere il timeout
+        # DENTRO getresponse(), e quello e' un TimeoutError, che deriva da OSError e NON da
+        # URLError. Intercettando la sola URLError una singola generazione lenta interrompeva
+        # tutta l'esecuzione invece di far scattare il tentativo successivo (segnalato da
+        # @p3pp01 con Gemma via Ollama). OSError e' la classe base di entrambe, quindi copre
+        # anche la connessione rifiutata quando il server locale non e' avviato.
+        except (OSError, KeyError, IndexError) as e:
+            print(f"  errore: {type(e).__name__}: {e}")
         time.sleep(2 * (attempt + 1))
     return None
 
@@ -186,8 +192,10 @@ def call_gemini(prompt, retries=3):
         except urllib.error.HTTPError as e:
             print(f"  HTTP {e.code}: {e.read().decode()[:200]}")
             time.sleep(2 * (attempt + 1))
-        except (urllib.error.URLError, KeyError, IndexError) as e:
-            print(f"  errore: {e}")
+        # OSError copre URLError e TimeoutError (vedi la nota in call_local_openai): anche
+        # verso Gemini un timeout di lettura non deve interrompere la generazione.
+        except (OSError, KeyError, IndexError) as e:
+            print(f"  errore: {type(e).__name__}: {e}")
             time.sleep(2 * (attempt + 1))
     return None
 

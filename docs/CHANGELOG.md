@@ -356,6 +356,24 @@ estratto** dai due PDF (i byte non sono confrontabili, l'`/ID` è casuale): 444 
 alfabeti, compresi quelli dominati dal glifo più stretto, **0 differenze** e **0 righe fuori
 pagina**. `tests/test_pdf_hard_split.py` copre il caso, e con il `cap` calibrato su `"l"`
 fallisce. `smoke_pdf_export.py` 23/23 PASS.
+## 2026-08-04 — Un modello lento interrompeva la generazione dei template (`llm_template_bank.py`)
+
+Il timeout di lettura di `urllib` scade **dentro** `getresponse()` e solleva `TimeoutError`,
+che deriva da `OSError` e **non** da `urllib.error.URLError`. I due `except` intercettavano
+`(urllib.error.URLError, KeyError, IndexError)`: una singola generazione lenta — normale con
+un modello locale su CPU o molto quantizzato — non consumava un tentativo, propagava e
+fermava tutta l'esecuzione, buttando i template già scritti.
+
+Segnalato da **@p3pp01** con Gemma servito da Ollama, sulla PR #20.
+
+Ora si intercetta `OSError`, che è la classe base sia di `URLError` sia di `TimeoutError`, e
+copre per giunta la connessione rifiutata quando il server locale non è avviato. Il messaggio
+d'errore stampa anche il tipo dell'eccezione, che era l'informazione che mancava per capirlo.
+
+Test: `tests/test_backend_llm_timeout.py` sostituisce `urlopen` con quattro errori di rete
+(timeout, timeout come `OSError`, connessione rifiutata, host irraggiungibile) e verifica che
+la chiamata **ritorni `None`** invece di propagare, su entrambi i backend e su `call_llm()`.
+Senza la correzione i test danno 7 errori.
 
 ---
 
