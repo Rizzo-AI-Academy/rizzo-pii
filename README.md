@@ -388,7 +388,7 @@ Whichever way you started it, the process is a plain HTTP service — see
 ```bash
 curl localhost:5005/health                      # 200 = model loaded and ready
 curl -X POST localhost:5005/analyze -H 'Content-Type: application/json' \
-     -d '{"text": "Mario Rossi, CF RSSMRA85M01H501Z"}'
+     -d '{"text": "Mario Rossi, CF RSSMRA85M01H501Q"}'
 ```
 
 ---
