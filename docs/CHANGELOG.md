@@ -19,6 +19,50 @@ l'estrazione per `/analyze`/`/preview` sia la verifica residui.
 
 Non risolve il primo punto della issue (FULLNAME spezzato su campi Nome/Cognome):
 quello e' un limite del modello, non dell'estrazione.
+## 2026-09-10 — `reverse()`: confine di parola ASCII, asterischi condivisi, sostituzione di secondo ordine (`app.py`)
+
+Review indipendente della riga toccata il 2026-08-04, con cinque difetti concreti trovati e
+riprodotti prima di toccare il codice:
+
+- **`\b` di JS è ASCII-only**: su un placeholder senza parentesi incollato a una lettera
+  accentata (`CF_1è`) il confine di parola non scattava, e il valore tornava incollato al
+  testo — esattamente il difetto già chiuso ad agosto, riaperto in modo asimmetrico sulle
+  parole italiane. Il caso ASCII (`ilCF_1`) restava correttamente intatto: la guardia era
+  asimmetrica.
+- **asterischi di grassetto condivisi fra due placeholder adiacenti** (`**CF_1****CF_2**`)
+  davano un esito diverso a seconda di quale chiave veniva elaborata prima nel ciclo:
+  un placeholder finiva corrotto o non risolto.
+- lo stesso `\**` avido mangiava grassetto markdown **non correlato** al placeholder quando
+  lo toccava senza separatore.
+- una chiave vuota o non testuale in un file dizionario caricato (nessuna validazione)
+  degenerava il pattern in un match quasi universale e corrompeva l'intero documento, non
+  solo un placeholder.
+- il ciclo sostituiva le chiavi una alla volta su un `out` che si riaccumulava: se il valore
+  di una chiave conteneva per coincidenza il nome di una chiave successiva (es. una ragione
+  sociale con dentro `CF_2`), il replace seguente lo ri-sostituiva — un falso positivo di
+  secondo ordine che nessuna delle due chiavi, presa da sola, produce.
+
+Il fix sostituisce il ciclo per-chiave con **una sola passata** sul testo originale: un
+pattern con alternanza su tutte le chiavi, confine di parola Unicode-aware (specchia
+`_is_word()` lato Python, che tratta le lettere accentate come interne alla parola), e
+asterischi assorbiti in coppie **simmetriche** (stesso numero prima e dopo, via
+backreference) invece che avidamente. Una singola passata sul testo originale chiude anche
+la sostituzione di secondo ordine per costruzione: il valore sostituito non viene mai
+ri-scandito. Il caricamento del dizionario ora rifiuta un file le cui chiavi non siano tutte
+`[NOME]` con valore stringa.
+
+Un placeholder incollato a una lettera accentata resta ora **non risolto e visibile**,
+simmetrico al caso ASCII già corretto — coerente col principio tutto-o-niente di questa
+funzione ("un segnaposto rimasto si vede, un valore sbagliato no"). Il caso della parentesi
+orfana (`CF_1]`, e ora anche `[[CF_1]]`) resta **invariato**: il valore torna, la parentesi
+in più resta visibile invece di essere assorbita — stesso trade-off già accettato ad agosto.
+
+Verificato con la `reverse()` vera estratta dal file (`tests/test_ripristino_placeholder.py`,
+nuovo — prima non esisteva nessun test per questa funzione) più un confronto diretto
+vecchio-vs-nuovo su 20.000 documenti generati con le sole forme legittime: **zero
+differenze**.
+
+---
 
 ## 2026-08-07 — `Dockerfile`: l'app come webapp in un container
 
