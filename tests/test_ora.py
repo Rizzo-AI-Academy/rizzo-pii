@@ -1,15 +1,13 @@
 # -*- coding: utf-8 -*-
-"""`TIME`: la regex dell'ora, e il motivo per cui sta in `SOFT_REGEX_LABELS`.
+"""`TIME`: la regex dell'ora completa le span del modello, e non gira da sola.
 
-Il modello taglia i minuti (`09:50` -> `09:`) e la metà che resta finisce in chiaro
-accanto al segnaposto: da qui la regex. Ma una data **include** spesso l'ora, e in un
-timestamp ISO (`2026-03-15T10:30:00`) la data la trova solo il modello, in un'unica span.
-Se `TIME` avesse la priorità della rete regex scalzerebbe quella span in fusione e
-lascerebbe `2026-03-` **in chiaro**: la data del documento, sotto un placeholder che dice
-il contrario. Da soft perde contro il modello e vince solo dove nessuno reclama l'ora.
+Il modello taglia i minuti (`18:28` -> `18`) e la metà che resta finisce in chiaro
+accanto al segnaposto: `ore 18[TIME_1]28`. La regex dell'ora (`complete_time`) parte
+solo dove il modello ha già visto un'ora e ne allarga i confini all'ora intera.
 
-Due punti fra due numeri non sono comunque una prova, e i falsi positivi qui sotto sono
-dichiarati, non nascosti: per un anonimizzatore mascherare in più è l'errore reversibile.
+Da sola non girerebbe bene: due numeri separati da due punti sono anche una scala
+catastale (`Scala 1:25`), un versetto (`Giovanni 3:16`), una coordinata. Ancorata al
+modello non maschera nessuno di questi, e può accettare anche il punto (`ore 18.30`).
 
 Tutti i valori sono SINTETICI.
 """
@@ -26,9 +24,16 @@ sys.path.insert(0, str(ROOT / "src" / "app"))
 import detectors  # noqa: E402
 
 
-def ore(testo):
-    return [testo[e["start"]:e["end"]]
-            for e in detectors.detect_regex(testo) if e["label"] == "TIME"]
+def ent(testo, pezzo, label="TIME", da=0):
+    """Entita' del modello sulla prima occorrenza di `pezzo` a partire da `da`."""
+    i = testo.index(pezzo, da)
+    return {"label": label, "start": i, "end": i + len(pezzo), "score": 0.9,
+            "validated": False, "source": "modello"}
+
+
+def completa(testo, *ents):
+    detectors.complete_time(list(ents), testo)
+    return [testo[e["start"]:e["end"]] for e in ents]
 
 
 def _carica_app():
@@ -36,8 +41,8 @@ def _carica_app():
 
     Tre accorgimenti, tutti necessari:
     - il finto transformers va messo in sys.modules, non con patch("transformers.
-      pipeline"): un `from transformers import pipeline` (app.py riga 66) su un
-      _LazyModule NON passa dall'attributo patchato e prende la funzione vera;
+      pipeline"): un `from transformers import pipeline` su un _LazyModule NON passa
+      dall'attributo patchato e prende la funzione vera;
     - la voce si sostituisce e ripristina A MANO: patch.dict(sys.modules) al
       ripristino fa clear()+update() dell'intero sys.modules, buttando via anche
       l'app appena importata (e ricaricando numpy);
@@ -73,41 +78,79 @@ except Exception:                       # noqa: BLE001 - qualunque import mancan
     APP = None
 
 
-class Ora(unittest.TestCase):
-    def test_riconosce_la_forma_coi_due_punti(self):
-        self.assertEqual(ore("Ingresso ore 18:28, uscita 19:30."), ["18:28", "19:30"])
-        self.assertEqual(ore("Accesso alle 09:50:12."), ["09:50:12"])
-        self.assertEqual(ore("Riunione dalle 8:00 alle 16:45."), ["8:00", "16:45"])
+class CompletaOra(unittest.TestCase):
+    def test_minuti_tagliati(self):
+        t = "Ingresso ore 18:28, uscita ore 19:30."
+        self.assertEqual(completa(t, ent(t, "18"), ent(t, "19:")), ["18:28", "19:30"])
 
-    def test_il_punto_non_e_accettato(self):
-        """`10.30` ha la stessa forma di `versione 1.30` ed `euro 10.30`."""
-        for frase in ("versione 1.30 del programma", "euro 10.30 di spesa",
-                      "capitolo 3.15", "coordinate 45.4642, 9.1900"):
-            self.assertEqual(ore(frase), [], frase)
+    def test_meta_destra_e_secondi(self):
+        t = "Accesso registrato alle 09:50:12."
+        self.assertEqual(completa(t, ent(t, "50:12")), ["09:50:12"])
+
+    def test_col_punto_se_il_modello_ha_visto_un_ora(self):
+        t = "La riunione e' fissata per le ore 18.30."
+        self.assertEqual(completa(t, ent(t, "18")), ["18.30"])
+
+    def test_intervallo_col_trattino_attaccato(self):
+        t = "Ricevimento dalle 9:00-12:30."
+        self.assertEqual(completa(t, ent(t, "9"), ent(t, "12")), ["9:00", "12:30"])
+
+    def test_span_gia_completa_o_piu_larga_non_si_restringe(self):
+        t = "Udienza alle ore 10:30 in aula."
+        self.assertEqual(completa(t, ent(t, "ore 10:30")), ["ore 10:30"])
+
+    def test_nessuna_ora_senza_il_modello(self):
+        """Senza un TIME del modello la regex non produce nulla: niente falsi positivi."""
+        for t in ("Scala 1:25 della planimetria.", "Giovanni 3:16.",
+                  "versione 1.30 del programma", "euro 10.30 di spesa"):
+            ents = [ent(t, t.split()[0], label="ORG")]
+            self.assertEqual(completa(t, *ents), [t.split()[0]], t)
+
+    def test_non_mangia_pezzi_di_data_o_numeri_lunghi(self):
+        t = "Nota del 15.03.2026, codice 1.2.30.4."
+        self.assertEqual(completa(t, ent(t, "15"), ent(t, "30")), ["15", "30"])
 
     def test_ore_e_minuti_fuori_scala(self):
-        for frase in ("codice 24:00", "codice 25:30", "codice 10:60", "codice 99:99"):
-            self.assertEqual(ore(frase), [], frase)
+        for t in ("codice 24:00", "codice 25:30", "codice 10:60"):
+            pezzo = t.split()[1][:2]
+            self.assertEqual(completa(t, ent(t, pezzo)), [pezzo], t)
 
-    def test_time_e_soft(self):
-        """La guardia che impedisce all'ora di scalzare una data del modello."""
-        self.assertIn("TIME", detectors.SOFT_REGEX_LABELS)
+    def test_la_date_del_modello_non_si_tocca(self):
+        """Il timestamp ISO la data la trova il modello: nessun TIME, nessuna modifica."""
+        t = "Deposito telematico: 2026-03-15T10:30:00 (ricevuta PEC)."
+        self.assertEqual(completa(t, ent(t, "2026-03-15T10:30:00", label="DATE")),
+                         ["2026-03-15T10:30:00"])
+
+    def test_time_non_e_nella_rete_regex(self):
+        self.assertNotIn("TIME", {d[0] for d in detectors.DETECTORS})
+        self.assertEqual(
+            [e for e in detectors.detect_regex("ore 18:28") if e["label"] == "TIME"], [])
 
 
 @unittest.skipIf(APP is None, "app.py non importabile (torch/flask/fitz assenti)")
-class OraControDataInFusione(unittest.TestCase):
-    """Il caso che conta: la data la vede solo il modello, l'ora anche la regex."""
+class OraInAnalyze(unittest.TestCase):
+    """La pipeline completa: il modello (finto) taglia i minuti, l'output no."""
 
-    def test_la_time_non_scalza_la_date_del_modello(self):
-        testo = "Deposito telematico: 2026-03-15T10:30:00 (ricevuta PEC)."
-        i = testo.index("2026")
-        data = {"label": "DATE", "start": i, "end": i + len("2026-03-15T10:30:00"),
-                "score": 1.0, "validated": False, "source": "modello"}
-        tenute = APP._merge([data] + detectors.detect_regex(testo), testo)
-        span = [(e["label"], testo[e["start"]:e["end"]]) for e in tenute]
-        self.assertIn(("DATE", "2026-03-15T10:30:00"), span,
-                      "la data del modello e' stata spezzata dall'ora: %r" % span)
-        self.assertNotIn("TIME", [l for l, _ in span])
+    def _modello(self, testo, pezzi):
+        def nlp(chunks):
+            out = []
+            for c in chunks:
+                res = []
+                for p in pezzi:
+                    i = c.index(p)
+                    res.append({"entity_group": "TIME", "start": i, "end": i + len(p),
+                                "score": 0.9, "word": p})
+                out.append(res)
+            return out
+        return patch.object(APP, "nlp", nlp)
+
+    def test_nessun_minuto_in_chiaro(self):
+        t = "Ingresso ore 18:28, uscita ore 19:30."
+        with self._modello(t, ["18", "19:"]):
+            out = APP.analyze(t)
+        self.assertEqual(out["anonymized_text"],
+                         "Ingresso ore [TIME_1], uscita ore [TIME_2].")
+        self.assertEqual(out["mapping"], {"[TIME_1]": "18:28", "[TIME_2]": "19:30"})
 
 
 if __name__ == "__main__":

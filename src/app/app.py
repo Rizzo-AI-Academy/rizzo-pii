@@ -63,7 +63,8 @@ import server_config
 # Rete REGEX + CHECKSUM: modulo a parte, senza dipendenze dal modello. I nomi
 # restano importabili da qui (`app.detect_regex`) per non rompere chi li usa.
 from detectors import (DETECTORS, SOFT_REGEX_LABELS, cf_ok,  # noqa: F401
-                       detect_iban, detect_regex, iban_ok, luhn_ok, piva_ok)
+                       complete_time, detect_iban, detect_regex, iban_ok, luhn_ok,
+                       piva_ok)
 from transformers import pipeline
 
 
@@ -397,6 +398,8 @@ def analyze(text, excluded=None, mapping_enabled=True):
     soggetto, ma da sola non fa risalire al valore."""
     excluded = set(excluded or ())
     model_ents, n_chunks = detect_model(text)
+    # il modello taglia i minuti delle ore: la regex dell'ora completa SOLO le sue span TIME
+    complete_time(model_ents, text)
     cands = model_ents + detect_regex(text)
     if excluded:
         cands = [e for e in cands if e["label"] not in excluded]

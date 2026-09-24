@@ -16,6 +16,7 @@ checksum non viene nemmeno interrogato e, dove `strict=True`, il valore resta
 in chiaro senza alcun fallback.
 """
 
+import bisect
 import re
 
 
@@ -201,25 +202,12 @@ DETECTORS = [
                 r"(?:0?[1-9]|1[0-2])[/.\-](?:19|20)\d{2}"
                 r"(?:\s+\d{1,2}[:.]\d{2})?(?!\d)"),
      None, True),
-    # ORA: il modello taglia i minuti ("09:50" -> "09:", "14:30" -> "14") e la meta'
-    # che resta finisce in chiaro accanto al placeholder. La forma coi due punti e'
-    # chiusa (0-23 : 0-59, secondi opzionali) e si presta a una regex deterministica.
-    # NON si accetta il punto ("10.30"): li' la forma e' la stessa di "versione 1.30",
-    # "capitolo 3.15", "euro 10.30" e delle coordinate.
-    # Sta in SOFT_REGEX_LABELS, come DATE: due punti fra due numeri non sono una prova.
-    # E' quello che tiene insieme il caso difficile, la data che INCLUDE l'ora: sul
-    # timestamp "2026-03-15T10:30:00" il modello marca tutto come DATE, e se TIME avesse
-    # la priorita' della rete regex scalzerebbe quella span lasciando "2026-03-" IN
-    # CHIARO. Da soft perde contro il modello e vince solo dove nessuno reclama l'ora.
-    ("TIME",
-     re.compile(r"(?<![\d.:/-])(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?!\d|[.:/-]\d)"),
-     None, True),
 ]
 
 # Label della rete regex SENZA validatore forte: la forma da sola non basta a dire
 # "e' certamente questo campo". In _merge non ereditano la priorita' della rete regex,
 # cosi' il modello puo' sovrascriverle.
-SOFT_REGEX_LABELS = {"DATE", "TIME"}
+SOFT_REGEX_LABELS = {"DATE"}
 
 # Punteggiatura che chiude la frase e non fa parte dell'URL: "vedi https://x.it/pagina."
 _URL_TRAIL = ".,;:!?)]}»\"'"
@@ -357,3 +345,38 @@ def detect_regex(text):
     return ents
 
 
+# ORA: il modello taglia i minuti ("09:50" -> "09:", "18:28" -> "18") e la meta' che
+# resta finisce in chiaro accanto al placeholder: "ore 18[TIME_1]28".
+# La regex NON gira da sola sul testo: due numeri separati da due punti sono anche una
+# scala catastale ("1:25"), un versetto ("Giovanni 3:16"), una coordinata; col punto,
+# una versione ("1.30") o un importo ("euro 10.30"). Parte solo DOVE IL MODELLO HA GIA'
+# VISTO UN'ORA, e serve a completarne i confini. Il contesto lo porta il modello, la
+# regex porta la forma esatta: cosi' si puo' accettare anche il punto ("ore 18.30").
+# Guardie: niente cifra, ne' "cifra+separatore", subito prima o subito dopo. Tengono
+# fuori i pezzi di "15.03.2026" o di "1.2.30.4", ma lasciano passare l'intervallo col
+# trattino attaccato ("9:00-12:30").
+_TIME_RX = re.compile(r"(?<!\d)(?<!\d[.:])(?:[01]?\d|2[0-3])[:.][0-5]\d(?:[:.][0-5]\d)?"
+                      r"(?!\d)(?![.:]\d)")
+
+
+def complete_time(ents, text):
+    """Estende le span TIME DEL MODELLO all'ora intera che le contiene o le tocca.
+
+    Solo allargamenti: una span del modello non si restringe mai e non ne nasce una
+    nuova dove il modello non ha visto un'ora. Un'ora che il modello non trova affatto
+    resta quindi al modello (e' il prezzo di non mascherare "Scala 1:25").
+    Le entita' vengono modificate sul posto; ritorna la stessa lista."""
+    anchors = [e for e in ents if e["label"] == "TIME"]
+    if not anchors:
+        return ents
+    spans = [(m.start(), m.end()) for m in _TIME_RX.finditer(text)]
+    starts = [s for s, _ in spans]
+    for e in anchors:
+        # i match non si sovrappongono: quelli che toccano la span sono gli ultimi che
+        # iniziano prima della sua fine, e si trovano risalendo da bisect.
+        j = bisect.bisect_left(starts, e["end"]) - 1
+        while j >= 0 and spans[j][1] > e["start"]:
+            e["start"] = min(e["start"], spans[j][0])
+            e["end"] = max(e["end"], spans[j][1])
+            j -= 1
+    return ents
