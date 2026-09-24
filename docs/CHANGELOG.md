@@ -242,8 +242,6 @@ che taglia i minuti.
 
 ---
 
----
-
 ## 2026-08-04 — Il ripristino incollava le parole fra loro (`app.py`)
 
 `reverse()` accetta il placeholder anche **senza parentesi** — l'LLM a volte le toglie — ma la
