@@ -528,6 +528,19 @@ curl -X POST localhost:5005/analyze -H 'Content-Type: application/json' \
      -d '{"text": "…", "exclude_tags": ["AMOUNT"]}' # per-request override
 ```
 
+**Single false positives can be put back in clear.** If the model masks something that is not
+personal data (say, `Tribunale di Milano` as an `ORG`), press **👁️ Show** on its row in the reversible-dictionary table
+(or click its placeholder in the preview): every occurrence of that value stays readable in the text, in the redacted PDF, and
+out of the dictionary; the placeholders left keep their numbers. **🛡️ Anonymize** on the same row puts
+the placeholder back. The API takes the same list:
+
+```bash
+curl -X POST localhost:5005/analyze -H 'Content-Type: application/json' \
+     -d '{"text": "…", "keep_values": ["Tribunale di Milano"]}'
+```
+
+This needs the reversible dictionary on: with it off the app deliberately keeps no values to put back.
+
 ---
 
 ## Repository structure

@@ -5,6 +5,22 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-09-23 — Togliere un singolo valore dall'anonimizzazione (`app.py`)
+
+Il modello a volte maschera ciò che non è un dato personale (un tribunale preso per `ORG`, un
+nome di prodotto per `FULLNAME`). Escludere l'intero tag dal pannello 🏷️ era l'unico rimedio,
+troppo largo. Ora ogni voce della tabella del **Dizionario reversibile** ha il pulsante
+**👁️ Mostra** / **🛡️ Anonimizza** (lo stesso comando c'è cliccando il placeholder nell'anteprima).
+
+- **Chiave = valore**, non placeholder: il numero di un placeholder dipende dal testo, e dopo una
+  modifica `[FULLNAME_2]` potrebbe indicare un'altra persona. Liberare per valore (confronto
+  `_norm`, su ogni tag) non rivela mai qualcosa che l'utente non ha visto e scelto.
+- **Filtro lato client** sul risultato completo: istantaneo (nessuna seconda inferenza) e
+  annullabile. Il PDF censurato riceve `keep_values` e `analyze()` filtra **dopo la numerazione**,
+  così i placeholder del PDF coincidono con quelli a video.
+- Con il **dizionario disattivato** non si può: la risposta non contiene i valori, per scelta.
+- Test: `tests/test_keep_values.py`.
+
 ## 2026-08-07 — `Dockerfile`: l'app come webapp in un container
 
 Finora l'unico modo di far girare l'app era l'installer desktop o `python src/app/app.py` con
