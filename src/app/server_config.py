@@ -164,18 +164,28 @@ def save_prefs(excluded_tags=None, mapping_enabled=None) -> dict:
     return data
 
 
+def _first_set(*values):
+    """Il primo valore IMPOSTATO della catena di precedenza.
+
+    Non `a or b`: lo 0 esplicito (`--port 0`) e' falsy e verrebbe scartato. Ma nemmeno
+    il solo `is not None`: una variabile d'ambiente presente e vuota (`PII_PORT=`) non
+    e' un valore, e `int("")` farebbe cadere l'avvio del backend."""
+    for v in values:
+        if v is not None and str(v).strip() != "":
+            return v
+    return None
+
+
 def resolve(cli_host=None, cli_port=None):
     """Risolve host/porta con la catena: CLI > env > config.json > default.
 
     Ritorna (host: str, port: int).
     """
     cfg = load_config()
-    host = cli_host or os.environ.get("PII_HOST") or cfg.get("host") or DEFAULT_HOST
-    port = (cli_port if cli_port is not None else
-            os.environ.get("PII_PORT") if "PII_PORT" in os.environ else
-            cfg.get("port") if cfg.get("port") is not None else
-            DEFAULT_PORT)
-    return str(host), int(port)
+    host = _first_set(cli_host, os.environ.get("PII_HOST"), cfg.get("host"))
+    port = _first_set(cli_port, os.environ.get("PII_PORT"), cfg.get("port"))
+    return (str(host).strip() if host is not None else DEFAULT_HOST,
+            int(port) if port is not None else DEFAULT_PORT)
 
 
 def port_available(host: str, port: int) -> bool:
