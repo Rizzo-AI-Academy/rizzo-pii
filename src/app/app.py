@@ -455,7 +455,6 @@ def analyze(text, excluded=None, mapping_enabled=True):
         "by_label": dict(sorted(by_label.items(), key=lambda x: -x[1])),
         "by_source": by_source,
         "excluded_tags": sorted(excluded),
-        "source_text": text if mapping_enabled else None
     }
 
 
@@ -595,6 +594,11 @@ def analyze_route():
     keep_map = (server_config.parse_bool(raw_map, default_map)
                 if raw_map is not None else default_map)
     out = analyze(text, excl, keep_map)
+    # Il testo originale torna solo col dizionario attivo (l'UI lo rimette nella casella
+    # dopo un upload). In modalita' definitiva la risposta non deve contenere nessun
+    # valore in chiaro: la chiave manca del tutto, come il valore nei segmenti (#118).
+    if keep_map:
+        out["source_text"] = text
     return jsonify(out)
 
 
