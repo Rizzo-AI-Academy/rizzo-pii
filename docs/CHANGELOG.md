@@ -61,6 +61,17 @@ Verificato con la `reverse()` vera estratta dal file (`tests/test_ripristino_pla
 nuovo — prima non esisteva nessun test per questa funzione) più un confronto diretto
 vecchio-vs-nuovo su 20.000 documenti generati con le sole forme legittime: **zero
 differenze**.
+## 2026-08-20 — `/tags`: gli esempi CF e PIVA ora passano il proprio checksum
+
+Gli esempi mostrati da `/tags`/`/settings` per `CF` (`RSSMRA85H12F205Z`) e `PIVA`
+(`12345678901`) erano etichettati "checksum verificato" ma non passavano `cf_ok()`/`piva_ok()`
+in `src/app/detectors.py`. Chi li usava per un primo test di `/analyze` (come in [issue #89](
+https://github.com/Rizzo-AI-Academy/rizzo-pii/issues/89)) vedeva sempre `validated: false` e
+concludeva che la validazione fosse rotta — non lo era, era solo l'esempio a essere sbagliato
+(`IBAN`, il cui esempio *è* valido, tornava `validated: true` sulla stessa richiesta).
+Sostituiti con `RSSMRA85H12F205Y` (CF) e `12345678903` (PIVA), gli stessi valori usati dalla
+PR #36 per i corrispondenti esempi in `README.md`/`docs/`, così l'esempio nell'API live e
+quello nella documentazione restano lo stesso codice fiscale.
 
 ---
 
