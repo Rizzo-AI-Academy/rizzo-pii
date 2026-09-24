@@ -370,8 +370,8 @@ not provide.
 )
 
 #callout("Concrete example")[
-  Take the sentence _"Il Sig. Mario Rossi, C.F. RSSMRA85H12F205Z, P.IVA
-  12345678901, è titolare dell'immobile al Foglio 12, particella 345, sub. 6."_
+  Take the sentence _"Il Sig. Mario Rossi, C.F. RSSMRA85H12F205Y, P.IVA
+  12345678903, è titolare dell'immobile al Foglio 12, particella 345, sub. 6."_
   rizzo-pii tags `FULLNAME`, `CF`, `PIVA` and `CATASTO` and rewrites it as
   _"Il Sig. [FULLNAME_1], C.F. [CF_1], P.IVA [PIVA_1], è titolare dell'immobile
   al [CATASTO_1]."_ A generic English-first model has no label for the
@@ -408,8 +408,8 @@ taxonomy can be changed in one place without re-annotating anything.
     [`PROVINCE`], [Province abbreviation], [MI], [synth],
     [`EMAIL`], [E-mail (incl. PEC)], [m.rossi\@studio.it], [real+synth],
     [`TELEPHONENUM`], [Phone number], [+39 333 1234567], [real+synth],
-    [`CF`], [_Codice fiscale_ (personal tax code)], [RSSMRA85H12F205Z], [synth],
-    [`PIVA`], [_Partita IVA_ (VAT number)], [12345678901], [real+synth],
+    [`CF`], [_Codice fiscale_ (personal tax code)], [RSSMRA85H12F205Y], [synth],
+    [`PIVA`], [_Partita IVA_ (VAT number)], [12345678903], [real+synth],
     [`ID_DOC`], [ID/passport/licence/social number], [CA12345AB], [real+synth],
     [`IBAN`], [IBAN / bank account], [IT60X05428...], [synth],
     [`CREDITCARDNUMBER`], [Credit-card number], [4111 1111 1111 1111], [real],

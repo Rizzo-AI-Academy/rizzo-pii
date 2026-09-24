@@ -766,6 +766,22 @@ Motivazione: consentono di **arricchire il pool offline da 25 a 85 template senz
 `MIXEDLIST` e `PROVINCE`) per mitigare l'overfit strutturale sui tag IT-legali rari
 (`CATASTO`/`DOCID`/`CF`/`TARGA`). Complementare al percorso Gemini raccomandato in
 `CONTRIBUTING.md`, non sostitutivo. Nessun impatto sul training.
+## 2026-07-31 — Esempi con checksum non validi + fix smoke test
+
+Gli esempi CF/PIVA nella documentazione non superavano i validatori del progetto
+(`cf_ok`/`piva_ok`), in contraddizione con il claim "checksum matematicamente validi".
+
+- **CF `RSSMRA85H12F205Z` → `RSSMRA85H12F205Y`** e **`RSSMRA85M01H501Z` → `RSSMRA85M01H501Q`**:
+  cifre di controllo ricalcolate con l'algoritmo ufficiale (le vecchie fallivano `cf_ok`).
+- **PIVA `12345678901` → `12345678903`**: la vecchia falliva `piva_ok` e, essendo il detector
+  PIVA `strict=True`, **non sarebbe stata anonimizzata** dalla rete regex se presentata in un
+  testo (l'avrebbe presa solo il modello).
+- **`smoke_app.py`**: `r["censored_text"]` → `r["anonymized_text"]` (chiave reale di `analyze()`;
+  lo smoke test crashava con KeyError).
+- Aggiornati README, docs/TASSONOMIA_TAG.md, docs/FORMATO_DATI.md, docs/index.html,
+  report/rizzo-pii.typ. Il PDF compilato (`report/rizzo-pii-report.pdf`) va rigenerato con typst.
+
+Nessun impatto su training e pipeline dati.
 
 ---
 
