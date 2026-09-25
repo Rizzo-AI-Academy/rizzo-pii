@@ -685,6 +685,32 @@ Vincoli: SOLO dati sintetici (mai PII reali). Se Gemini non è disponibile, ferm
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | Change log for the pipeline, with rationale |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute code, docs and (above all) data |
 
+## Contributors
+
+Thanks to everyone who has had a pull request merged into this repository, in alphabetical order:
+
+[Alessio Langiu](https://github.com/LangiuAlessio) ·
+[Andrea M. Piovesana](https://github.com/andreampiovesana) ·
+[Antonio Sarno](https://github.com/tonytonycoder11) ·
+[@cosmico89](https://github.com/cosmico89) ·
+[Emanuele Scarlata](https://github.com/Fenix46) ·
+[Fabio Scialanga](https://github.com/fabioscialanga) ·
+[Fabrizio Salmi](https://github.com/fabriziosalmi) ·
+[@FrankTheRope](https://github.com/FrankTheRope) ·
+[@Lazza003](https://github.com/Lazza003) ·
+[@marco88cappelli](https://github.com/marco88cappelli) ·
+[@marcomodonesi](https://github.com/marcomodonesi) ·
+[Massimo Fontana](https://github.com/maxxflyer) ·
+[Nicholas Angelucci](https://github.com/nicholas1990) ·
+[@pieronoviello](https://github.com/pieronoviello) ·
+[Quirino Zagarese](https://github.com/qzagarese) ·
+[Roberto](https://github.com/not-knope) ·
+[Salvatore Arena](https://github.com/Fanfulla) ·
+[@Umberto65UT](https://github.com/Umberto65UT)
+
+The people who contributed **data** to the community dataset are listed in the
+[technical report](report/rizzo-pii-report.pdf), under *Dataset contributors*.
+
 ## License
 
 Released under the **[MIT License](LICENSE)** © 2026 Simone Rizzo — Rizzo AI Academy.

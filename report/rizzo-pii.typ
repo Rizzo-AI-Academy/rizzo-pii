@@ -807,6 +807,28 @@ still under review:
   (\@p3pp01), Raffaele Francesco D'Amato (\@kekkodamato), Yuri (\@D3ros).
 ]
 
+// =============================================================================
+#block(breakable: false)[
+= Code contributors
+// =============================================================================
+
+The application, the detectors and the data pipeline improve through pull
+requests on
+#link("https://github.com/Rizzo-AI-Academy/rizzo-pii")[`Rizzo-AI-Academy/rizzo-pii`].
+Everyone who has had a pull request merged is listed here, in alphabetical
+order:
+
+#text(size: 9pt)[
+  Alessio Langiu (\@LangiuAlessio), Andrea M. Piovesana (\@andreampiovesana),
+  Antonio Sarno (\@tonytonycoder11), \@cosmico89, Emanuele Scarlata
+  (\@Fenix46), Fabio Scialanga (\@fabioscialanga), Fabrizio Salmi
+  (\@fabriziosalmi), \@FrankTheRope, \@Lazza003, \@marco88cappelli,
+  \@marcomodonesi, Massimo Fontana (\@maxxflyer), Nicholas Angelucci
+  (\@nicholas1990), \@pieronoviello, Quirino Zagarese (\@qzagarese), Roberto
+  (\@not-knope), Salvatore Arena (\@Fanfulla), \@Umberto65UT.
+]
+]
+
 #v(4pt)
 #align(center)[
   #block(fill: soft, radius: 8pt, inset: 12pt, width: 92%)[
