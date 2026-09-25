@@ -49,6 +49,7 @@ import re
 import secrets
 import sys
 import threading
+import unicodedata
 from collections import OrderedDict
 from pathlib import Path
 
@@ -169,6 +170,85 @@ def _safe_name(name, default="documento.pdf"):
     base = os.path.basename(name or "").strip()
     base = re.sub(r"[^A-Za-z0-9._\- ]+", "_", base).strip(" ._")
     return base or default
+
+
+def _piega(s):
+    """`s` senza accenti ne' legature, e per ogni carattere piegato l'indice del carattere
+    di `s` da cui viene: cosi' "Müller" con l'accento scomposto (come nei nomi file di
+    macOS) e la legatura "ff" di un PDF si confrontano col testo senza perdere le posizioni."""
+    piegata, da = [], []
+    for i, c in enumerate(s):
+        for d in unicodedata.normalize("NFKD", c):
+            if not unicodedata.combining(d):
+                piegata.append(d)
+                da.append(i)
+    return "".join(piegata), da
+
+
+def _confine(s, i):
+    """Confine di parola prima di s[i]: bordo, carattere non alfanumerico, passaggio fra
+    lettera e cifra, o minuscola seguita da maiuscola ("RossiMario", "Rossi2024")."""
+    if i <= 0 or i >= len(s):
+        return True
+    a, b = s[i - 1], s[i]
+    return (not (a.isalnum() and b.isalnum()) or a.isdigit() != b.isdigit()
+            or (a.islower() and b.isupper()))
+
+
+def _unisci(a, b):
+    """Un '_' fra un'etichetta e una lettera o cifra attaccata: "FULLNAME_1_2024"."""
+    return a + "_" + b if a[-1:].isalnum() and b[:1].isalnum() else a + b
+
+
+def _nome_anonimizzato(name, mapping):
+    """Nome del PDF anonimizzato. Quello originale porta spesso proprio i dati che il
+    documento nasconde ("Rossi_Mario_sospensione.pdf", issue #97): ogni valore del
+    dizionario che vi compare diventa l'etichetta del suo segnaposto.
+
+    Si cerca il valore intero con qualunque separatore ("12-03-2024", "Mario_Rossi") e,
+    per i nomi di persona, ogni parola di almeno tre lettere da sola, in qualunque
+    ordine ("Rossi_Mario", e "Cordella_Francesco" anche se il testo lo sillaba); maiuscole
+    e accenti non contano. Si lavora sul nome ORIGINALE: _safe_name() ridurrebbe
+    "Niccolò" a "Niccol_", ancora riconoscibile e non piu' confrontabile col testo. I
+    valori troppo corti per cercarli nel PDF (pdf_export._too_noisy) restano fuori anche
+    qui, e restano le particelle di due lettere ("De" di "De Luca")."""
+    radice, ext = os.path.splitext(os.path.basename(name or ""))
+    radice = radice[:255]        # ponytail: piu' lungo nessun file system lo accetta
+    piegata, da = _piega(radice)
+    trovati = []
+    for ph, val in mapping.items():
+        if pdf_export._too_noisy(val):
+            continue
+        lab = ph.strip("[]")
+        v = _piega(val)[0]
+        pezzi = re.findall(r"[^\W_]+", v)
+        if not pezzi:
+            continue
+        forme = [r"[\W_]*".join(map(re.escape, pezzi))]
+        if lab.rsplit("_", 1)[0] == "FULLNAME":
+            parole = re.findall(r"[^\W_]+", re.sub(r"[-­‐]?[ \t]*\n[ \t]*", "", v))
+            forme += [re.escape(p) for p in parole if len(p) >= 3 and p.isalpha()]
+        for f in forme:
+            for m in re.finditer(rf"(?=({f}))", piegata, re.I):
+                s, e = m.span(1)
+                if e > s and _confine(piegata, s) and _confine(piegata, e):
+                    trovati.append((s, e, lab))
+    scelti = []                                    # i piu' lunghi prima, senza sovrapposizioni
+    for s, e, lab in sorted(trovati, key=lambda t: (t[0] - t[1], t[0])):
+        if all(e <= a or s >= b for a, b, _ in scelti):
+            scelti.append((s, e, lab))
+    out, pos, prec = "", 0, None
+    for s, e, lab in sorted(scelti):
+        a, b = da[s], da[e - 1] + 1
+        while b < len(radice) and unicodedata.combining(radice[b]):
+            b += 1                                 # l'accento scomposto dell'ultima lettera
+        sep = radice[pos:a]
+        if lab != prec or re.search(r"[^\W_]", sep):
+            out = _unisci(_unisci(out, sep), lab)
+        prec, pos = lab, b                         # "Rossi_Mario": un'etichetta sola
+    out = _unisci(out, radice[pos:])
+    stem = os.path.splitext(_safe_name(out + ext, "documento.pdf"))[0]
+    return f"{stem or 'documento'}_anonimizzato.pdf"
 
 
 def _store_doc(data, name="documento.pdf"):
@@ -664,9 +744,6 @@ def _build_anonymized_pdf():
     if not text:
         raise _ReqError("Nessun testo da anonimizzare.")
 
-    stem = os.path.splitext(_safe_name(name, "documento.pdf"))[0] or "documento"
-    out_name = f"{stem}_anonimizzato.pdf"
-
     excl = (server_config.parse_tag_list(raw_excl) if raw_excl is not None
             else _get_prefs()[0])
     # mapping_enabled=True e' interno: il risultato non esce da questa funzione.
@@ -674,6 +751,7 @@ def _build_anonymized_pdf():
     if not res["mapping"]:
         raise _ReqError("Nessuna PII trovata: non c'e' niente da "
                         "anonimizzare in questo documento.", 422)
+    out_name = _nome_anonimizzato(name, res["mapping"])
 
     if data and _is_pdf(name, data):
         try:
