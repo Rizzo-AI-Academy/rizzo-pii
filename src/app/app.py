@@ -525,6 +525,11 @@ def _text_from_bytes(name, data):
     ext = os.path.splitext(name)[1]
     if _is_pdf(name, data):
         with fitz.open(stream=data, filetype="pdf") as doc:
+            # senza, l'utente leggeva l'errore grezzo di PyMuPDF: "document closed or
+            # encrypted". Un PDF con la sola password del proprietario si apre: needs_pass
+            # e' falso e si prosegue.
+            if doc.needs_pass:
+                raise ValueError("PDF protetto da password: rimuovi la protezione e riprova.")
             # Non solo page.get_text(): nei PDF fillable il valore sta nei
             # widget AcroForm (issue #85). Stesso contratto di pdf_export.
             return pdf_text.collect_readable_text(doc)
