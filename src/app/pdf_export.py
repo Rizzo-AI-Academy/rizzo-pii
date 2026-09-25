@@ -87,17 +87,21 @@ def _fit_fontsize(text, rect, max_fs=10.0, min_fs=4.0):
     return round(fs, 1) if fs >= min_fs else 0
 
 
-def _covered(rect, taken, thr=0.85):
-    """True se `rect` e' gia' (quasi) tutto dentro una redazione precedente:
-    evita doppioni quando un valore e' contenuto in un altro (es. "Rossi"
-    dentro "Mario Rossi", redatto prima perche' piu' lungo)."""
+def _covered(rect, boxes, idx, taken, thr=0.85):
+    """True se la riga e' gia' tolta da una redazione precedente: il rettangolo vi sta
+    dentro per l'85% dell'area, come prima, e in piu' il centro di ogni suo carattere vi
+    cade dentro. Evita i doppioni (testo ripetuto per fare il grassetto) senza saltare una
+    copia spostata di qualche punto, che lascerebbe fuori le lettere ai bordi."""
     area = rect.get_area()
     if area <= 0:
         return True
+    centri = [fitz.Point((boxes[i].x0 + boxes[i].x1) / 2, (boxes[i].y0 + boxes[i].y1) / 2)
+              for i in idx]
     for t in taken:
         inter = fitz.Rect(rect)
         inter.intersect(t)
-        if not inter.is_empty and inter.get_area() / area >= thr:
+        if (not inter.is_empty and inter.get_area() / area >= thr
+                and all(t.contains(c) for c in centri)):
             return True
     return False
 
@@ -106,10 +110,11 @@ def _covered(rect, taken, thr=0.85):
 # Indice char-preciso della pagina + ricerca con confini di parola
 # --------------------------------------------------------------------------- #
 def _page_char_index(page):
-    """(testo, [bbox per carattere]) dalla pagina: ogni carattere del layer
-    testuale con il suo rettangolo (None per i newline di fine riga)."""
+    """(testo, [bbox per carattere], [visibile per carattere]) dalla pagina: ogni
+    carattere del layer testuale con il suo rettangolo (None per i newline di fine
+    riga). Invisibile e' il testo di un OCR steso sopra la scansione (alpha 0)."""
     raw = page.get_text("rawdict")
-    chars, boxes = [], []
+    chars, boxes, visibile = [], [], []
     for block in raw.get("blocks", []):
         if block.get("type") != 0:          # solo blocchi di testo
             continue
@@ -120,9 +125,11 @@ def _page_char_index(page):
                     for cc in c:            # ligature -> piu' caratteri, stesso bbox
                         chars.append(cc)
                         boxes.append(fitz.Rect(ch["bbox"]))
+                        visibile.append(span.get("alpha", 255) > 0)
             chars.append("\n")
             boxes.append(None)
-    return "".join(chars), boxes
+            visibile.append(False)
+    return "".join(chars), boxes, visibile
 
 
 # Sillabazione a fine riga: "Fran-\ncesco", "Fran­\ncesco" o anche solo un
@@ -165,22 +172,56 @@ def _value_pattern(value):
     return re.compile(left + body + right, re.IGNORECASE)
 
 
-def _match_rects(boxes, m):
-    """Bbox dei caratteri del match, uniti per riga (overlap verticale)."""
-    rects, cur = [], None
-    for i in range(m.start(), m.end()):
+def _match_rects(boxes, m, visibile):
+    """[(rettangolo, indici dei caratteri)] del match, uniti per riga e stretti in
+    verticale finche' non toccano i caratteri delle righe vicine.
+
+    Il box di rawdict e' piu' alto del corpo (1,25-1,37 volte coi font base), quindi con
+    un'interlinea stretta sconfina nella riga sopra e in quella sotto (issue #117):
+    apply_redactions() toglie ogni carattere il cui box tocca il rettangolo, e
+    cancellava parole che non erano entita'; e "stessa riga = box sovrapposti" univa
+    le due meta' di un nome sillabato a fine riga in un rettangolo largo quanto la
+    pagina. La riga si decide quindi dal centro del box, non dalla sovrapposizione.
+
+    Il rettangolo resta intero, come prima, quando il testo e' invisibile (l'OCR sopra
+    una scansione: la PII e' nell'immagine, e apply_redactions() ne cancella i pixel
+    solo sotto il rettangolo) e quando la fascia rimasta non contiene piu' il centro
+    della riga (testo molto piu' grande sovrapposto): li' MuPDF non toglierebbe il valore."""
+    lo, hi = m.start(), m.end()
+    rows = []                                       # [rect, centro verticale, indici]
+    for i in range(lo, hi):
         b = boxes[i]
         if b is None or b.is_empty:
             continue
-        if cur is None:
-            cur = fitz.Rect(b)
-        elif b.y0 < cur.y1 and b.y1 > cur.y0:      # stessa riga
-            cur |= b
-        else:                                       # riga nuova
-            rects.append(cur)
-            cur = fitz.Rect(b)
-    if cur is not None and not cur.is_empty:
-        rects.append(cur)
+        cy = (b.y0 + b.y1) / 2
+        if rows and abs(cy - rows[-1][1]) < b.height / 2:     # stessa riga
+            rows[-1][0] |= b
+            rows[-1][2].append(i)
+        else:
+            rows.append([fitz.Rect(b), cy, [i]])
+    rects = []
+    for r, cy, idx in rows:
+        if not all(visibile[i] for i in idx):
+            rects.append((r, idx))
+            continue
+        x0, x1, meta = r.x0, r.x1, r.height / 2
+        top, bot = r.y0, r.y1
+        # ponytail: scansione lineare dei caratteri della pagina per ogni rettangolo
+        # (+26% su 10 pagine fitte con 3.200 redazioni); indice per y se diventa un collo.
+        for j, b in enumerate(boxes):
+            if b is None or b.x0 >= x1 or b.x1 <= x0 or lo <= j < hi:
+                continue
+            by = (b.y0 + b.y1) / 2
+            if abs(by - cy) < meta:                 # stessa riga: non e' una vicina
+                continue
+            if by < cy:
+                top = max(top, b.y1)
+            else:
+                bot = min(bot, b.y0)
+        # ponytail: se le righe si accavallano al punto da non lasciare spazio, si tiene
+        # il rettangolo intero: meglio togliere troppo che lasciare la PII in chiaro.
+        stretto = bot - top >= 2 and top < cy < bot
+        rects.append((fitz.Rect(r.x0, top, r.x1, bot) if stretto else r, idx))
     return rects
 
 
@@ -401,20 +442,22 @@ def redact_pdf(pdf_bytes, mapping, fill=REDACT_FILL, text_color=REDACT_TEXT):
     total = n_annots = n_widgets = 0
 
     for page in doc:
-        text, boxes = _page_char_index(page)
-        taken = []
+        text, boxes, visibile = _page_char_index(page)
+        taken, tolti = [], set()
         if text.strip():
             for ph, val, pat in usable:
                 for m in pat.finditer(text):
-                    rects = _match_rects(boxes, m)
+                    rects = _match_rects(boxes, m, visibile)
                     placed_any, labeled = False, False
-                    for r in rects:
-                        if _covered(r, taken):
+                    for r, idx in rects:
+                        # "Rossi" dentro "Mario Rossi": gli stessi caratteri, gia' tolti
+                        if tolti.issuperset(idx) or _covered(r, boxes, idx, taken):
                             continue
                         fs = 0 if labeled else _fit_fontsize(ph, r)
                         _add_redact_annot(page, r, ph if fs else None,
                                           fs or 6, fill, text_color)
                         taken.append(fitz.Rect(r))
+                        tolti.update(idx)
                         placed_any = True
                         labeled = labeled or bool(fs)
                     if placed_any:
