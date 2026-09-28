@@ -5,6 +5,20 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-09-28 — Chunk limitati anche in caratteri (`chunking.py`)
+
+`chunk_text` misurava il chunk solo in parole separate da spazi. Un JSON compatto,
+che di spazi non ne ha, era una parola sola e quindi un chunk solo; la pipeline lo
+tronca in silenzio a 8.192 token (intorno al carattere 19.000) e il resto non lo
+legge nessuno. Su 1.000 record anagrafici in JSON compatto restavano in chiaro i
+nomi di 753, senza alcun segnale nell'output.
+
+Un chunk ora non supera 2.500 caratteri, e una "parola" piu' lunga di un chunk si
+spezza dopo `,` `;` `|`. Sulla prosa non cambia nulla: su 481M caratteri di
+Wikipedia e testo legale i chunk sono identici uno per uno, salvo 13 documenti che
+sono tabelle di sostanze chimiche e marcatori di impaginazione. `chunk_text` passa
+in `src/app/chunking.py`, senza torch, per poterlo testare senza il modello.
+
 ## 2026-09-01 — PDF fillable: i campi modulo entrano in `/analyze` (`pdf_text.py`)
 
 `_text_from_bytes` leggeva solo `page.get_text()`. Nei PDF con AcroForm (moduli

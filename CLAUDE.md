@@ -77,9 +77,9 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   codice di uscita `EXIT_PORT_CONFLICT = 76`: i 3 entry point escono con 76 se la porta è occupata
   **prima di caricare il modello** (evita secondi sprecati). Tauri riconosce il codice 76 e mostra
   il form di configurazione nello splash screen.
-- `app.py` — server Flask + **UI**: testo, PDF o file `.md`/`.txt`, chunking con overlap, offset
-  globali + dedup. Anonimizzazione **reversibile** (ogni PII → `[FULLNAME_1]`/`[IBAN_1]`… +
-  dizionario locale; tab "Ripristina"). Affianca al modello una **rete regex/checksum** (EMAIL/
+- `app.py` — server Flask + **UI**: testo, PDF o file `.md`/`.txt`, chunking con overlap
+  (`chunking.py`: tetto in parole e in caratteri), offset globali + dedup. Anonimizzazione
+  **reversibile** (ogni PII → `[FULLNAME_1]`/`[IBAN_1]`… + dizionario locale; tab "Ripristina"). Affianca al modello una **rete regex/checksum** (EMAIL/
   TELEFONO/IBAN/CF/PIVA/carta/importo/targa/**URL**; IBAN/CF/PIVA/carta validati con checksum, che ha
   priorità sul modello). `URL` è un **23° tag solo-regex**: il modello non lo conosce; matcha schema,
   `www.` e domini nudi solo su una **lista chiusa di TLD** (senza, `p.iva`/`S.r.l.` diventerebbero
