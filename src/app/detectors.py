@@ -209,6 +209,10 @@ DETECTORS = [
 # cosi' il modello puo' sovrascriverle.
 SOFT_REGEX_LABELS = {"DATE"}
 
+# label -> validatore, per rivalidare un'entita' del MODELLO sulla stessa label
+# (stessa tassonomia della rete regex: CF/IBAN/PIVA/CREDITCARDNUMBER).
+VALIDATORS = {label: validator for label, _, validator, _ in DETECTORS if validator}
+
 # Punteggiatura che chiude la frase e non fa parte dell'URL: "vedi https://x.it/pagina."
 _URL_TRAIL = ".,;:!?)]}»\"'"
 
