@@ -25,6 +25,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 # --- dipendenze --------------------------------------------------------------
+# utente non-root creato PRIMA del modello: cosi' i permessi si danno nello
+# stesso layer del download. Un `chown -R` in un layer successivo riscrive tutti
+# i file (cambia il proprietario) e il modello finisce due volte nell'immagine.
+RUN useradd --create-home --uid 10001 app
 # torch dall'indice CPU: la wheel default tira dietro ~2.5 GB di CUDA che qui
 # non servirebbero a niente. gunicorn perche' il server di sviluppo di Flask
 # non e' un server (single-thread, nessun timeout).
@@ -45,17 +49,18 @@ ARG MODEL_REVISION=v1.5.0
 RUN python -c "from huggingface_hub import snapshot_download; \
 snapshot_download('$MODEL_REPO', revision='$MODEL_REVISION', \
 local_dir='/app/models/rizzo-pii-0.3B-v1.5.0', \
-allow_patterns=['*.json','*.safetensors','*.txt','*.model'])"
+allow_patterns=['*.json','*.safetensors','*.txt','*.model'])" \
+ && chown -R app:app /app
 
 # --- applicazione ------------------------------------------------------------
 # Solo src/app: il resto della repo (training, data pipeline, dataset) non serve
 # a servire l'app e ogni file in piu' e' un layer che si invalida per niente.
 WORKDIR /app
-COPY src/app/ /app/src/app/
+COPY --chown=app:app src/app/ /app/src/app/
 
-# utente non-root; la home deve essere scrivibile perche' server_config scrive
-# config.json/prefs.json in ~/.local/share/rizzo-pii (preferenze dell'UI).
-RUN useradd --create-home --uid 10001 app && chown -R app:app /app
+# utente non-root (creato sopra); la home deve essere scrivibile perche'
+# server_config scrive config.json/prefs.json in ~/.local/share/rizzo-pii.
+RUN chown app:app /app
 USER app
 ENV HOME=/home/app
 
