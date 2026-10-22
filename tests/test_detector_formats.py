@@ -39,6 +39,13 @@ POSITIVI = [
      "IBAN", "IT60X0542811101000000123456"),
     ("iban_gruppi_di_4", "IBAN IT60 X054 2811 1010 0000 0123 456 presso la filiale.",
      "IBAN", "IT60 X054 2811 1010 0000 0123 456"),
+    ("iban_italiano_coda_compatta",
+     "Bonifico su IT60 X054 2811 1010 0000 0123456 presso la filiale.",
+     "IBAN", "IT60 X054 2811 1010 0000 0123456"),
+    ("iban_britannico_gruppi", "Accredito su GB82 WEST 1234 5698 7654 32.",
+     "IBAN", "GB82 WEST 1234 5698 7654 32"),
+    ("iban_britannico_coda_compatta", "Accredito su GB82 WEST 1234 5698765432.",
+     "IBAN", "GB82 WEST 1234 5698765432"),
     ("iban_con_trattini", "IBAN: IT60-X054-2811-1010-0000-0123-456.",
      "IBAN", "IT60-X054-2811-1010-0000-0123-456"),
     ("iban_minuscolo", "iban it60x0542811101000000123456 intestato allo studio.",
@@ -106,6 +113,7 @@ POSITIVI = [
 # strict devono sparire, e' la ragione per cui strict esiste.
 CHECKSUM_ERRATO = [
     ("iban_checksum_errato", "IBAN IT61 X054 2811 1010 0000 0123 456.", "IBAN"),
+    ("iban_coda_compatta_checksum_errato", "IBAN IT61 X054 2811 1010 0000 0123456.", "IBAN"),
     ("iban_compatto_checksum_errato", "IBAN IT61X0542811101000000123456.", "IBAN"),
     ("carta_luhn_errato", "Carta 4111 1111 1111 1112.", "CREDITCARDNUMBER"),
     ("carta_punti_luhn_errato", "Carta 4111.1111.1111.1112.", "CREDITCARDNUMBER"),

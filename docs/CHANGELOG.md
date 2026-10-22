@@ -5,6 +5,16 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-10-05 — IBAN con gruppo finale accorpato (`detectors.py`, issue #135)
+
+Lo scanner scartava `IT60 X054 2811 1010 0000 0123456` prima del checksum perche'
+il gruppo finale era piu' lungo del primo. Ora una coda numerica puo' accorpare
+piu' gruppi; le code alfabetiche lunghe restano escluse per non assorbire prosa:
+restano obbligatori la lunghezza per paese, il confine destro e il mod-97 sulla
+forma canonicalizzata. Lo span conserva i separatori originali e l'IBAN validato
+prevale sul candidato `TELEPHONENUM` sovrapposto, con le priorita' gia' esistenti.
+Test di regressione per IT, GB, checksum errato e output completo di `/analyze`.
+
 ## 2026-09-01 — PDF fillable: i campi modulo entrano in `/analyze` (`pdf_text.py`)
 
 `_text_from_bytes` leggeva solo `page.get_text()`. Nei PDF con AcroForm (moduli

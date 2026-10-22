@@ -21,11 +21,13 @@ Tutti i valori sono SINTETICI, con mod-97 calcolato apposta.
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src" / "app"))
 
 import detectors  # noqa: E402
+from test_ora import APP  # noqa: E402 (stesso caricamento coi pesi finti)
 
 IB = "IT60X0542811101000000123456"
 
@@ -87,6 +89,8 @@ NESSUNO = [
      "Codice IT96 3B8J I6WA Q9YI    KB8S ASPB 8JO in atti."),
     ("codice_interno_che_ne_ha_la_forma",
      "Codice commessa GR14 0172 7402 1280 riferimento interno."),
+    ("coda_compatta_troncata", "IBAN IT60 X054 2811 1010 0000 012345."),
+    ("coda_compatta_troppo_lunga", "IBAN IT60 X054 2811 1010 0000 01234567."),
     ("il_codice_prosegue_oltre",
      "Codice %s7890 interno." % IB),
 ]
@@ -124,6 +128,52 @@ class IbanFormatoDiStampa(unittest.TestCase):
         for testo, atteso in casi:
             with self.subTest(atteso[:12]):
                 self.assertIn(atteso, iban_span(testo) or "")
+
+
+@unittest.skipIf(APP is None, "app.py non importabile (torch/flask/fitz assenti)")
+class IbanInAnalyze(unittest.TestCase):
+    def test_riproduzione_issue_135(self):
+        """L'IBAN validato prevale sul telefono, dalla regex e dal modello."""
+        testo = (
+            "Rossi Holdings SpA Bank Account: IT60 X054 2811 1010 0000 0123456\n"
+            "Smith Innovations Ltd Bank Account: GB82 WEST 1234 5698 7654 32"
+        )
+        model_ents = []
+        for label, valore in (("ORG", "Rossi Holdings SpA"),
+                              ("ORG", "Smith Innovations Ltd"),
+                              ("TELEPHONENUM", "0000 0123456")):
+            start = testo.index(valore)
+            model_ents.append({"label": label, "start": start,
+                               "end": start + len(valore), "score": 1.0,
+                               "validated": False, "source": "modello"})
+        with patch.object(APP, "detect_model", return_value=(model_ents, 1)):
+            risposta = APP.app.test_client().post(
+                "/analyze", json={"text": testo, "include_mapping": True})
+        self.assertEqual(risposta.status_code, 200)
+        out = risposta.get_json()
+        self.assertEqual(out["anonymized_text"],
+                         "[ORG_1] Bank Account: [IBAN_1]\n"
+                         "[ORG_2] Bank Account: [IBAN_2]")
+        self.assertEqual(out["mapping"], {
+            "[ORG_1]": "Rossi Holdings SpA",
+            "[ORG_2]": "Smith Innovations Ltd",
+            "[IBAN_1]": "IT60 X054 2811 1010 0000 0123456",
+            "[IBAN_2]": "GB82 WEST 1234 5698 7654 32",
+        })
+        ibans = [e for e in out["segments"] if e.get("label") == "IBAN"]
+        self.assertEqual(len(ibans), 2)
+        self.assertTrue(all(e["validated"] and e["src"] == "regex" for e in ibans))
+        self.assertNotIn("TELEPHONENUM", out["by_label"])
+
+    def test_telefono_fuori_dall_iban_resta_rilevato(self):
+        testo = "IBAN IT60 X054 2811 1010 0000 0123456, tel. 010 2471234."
+        with patch.object(APP, "detect_model", return_value=([], 1)):
+            out = APP.analyze(testo)
+        self.assertEqual(out["anonymized_text"], "IBAN [IBAN_1], tel. [TELEPHONENUM_1].")
+        self.assertEqual(out["mapping"], {
+            "[IBAN_1]": "IT60 X054 2811 1010 0000 0123456",
+            "[TELEPHONENUM_1]": "010 2471234",
+        })
 
 
 if __name__ == "__main__":
