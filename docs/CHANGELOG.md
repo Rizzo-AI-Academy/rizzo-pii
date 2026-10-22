@@ -5,6 +5,19 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-09-29: un PIVA/CF/IBAN/carta indovinato dal modello non veniva mai controllato col checksum (`app.py`, `detectors.py`)
+
+`detect_model` scriveva `validated: False` su ogni entita' del modello, senza consultare
+i validatori (`piva_ok`/`cf_ok`/`iban_ok`/`luhn_ok`) che la rete regex gia' usa sulla stessa
+label. Un valore checksummed indovinato dal modello (nessun candidato regex sullo stesso
+span, es. una sequenza di cifre in un referto di laboratorio letta come PIVA) restava
+"non validato" anche quando il checksum passava, e in `_merge` perdeva la priorita' contro
+un vero candidato regex sullo stesso span (issue #119).
+
+`detect_model` ora rivalida ogni entita' con la stessa mappa label->validatore della rete
+regex (`detectors.VALIDATORS`, nuova, costruita da `DETECTORS`). Le label senza checksum
+(TELEFONO, importo, targa, URL, IP, DOCID, data) restano `validated: False` come prima.
+
 ## 2026-09-01 — PDF fillable: i campi modulo entrano in `/analyze` (`pdf_text.py`)
 
 `_text_from_bytes` leggeva solo `page.get_text()`. Nei PDF con AcroForm (moduli

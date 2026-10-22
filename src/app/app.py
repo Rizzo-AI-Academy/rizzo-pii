@@ -62,7 +62,7 @@ import pdf_text
 import server_config
 # Rete REGEX + CHECKSUM: modulo a parte, senza dipendenze dal modello. I nomi
 # restano importabili da qui (`app.detect_regex`) per non rompere chi li usa.
-from detectors import (DETECTORS, SOFT_REGEX_LABELS, cf_ok,  # noqa: F401
+from detectors import (DETECTORS, SOFT_REGEX_LABELS, VALIDATORS, cf_ok,  # noqa: F401
                        complete_time, detect_iban, detect_regex, iban_ok, luhn_ok,
                        piva_ok)
 from transformers import pipeline
@@ -303,12 +303,15 @@ def detect_model(text):
             results = [results]
         for (_, off), res in zip(chunks, results):
             for e in res:
+                label = e["entity_group"]
+                start, end = int(e["start"]) + off, int(e["end"]) + off
+                validator = VALIDATORS.get(label)
                 ents.append({
-                    "label": e["entity_group"],
-                    "start": int(e["start"]) + off,
-                    "end": int(e["end"]) + off,
+                    "label": label,
+                    "start": start,
+                    "end": end,
                     "score": float(e["score"]),
-                    "validated": False,
+                    "validated": bool(validator and validator(text[start:end])),
                     "source": "modello",
                 })
     return ents, len(chunks)
