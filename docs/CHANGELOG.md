@@ -5,6 +5,25 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-09-25 — Su Windows il drag & drop dei file non funzionava (`tauri/src-tauri/src/lib.rs`)
+
+Issue #96. La dropzone è HTML5 (`drop.addEventListener('drop', ...)` in `app.py`), ma la
+finestra principale nasceva col gestore nativo di drag & drop di Tauri attivo, che su
+Windows si prende i file trascinati: l'evento non arriva mai alla pagina. La documentazione
+di `WebviewWindowBuilder::disable_drag_drop_handler()` lo dice testualmente: *"This is
+required to use HTML5 drag and drop APIs on the frontend on Windows."* L'app non usa gli
+eventi di drop di Tauri, quindi disattivarlo non toglie niente. La chiamata va in tutti e
+due i punti che creano la finestra (avvio e "Salva e riprova" dello splash).
+
+Provato sull'app vera, build di debug su Windows 11 con il backend e il modello v1.5.0: un
+trascinamento OLE di un PDF sulla dropzone, lo stesso meccanismo di Esplora risorse,
+ripetuto tre volte per build. Con `main` il drop viene accettato da Tauri e la pagina non
+riceve niente (0 anteprime su 3); con la correzione il file arriva, parte `POST /preview` e
+il PDF compare nell'anteprima (3 su 3). Non provato su macOS e Linux: la issue riguarda
+Windows 11.
+
+---
+
 ## 2026-09-01 — PDF fillable: i campi modulo entrano in `/analyze` (`pdf_text.py`)
 
 `_text_from_bytes` leggeva solo `page.get_text()`. Nei PDF con AcroForm (moduli

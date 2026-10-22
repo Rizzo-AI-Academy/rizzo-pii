@@ -313,6 +313,9 @@ fn retry_backend(app_handle: tauri::AppHandle) {
             .inner_size(1240.0, 840.0)
             .min_inner_size(900.0, 600.0)
             .center()
+            // il drop lo gestisce la pagina (HTML5): su Windows il gestore nativo di
+            // Tauri si prende i file trascinati e l'evento non arriva mai (issue #96)
+            .disable_drag_drop_handler()
             .build();
 
             if built.is_ok() {
@@ -402,6 +405,7 @@ pub fn run() {
                     .inner_size(1240.0, 840.0)
                     .min_inner_size(900.0, 600.0)
                     .center()
+                    .disable_drag_drop_handler()    // vedi retry_backend: issue #96
                     .build();
 
                     if built.is_ok() {
