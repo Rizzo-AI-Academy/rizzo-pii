@@ -5,6 +5,62 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-09-25 — La redazione del PDF cancellava le righe vicine (`pdf_export.py`)
+
+Issue #117. Il box di un carattere in `rawdict` è più alto del corpo (coi font base del
+PDF 1,25-1,37 volte: Courier 12 → 14,99 pt, Helvetica 12 → 16,49 pt), e con un'interlinea
+stretta sconfina nella riga sopra e in quella sotto. `apply_redactions()` toglie ogni
+carattere il cui box tocca il rettangolo, quindi redigere un'entità cancellava anche le
+parole sopra e sotto di lei, e gli header dicevano `Residual: 0`. Sul testo della issue,
+Courier 12 a interlinea 12 (cupsfilter), l'uscita di `main` è identica a quella segnalata:
+`Il Sig`, `te in`, `567,`, `propr`.
+
+Peggio con un nome sillabato a fine riga: "stessa riga" era "box sovrapposti", e con
+l'interlinea stretta le due metà di `Fran-`/`cesco Cordella` diventavano **un solo
+rettangolo largo quanto la pagina**. Sul caso del test, delle tre righe restavano un punto
+e `[FULLNAME_1]`.
+
+`_match_rects()` ora decide la riga dal centro del box e stringe ogni rettangolo in
+verticale finché non tocca più i caratteri delle righe vicine. Il rettangolo resta intero,
+come prima, in tre casi, perché lasciare la PII in chiaro è l'errore peggiore: quando le righe
+si accavallano al punto da non lasciare spazio; quando la fascia rimasta non contiene più il
+centro della riga (testo molto più grande sovrapposto: lì MuPDF non toglierebbe il valore);
+e quando il testo è invisibile, cioè l'OCR steso sopra una scansione: la PII è
+nell'immagine, e `apply_redactions()` ne cancella i pixel solo sotto il rettangolo.
+
+L'anti-doppione cambia di conseguenza. "Rossi" dentro "Mario Rossi" si riconosce dagli indici
+dei caratteri, già tolti, perché i rettangoli stretti riga per riga possono avere altezze
+diverse. Per il resto `_covered()` chiede, oltre all'area coperta all'85% di prima, che il
+centro di ogni carattere cada dentro la redazione precedente: una copia del testo spostata di
+qualche punto non viene più saltata lasciando fuori le lettere ai bordi.
+
+| | `main` | correzione |
+|---|---:|---:|
+| 384 PDF generati (3 font, corpo 9-12, interlinea 0,9-1,6×) | 236 danneggiati, 9.437 parole perse | 0 |
+| 16 PDF stampati da Edge (Times, Calibri, Arial, Courier New) | 320 parole perse | 0 |
+| pezzi di entità ancora leggibili, in entrambi i corpus | 0 | 0 |
+| scansioni con OCR a interlinea 0,9-1,15× (pixel della PII rimasti) | 0 | 0 |
+| 3.086 layout avversari: corpi misti, testo duplicato e sfalsato (caratteri di PII in chiaro) | 7 | 0 |
+| testo obliquo, 792 documenti (documenti con PII in chiaro) | 52 | 0 |
+
+Su `main` il danno arriva fino a interlinea 1,3× coi font base e c'è già a 1,15 con
+Calibri. I conteggi per segnaposto restano identici a quelli di `main` dove `main` è
+corretto (a interlinea doppia, e su 324 documenti con valori contenuti, sillabazione, apici).
+
+Il prezzo. Con righe più fitte del corpo la casella si abbassa, e se l'etichetta dovesse
+scendere sotto i 4 pt (il minimo di `_fit_fontsize()`) non viene scritta: il valore è
+tolto, il segnaposto no (etichette visibili a 1,0×: 75% contro il 92% di `main`; da 1,1× in
+su 99-100%, più di `main`). Sotto 0,8× le righe si accavallano: dove non resta spazio si
+torna al rettangolo intero, e qualche parola vicina si perde ancora, meno che su `main`.
+Il testo obliquo a interlinea stretta perde ancora parole vicine, la metà che su `main`; il
+testo verticale come su `main`. Sul caso peggiore misurato (10 pagine fitte, 3.200
+redazioni) la redazione passa da 10,1 a 12,7 s (+26%, mediana di tre giri).
+
+Test: `tests/test_pdf_righe_vicine.py`. Su `main` falliscono i tre casi delle righe vicine;
+il quarto, la scansione con OCR, protegge dal rettangolo stretto dove non va stretto.
+
+---
+
 ## 2026-09-01 — PDF fillable: i campi modulo entrano in `/analyze` (`pdf_text.py`)
 
 `_text_from_bytes` leggeva solo `page.get_text()`. Nei PDF con AcroForm (moduli
