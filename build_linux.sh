@@ -46,10 +46,19 @@ fi
 [ -f tauri/src-tauri/backend/pii-backend/pii-backend ] \
   || { echo "ERRORE: sidecar Linux non prodotto"; exit 1; }
 
+# I wheel CPU di torch includono anche eseguibili dei suoi test C++.
+# PyInstaller li copia, ma linuxdeploy non risolve tutte le loro dipendenze
+# (es. libtorch.so per test_shim) durante l'analisi degli ELF nell'AppDir.
+# Rimuoviamo solo test_*, lasciando torch_shm_manager e le librerie di inferenza.
+TORCH_BIN="tauri/src-tauri/backend/pii-backend/_internal/torch/bin"
+if [ -d "$TORCH_BIN" ]; then
+  find "$TORCH_BIN" -maxdepth 1 -type f -name 'test_*' -print -delete
+fi
+
 # ---- 3) build Tauri: override bundle a deb + appimage (la conf di default e' nsis) ----
 cd tauri
-npm install
-npx tauri build --bundles $BUNDLES
+npm ci
+npx tauri build --verbose --bundles $BUNDLES
 
 echo
 echo "FATTO. Artefatti Linux in:"

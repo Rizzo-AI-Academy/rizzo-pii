@@ -1,0 +1,251 @@
+# Build nativa: sia il sidecar PyInstaller sia Tauri devono avere l'architettura
+# di destinazione. Il .dmg arm64 di macOS non funziona su Linux (issue #123).
+name: build-linux
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - ".github/workflows/build-linux.yml"
+      - "build_linux.sh"
+      - "build_sidecar.spec"
+      - "tauri/**"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag di una release esistente da compilare e completare (vuoto = solo artifact del run)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  MODEL_REPO: rizzoaiacademy/rizzo-pii-0.3B
+  MODEL_REV: v1.5.0
+  MODEL_DIR: models/rizzo-pii-0.3B-v1.5.0 # deve combaciare con build_sidecar.spec
+  VENV: ${{ github.workspace }}/build_env_linux
+  APPIMAGE_EXTRACT_AND_RUN: "1" # linuxdeploy senza FUSE sul runner
+  HF_HUB_DISABLE_XET: "1"
+
+jobs:
+  build:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x86_64
+            deb_arch: amd64
+            elf_machine: Advanced Micro Devices X86-64
+          - runner: ubuntu-22.04-arm
+            arch: aarch64
+            deb_arch: arm64
+            elf_machine: AArch64
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Il backfill usa il packaging corretto del workflow corrente, ma compila
+      # il codice dell'app e il lockfile del tag richiesto, senza aggiornarli.
+      - name: Conserva lo script di packaging
+        if: inputs.release_tag
+        run: cp build_linux.sh "$RUNNER_TEMP/build_linux.sh"
+
+      - uses: actions/checkout@v7
+        if: inputs.release_tag
+        with:
+          ref: ${{ inputs.release_tag }}
+
+      - name: Ripristina lo script di packaging sul tag
+        if: inputs.release_tag
+        run: cp "$RUNNER_TEMP/build_linux.sh" build_linux.sh
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: tauri/package-lock.json
+
+      - name: Dipendenze di sistema e architettura
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "$ARCH"
+          rustc --version
+          cargo --version
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential curl wget file libssl-dev libxdo-dev patchelf \
+            libwebkit2gtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev libfuse2
+
+      - name: Cache di cargo (separata per architettura)
+        id: cargo-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tauri/src-tauri/target/release/deps
+            tauri/src-tauri/target/release/build
+            tauri/src-tauri/target/release/.fingerprint
+          key: cargo-linux-${{ matrix.arch }}-${{ hashFiles('tauri/src-tauri/Cargo.lock') }}
+          restore-keys: cargo-linux-${{ matrix.arch }}-
+
+      - name: Dipendenze Python (CPU)
+        run: |
+          set -euo pipefail
+          python -m venv "$VENV"
+          "$VENV/bin/python" -m pip install --upgrade pip
+          "$VENV/bin/pip" install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+          "$VENV/bin/pip" install --no-cache-dir "transformers==4.57.3" \
+            tokenizers safetensors flask pymupdf pyinstaller huggingface_hub
+
+      - name: Scarica il modello pubblico
+        run: |
+          set -euo pipefail
+          "$VENV/bin/hf" download "$MODEL_REPO" --revision "$MODEL_REV" --local-dir "$MODEL_DIR"
+          test -f "$MODEL_DIR/model.safetensors"
+
+      - name: Sidecar e bundle deb/AppImage
+        run: |
+          set -euo pipefail
+          bash build_linux.sh 2>&1 | tee linux-build.log
+
+      - name: Verifica architettura e avvio offline del sidecar
+        env:
+          ELF_MACHINE: ${{ matrix.elf_machine }}
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+          PII_HOST: 127.0.0.1
+          PII_PORT: "5505"
+        run: |
+          set -euo pipefail
+          readelf -h tauri/src-tauri/backend/pii-backend/pii-backend | grep -F "$ELF_MACHINE"
+          readelf -h tauri/src-tauri/target/release/app | grep -F "$ELF_MACHINE"
+          # Prova il backend dentro l'AppImage, dopo le modifiche di linuxdeploy.
+          appimages=("$GITHUB_WORKSPACE"/tauri/src-tauri/target/release/bundle/appimage/*.AppImage)
+          test "${#appimages[@]}" -eq 1 && test -f "${appimages[0]}"
+          mkdir -p "$RUNNER_TEMP/appimage-check"
+          (cd "$RUNNER_TEMP/appimage-check" && "${appimages[0]}" --appimage-extract >/dev/null)
+          mapfile -t backends < <(find "$RUNNER_TEMP/appimage-check/squashfs-root" -type f -name pii-backend)
+          test "${#backends[@]}" -eq 1
+          backend="${backends[0]}"
+          readelf -h "$backend" | grep -F "$ELF_MACHINE"
+          "$backend" &
+          backend_pid=$!
+          trap 'kill "$backend_pid" 2>/dev/null || true' EXIT
+          ready=false
+          for _ in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:5505/health; then
+              ready=true
+              break
+            fi
+            if ! kill -0 "$backend_pid" 2>/dev/null; then
+              cat "$HOME/rizzo-pii/backend.log"
+              exit 1
+            fi
+            sleep 2
+          done
+          if [ "$ready" != true ]; then
+            cat "$HOME/rizzo-pii/backend.log"
+            exit 1
+          fi
+          curl -fsS http://127.0.0.1:5505/analyze \
+            -H 'Content-Type: application/json' \
+            -d '{"text":"IBAN IT60X0542811101000000123456","include_mapping":false}' \
+            > analyze.json
+          "$VENV/bin/python" -c 'import json; d=json.load(open("analyze.json")); assert "[IBAN_1]" in d["anonymized_text"], d'
+
+      - name: Prepara gli installer con nomi distinti
+        env:
+          ARCH: ${{ matrix.arch }}
+          DEB_ARCH: ${{ matrix.deb_arch }}
+          RELEASE_TAG: ${{ inputs.release_tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./tauri/src-tauri/tauri.conf.json').version")
+          if [ -n "$RELEASE_TAG" ] && [ "$RELEASE_TAG" != "v$version" ]; then
+            echo "ERRORE: tag $RELEASE_TAG diverso dalla versione dell'app $version"
+            exit 1
+          fi
+          debs=(tauri/src-tauri/target/release/bundle/deb/*.deb)
+          appimages=(tauri/src-tauri/target/release/bundle/appimage/*.AppImage)
+          test "${#debs[@]}" -eq 1 && test -f "${debs[0]}"
+          test "${#appimages[@]}" -eq 1 && test -f "${appimages[0]}"
+          test "$(dpkg-deb -f "${debs[0]}" Architecture)" = "$DEB_ARCH"
+          mkdir -p installers
+          cp "${debs[0]}" "installers/Rizzo-PII-$version-Linux-$DEB_ARCH.deb"
+          cp "${appimages[0]}" "installers/Rizzo-PII-$version-Linux-$ARCH.AppImage"
+
+      - name: Artifact del run (anche sulle PR, senza pubblicare release)
+        uses: actions/upload-artifact@v7
+        with:
+          name: installer-linux-${{ matrix.arch }}
+          path: installers/*
+          if-no-files-found: error
+          retention-days: 5
+          compression-level: 0
+
+      - name: Log diagnostico della build
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: log-linux-${{ matrix.arch }}
+          path: linux-build.log
+          retention-days: 5
+
+      - name: Salva la cache Rust anche se il packaging fallisce
+        if: always() && steps.cargo-cache.outputs.cache-primary-key && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tauri/src-tauri/target/release/deps
+            tauri/src-tauri/target/release/build
+            tauri/src-tauri/target/release/.fingerprint
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request' && (github.ref_type == 'tag' || inputs.release_tag)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: installer-linux-*
+          path: installers
+          merge-multiple: true
+
+      - name: Allega gli installer alla release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.release_tag || github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # release.yml puo' essere ancora in esecuzione dopo il push del tag.
+          ready=false
+          for _ in $(seq 1 30); do
+            if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            sleep 10
+          done
+          test "$ready" = true || { echo "ERRORE: release $TAG inesistente"; exit 1; }
+          gh release upload "$TAG" installers/* --repo "$REPO" --clobber

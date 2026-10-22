@@ -112,11 +112,70 @@ sudo apt update && sudo apt install -y \
   libwebkit2gtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev
 # + Rust (https://rustup.rs) e Node.js 18+
 
-# copia il modello addestrato sulla macchina Linux in models/rizzo-pii-0.3B-v1.2.0/
+# copia il modello addestrato sulla macchina Linux in models/rizzo-pii-0.3B-v1.5.0/
 bash build_linux.sh
 ```
 Output: `tauri/src-tauri/target/release/bundle/{deb/*.deb, appimage/*.AppImage}`. Il modello è
 gitignorato (~1,23 GB): va copiato a mano sulla macchina Linux, non è nel repo.
+
+### Linux ARM64 (aarch64) — Apple Silicon con Linux
+
+`build_linux.sh` produce binari per **l'architettura della macchina Linux che compila**:
+`x86_64` su Intel/AMD, `aarch64` su ARM64. Su un Mac Apple Silicon con Linux installato
+serve la build **Linux ARM64**, non il `.dmg` macOS e non l'AppImage Linux x86_64.
+Anche il backend Python/PyTorch deve essere ARM64: passare solo `--target` a Tauri non
+converte il sidecar PyInstaller.
+
+Per compilare localmente, esegui i prerequisiti e `bash build_linux.sh` qui sopra su
+Linux ARM64, con Rust, Python e Node della stessa architettura. Nei container Docker,
+usa `--platform linux/arm64` sia nella build dell'immagine sia nel run; evita di
+riutilizzare venv, sidecar e directory `target/` prodotti per x86_64.
+
+### Build Linux da GitHub Actions (x86_64 + ARM64)
+
+[`.github/workflows/build-linux.yml`](../.github/workflows/build-linux.yml) compila
+nativamente su `ubuntu-22.04` e `ubuntu-22.04-arm`, usando `build_linux.sh` e il modello
+pubblico **v1.5.0**. Non servono secret Hugging Face. La cache Rust e gli artifact sono
+separati per architettura. Il workflow controlla l'architettura ELF dell'app e del
+sidecar, il metadato `Architecture` del `.deb`, l'avvio offline (`GET /health`) e una
+richiesta reale di anonimizzazione (`POST /analyze`) dal backend estratto dall'AppImage.
+
+| CPU Linux | Pacchetto Debian/Ubuntu | AppImage |
+|---|---|---|
+| Intel/AMD x86_64 | `Rizzo-PII-<versione>-Linux-amd64.deb` | `Rizzo-PII-<versione>-Linux-x86_64.AppImage` |
+| ARM64 / aarch64 | `Rizzo-PII-<versione>-Linux-arm64.deb` | `Rizzo-PII-<versione>-Linux-aarch64.AppImage` |
+
+`uname -m` indica quale riga scegliere. Il `.deb` si installa su Debian/Ubuntu con
+`sudo apt install ./Rizzo-PII-<versione>-Linux-arm64.deb`. Per l'AppImage ARM64:
+`chmod +x Rizzo-PII-<versione>-Linux-aarch64.AppImage`, poi esegui il file. L'AppImage
+richiede librerie di sistema compatibili, come la build x86_64.
+
+```bash
+# Build di prova: i due installer per CPU restano negli artifact del run per 5 giorni.
+gh workflow run build-linux.yml --repo Rizzo-AI-Academy/rizzo-pii
+
+# Per i manutentori: completa una release esistente, inclusa la 2.0.0 priva di ARM64.
+gh workflow run build-linux.yml --repo Rizzo-AI-Academy/rizzo-pii -f release_tag=v2.0.0
+```
+
+Con `release_tag` il workflow compila **i sorgenti e il lockfile di quel tag**, usando
+lo script di packaging del workflow corrente. Controlla che la versione dell'app corrisponda e allega i quattro pacchetti alla release. Con un nuovo
+tag `v*` parte automaticamente insieme a `release.yml`. La pubblicazione avviene
+solo dopo che entrambe le build sono riuscite; gli asset esistenti con lo stesso nome
+vengono sostituiti. Le PR che modificano il packaging Linux/Tauri eseguono la build e
+salvano solo artifact, senza pubblicare release.
+
+Il packaging rimuove dal sidecar solo gli eseguibili `torch/bin/test_*` inclusi nei
+wheel PyTorch: servono ai test C++ di PyTorch, non all'inferenza. Senza questo passaggio
+`linuxdeploy` falliva su `test_shim`, senza riuscire a risolvere la dipendenza `libtorch.so`.
+`torch_shm_manager` e le librerie del backend restano inclusi. La CLI Tauri viene
+installata con `npm ci` e usa `--verbose`, così gli errori AppImage sono leggibili.
+In caso di errore il workflow conserva il log come artifact e salva la cache Rust.
+
+Gli artifact del run richiedono accesso a GitHub e scadono: per distribuire il download
+agli utenti occorre allegare i pacchetti a una **release**. Aggiungere il workflow non
+aggiunge da solo il file ARM64 alla release 2.0.0 gia' pubblicata: serve il dispatch dei
+manutentori dopo il merge.
 
 ### Con Docker (consigliato: riproducibile, non sporca il sistema)
 

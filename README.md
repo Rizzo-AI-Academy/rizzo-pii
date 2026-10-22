@@ -306,6 +306,11 @@ Packaging instructions in **[docs/BUILD.md](docs/BUILD.md)**.
 > arm64 — **signed & notarized** by Apple, just open it), and a **Linux AppImage** (`chmod +x` then
 > run) are all available now.
 
+Linux packages must match the CPU: `amd64`/`x86_64` for Intel/AMD, `arm64`/`aarch64` for
+ARM64. **Linux on Apple Silicon needs a Linux ARM64 package**; the macOS `.dmg` is for
+macOS. If a release has no Linux ARM64 asset, see the
+[native ARM64 build and release workflow](docs/BUILD.md#linux-arm64-aarch64--apple-silicon-con-linux).
+
 ---
 
 ## Inference quickstart

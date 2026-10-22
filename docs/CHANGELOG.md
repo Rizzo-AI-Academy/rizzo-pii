@@ -5,6 +5,35 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-10-06 — AppImage: esclusi gli eseguibili di test PyTorch dal sidecar
+
+La prima build Linux della PR #138 compilava l'app e il `.deb`, poi falliva durante
+l'AppImage: PyInstaller includeva i test C++ di PyTorch, e `linuxdeploy` si fermava
+su `torch/bin/test_shim`, senza riuscire a risolvere la sua dipendenza `libtorch.so`. `build_linux.sh` rimuove solo `torch/bin/test_*` prima del bundle,
+conservando `torch_shm_manager` e le librerie usate dall'app.
+
+La CI prova ora il backend estratto dall'AppImage, usa il packaging aggiornato anche
+per completare tag esistenti, conserva log diagnostici e salva la cache Rust anche
+quando il packaging fallisce. `npm ci` mantiene la CLI del lockfile e `--verbose`
+rende visibile il dettaglio degli errori del bundler.
+
+---
+
+## 2026-10-05 — Installer Linux ARM64 e build native automatizzate (issue #123)
+
+La release 2.0.0 offriva solo installer Linux x86_64; il `.dmg` ARM64 e' un'app macOS
+e non si puo' usare su Apple Silicon con Linux. Il nuovo workflow `build-linux.yml`
+compila sidecar e Tauri su runner Linux nativi x86_64 e ARM64, produce `.deb` e
+AppImage con nomi distinti, verifica l'architettura dei binari e del pacchetto Debian
+e prova l'avvio offline e un'anonimizzazione con il modello incluso.
+
+Le build sono verificabili sulle PR; i tag pubblicano entrambi i formati per entrambe
+le CPU. Un dispatch con `release_tag` permette ai manutentori di completare una
+release esistente compilando i suoi sorgenti, senza cambiare la versione dell'app.
+README e guida build spiegano quale pacchetto scegliere e come costruirlo localmente.
+
+---
+
 ## 2026-09-01 — PDF fillable: i campi modulo entrano in `/analyze` (`pdf_text.py`)
 
 `_text_from_bytes` leggeva solo `page.get_text()`. Nei PDF con AcroForm (moduli
