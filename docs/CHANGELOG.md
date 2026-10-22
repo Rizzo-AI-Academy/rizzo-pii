@@ -5,6 +5,22 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-10-22 — Il PDF protetto da password si riconosce già al caricamento (`app.py`)
+
+Completa la voce del 2026-09-25: lì il server rispondeva già col messaggio chiaro, ma
+appena si trascinava o sceglieva il file l'UI diceva solo "Anteprima del PDF non
+disponibile", teneva il file e lasciava premere "Anonimizza" per ricevere l'errore dopo.
+Ora `_text_from_bytes()` alza `PdfLocked` (sottoclasse di `ValueError`, quindi le altre vie
+non cambiano) e `/preview` lo segnala con `"code": "pdf_locked"`: l'UI lo riconosce dal
+codice e non dal testo, che è solo in italiano, avvisa nella lingua scelta e toglie il file
+dalla dropzone. Test in `tests/test_pdf_protetto.py`.
+
+Nella stessa passata, la pillola dello zoom (voce sotto) resta ferma a destra anche
+scorrendo in orizzontale una pagina ingrandita (`left:0` sullo sticky): prima scorreva via
+insieme alla pagina.
+
+---
+
 ## 2026-10-22 — anteprima PDF: zoom sulle pagine ([issue #92](https://github.com/Rizzo-AI-Academy/rizzo-pii/issues/92))
 
 Le due colonne di anteprima PDF (documento originale e "PDF censurato") mostravano le pagine

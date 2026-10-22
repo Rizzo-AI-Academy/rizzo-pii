@@ -44,6 +44,11 @@ class PdfProtetto(unittest.TestCase):
             self.assertEqual(r.status_code, 400, route)
             self.assertIn(MSG, r.get_json()["error"], route)
 
+    def test_preview_da_il_codice_all_ui(self):
+        # l'UI riconosce il caso dal codice, non dal testo (che e' solo in italiano)
+        r = self._post("/preview", _pdf(user_pw="apertura", owner_pw="proprietario"))
+        self.assertEqual(r.get_json().get("code"), "pdf_locked")
+
     def test_con_la_sola_password_del_proprietario_si_legge(self):
         r = self._post("/analyze", _pdf(user_pw="", owner_pw="proprietario", permissions=0))
         self.assertEqual(r.status_code, 200)

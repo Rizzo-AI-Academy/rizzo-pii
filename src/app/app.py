@@ -529,7 +529,7 @@ def _text_from_bytes(name, data):
             # encrypted". Un PDF con la sola password del proprietario si apre: needs_pass
             # e' falso e si prosegue.
             if doc.needs_pass:
-                raise ValueError("PDF protetto da password: rimuovi la protezione e riprova.")
+                raise PdfLocked("PDF protetto da password: rimuovi la protezione e riprova.")
             # Non solo page.get_text(): nei PDF fillable il valore sta nei
             # widget AcroForm (issue #85). Stesso contratto di pdf_export.
             return pdf_text.collect_readable_text(doc)
@@ -555,6 +555,11 @@ def _text_from_bytes(name, data):
         f"Formato non supportato: {ext or name or 'sconosciuto'}. "
         "Accetto .pdf, .md, .txt oppure testo incollato."
     )
+
+
+class PdfLocked(ValueError):
+    """PDF con password di apertura: /preview lo segnala con `code`, cosi' l'UI lo
+    dice nella sua lingua invece di "Anteprima del PDF non disponibile"."""
 
 
 def _extract_upload(fs):
@@ -751,6 +756,8 @@ def preview_route():
     try:
         text = _text_from_bytes(name, data)
         doc_id, n_pages = _store_doc(data, name)
+    except PdfLocked as e:
+        return jsonify({"error": f"Impossibile leggere il file: {e}", "code": "pdf_locked"}), 400
     except Exception as e:                           # PDF corrotto / protetto
         return jsonify({"error": f"Impossibile leggere il file: {e}"}), 400
     return jsonify({"doc_id": doc_id, "n_pages": n_pages,
@@ -1000,7 +1007,7 @@ PAGE = r"""
   /* zoom: pulsanti +/- sticky in alto a destra, ctrl+rotellina fa lo stesso (issue #92).
      La barra e' a tutta larghezza ma "vuota" (pointer-events:none) cosi' non ruba i click
      sulla pagina sotto: solo la pillola dei pulsanti li riceve. */
-  .zoomctl{position:sticky;top:0;z-index:3;display:flex;justify-content:flex-end;
+  .zoomctl{position:sticky;top:0;left:0;z-index:3;display:flex;justify-content:flex-end;
            pointer-events:none;margin-bottom:8px}
   .zoomctl .pill{pointer-events:auto;display:flex;align-items:center;gap:1px;
                  background:rgba(255,255,255,.94);border:1px solid var(--line);border-radius:999px;
@@ -1407,6 +1414,7 @@ const T = {
   v_pdf:"Anteprima PDF", v_raw:"Testo", v_opdf:"PDF censurato",
   t_prev_loading:"Renderizzo il PDF…", t_prev_err:"Anteprima del PDF non disponibile",
   t_pdf_render:"Genero il PDF anonimizzato…",
+  t_pdf_locked:"PDF protetto da password: rimuovi la protezione e riprova",
   t_zoom_out:"Riduci zoom", t_zoom_in:"Aumenta zoom", t_zoom_reset:"Reimposta zoom",
   empty_prev:"L'anteprima con le PII evidenziate apparirà qui.",
   anon_ph:"Il testo anonimizzato apparirà qui.",
@@ -1471,6 +1479,7 @@ const T = {
   v_pdf:"PDF preview", v_raw:"Text", v_opdf:"Redacted PDF",
   t_prev_loading:"Rendering the PDF…", t_prev_err:"PDF preview not available",
   t_pdf_render:"Building the anonymized PDF…",
+  t_pdf_locked:"Password-protected PDF: remove the protection and try again",
   t_zoom_out:"Zoom out", t_zoom_in:"Zoom in", t_zoom_reset:"Reset zoom",
   empty_prev:"The preview with highlighted PII will appear here.",
   anon_ph:"The anonymized text will appear here.",
@@ -1639,6 +1648,12 @@ async function onFile(f){
     const fd=new FormData();fd.append('pdf',f);
     const r=await fetch('/preview',{method:'POST',body:fd});
     const d=await r.json();
+    if(d.code==='pdf_locked'){        // non si legge: niente da anonimizzare, via il file
+      SRC_DOC=null;$('srcTabs').style.display='none';setSrcView('text');
+      $('pdf').value='';$('dropTxt').innerHTML=tt('drop');
+      $('inHint').innerHTML=tt('in_hint');$('inHint').style.display='';
+      toast(tt('t_pdf_locked'),false,4000);return;
+    }
     if(!r.ok)throw new Error(d.error||'');
     SRC_DOC=d;$('src').value=d.text||'';
     renderPages($('pdfSrcView'),d);
