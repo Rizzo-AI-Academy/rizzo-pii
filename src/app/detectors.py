@@ -286,6 +286,54 @@ def detect_iban(text):
     return [e for e in ents if e["end"] > e["start"]]
 
 
+# CF nel formato di STAMPA: le voci CF di DETECTORS vedono solo i sedici caratteri
+# attaccati, ma su tesserini, moduli e intestazioni il codice e' scritto a gruppi
+# ("RSS MRA 85H12 F205Y", "RSSMRA.85H12.F205Y"), a lettere spaziate, o spezzato da
+# un a-capo del testo estratto. Il modello non compensa: su queste forme resta in
+# chiaro, per intero o in parte accanto a un [CF_1] rassicurante.
+#
+# Ogni carattere ha la sua classe (le cifre ammettono le lettere dell'omocodia) e fra
+# due caratteri si tollera un separatore: fino a tre spazi (PDF giustificati), un
+# punto o un trattino, un a-capo. Tre vincoli tengono fuori la prosa:
+#   - i gruppi devono essere quelli con cui il codice si stampa davvero (_CF_GRUPPI);
+#     un solo a-capo invece puo' cadere ovunque, e non conta come confine di gruppo;
+#   - il checksum e' obbligatorio, come per la voce omocodica: con i separatori la
+#     forma da sola e' troppo larga per bastare;
+#   - almeno tre delle sette cifre devono essere cifre vere. Le lettere dell'omocodia
+#     rendono "furono trattenute" (6 + 10) un CF di forma valida, e il checksum passa
+#     una volta su 26: su 470M caratteri di Wikipedia e testo legale sono 4 casi.
+#     L'omocodia sostituisce da destra e raramente piu' di una o due cifre.
+_CF_SEP = r"(?:[^\S\r\n]{1,3}|[^\S\r\n]?[.\-][^\S\r\n]?|[^\S\r\n]*\r?\n[^\S\r\n]*)?"
+_CF_L, _CF_D = r"[A-Za-z]", r"[\dLMNPQRSTUVlmnpqrstuv]"
+_CF_STAMPA = re.compile(r"(?<![A-Za-z0-9])" + _CF_SEP.join(
+    [_CF_L] * 6 + [_CF_D] * 2 + [_CF_L] + [_CF_D] * 2 + [_CF_L] + [_CF_D] * 3 + [_CF_L])
+    + r"(?![A-Za-z0-9])")
+# (16,) e' il codice attaccato che va a capo: tolto l'a-capo, un gruppo solo
+_CF_GRUPPI = {(16,), (3, 3, 5, 5), (6, 5, 5), (6, 10), (6, 2, 1, 2, 4, 1),
+              (3, 3, 2, 1, 2, 4, 1), (1,) * 16}
+_CF_CIFRE_VERE = 3
+
+
+def detect_cf_stampato(text):
+    """CF scritto con separatori; la forma compatta resta alle voci di DETECTORS."""
+    ents = []
+    for m in _CF_STAMPA.finditer(text):
+        s = m.group()
+        if s.isalnum():
+            continue                    # compatto: gia' coperto, con le sue regole
+        if s.count("\n") > 1:
+            continue                    # un codice va a capo una volta; una colonna a ogni cella
+        # l'a-capo non separa un gruppo: si toglie prima di contare i gruppi
+        gruppi = tuple(len(g) for g in re.split(r"[^A-Za-z0-9]+", re.sub(r"\s*\n\s*", "", s)))
+        if gruppi not in _CF_GRUPPI:
+            continue
+        codice = re.sub(r"[^A-Za-z0-9]", "", s)
+        if sum(c.isdigit() for c in codice) >= _CF_CIFRE_VERE and cf_ok(codice):
+            ents.append({"label": "CF", "start": m.start(), "end": m.end(),
+                         "score": 1.0, "validated": True, "source": "regex"})
+    return ents
+
+
 # Dalla piu' lunga: le stesse lunghezze che accetta luhn_ok, cosi' un PAN non viene
 # tagliato a una lunghezza piu' corta che passa il Luhn per caso (con 17 fuori dalla
 # lista, di un PAN di 17 cifre se ne coprivano 16 e l'ultima restava in chiaro).
@@ -320,7 +368,7 @@ def _card_senza_scadenza(text, start, end):
 
 def detect_regex(text):
     """Entita' della rete regex. validated=True solo quando il checksum passa."""
-    ents = detect_iban(text)
+    ents = detect_iban(text) + detect_cf_stampato(text)
     for label, rx, validator, strict in DETECTORS:
         for m in rx.finditer(text):
             start, end = m.start(), m.end()

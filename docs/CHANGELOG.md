@@ -5,6 +5,21 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-09-28 — CF nel formato di stampa (`detectors.py`)
+
+Le voci CF della rete regex vedevano solo i sedici caratteri attaccati. Scritto a
+gruppi (`RSS MRA 85H12 H501V`), col trattino, a lettere spaziate o spezzato da un
+a-capo del testo estratto, il codice restava al modello: a gruppi, a capo o a lettere
+spaziate non lo copre per intero nell'84-89% dei casi, e ne resta in chiaro tutto o
+un pezzo accanto a un `[CF_1]`.
+
+`detect_cf_stampato` accetta i separatori solo nei raggruppamenti con cui il codice
+si stampa davvero (un a-capo invece ovunque, una volta), pretende il checksum e
+almeno tre cifre vere: senza quest'ultimo vincolo le lettere dell'omocodia fanno di
+"furono trattenute" un CF valido. Su 492M caratteri di testo reale (Wikipedia,
+testo legale, EUR-Lex, log) le span nuove sono 31, tutte codici fiscali veri stampati
+a gruppi negli allegati dei regolamenti UE; nessun falso positivo.
+
 ## 2026-09-01 — PDF fillable: i campi modulo entrano in `/analyze` (`pdf_text.py`)
 
 `_text_from_bytes` leggeva solo `page.get_text()`. Nei PDF con AcroForm (moduli
