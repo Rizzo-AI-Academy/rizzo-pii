@@ -60,6 +60,8 @@ from flask import (Flask, jsonify, render_template_string, request,
 import pdf_export
 import pdf_text
 import server_config
+# Chunking per il modello: anche questo senza torch, testabile da solo.
+from chunking import MAX_CHARS, MAX_WORDS, OVERLAP, chunk_text  # noqa: F401
 # Rete REGEX + CHECKSUM: modulo a parte, senza dipendenze dal modello. I nomi
 # restano importabili da qui (`app.detect_regex`) per non rompere chi li usa.
 from detectors import (DETECTORS, SOFT_REGEX_LABELS, cf_ok,  # noqa: F401
@@ -123,8 +125,6 @@ if not getattr(sys, "_MEIPASS", None) and not os.path.isdir(MODEL_DIR):
 
 ASSETS_DIR = _resource_path("assets")   # mascotte / icone (servite su /assets/<file>)
 APP_VERSION = "2.0.0"                    # versione mostrata nell'UI (allineata a tauri.conf.json)
-MAX_WORDS = 120      # parole per chunk (~180 subword, sotto i 512 del training)
-OVERLAP = 20         # parole di sovrapposizione tra chunk consecutivi
 
 # --------------------------------------------------------------------------- #
 # Caricamento modello (una sola volta all'avvio)
@@ -276,23 +276,6 @@ def _get_prefs():
 # --------------------------------------------------------------------------- #
 # Chunking word-safe + inferenza del modello su tutto il documento
 # --------------------------------------------------------------------------- #
-def chunk_text(text, max_words=MAX_WORDS, overlap=OVERLAP):
-    """Ritorna [(sottostringa, offset_char_globale), ...] senza tagliare parole."""
-    words = list(re.finditer(r"\S+", text))
-    if not words:
-        return []
-    chunks, i = [], 0
-    step = max(1, max_words - overlap)
-    while i < len(words):
-        block = words[i:i + max_words]
-        start, end = block[0].start(), block[-1].end()
-        chunks.append((text[start:end], start))      # slice esatto -> offset diretti
-        if i + max_words >= len(words):
-            break
-        i += step
-    return chunks
-
-
 def detect_model(text):
     """Entita' trovate dal modello mmBERT su tutti i chunk, su offset globali."""
     chunks = chunk_text(text)
