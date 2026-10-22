@@ -21,6 +21,17 @@ ripetuto tre volte per build. Con `main` il drop viene accettato da Tauri e la p
 riceve niente (0 anteprime su 3); con la correzione il file arriva, parte `POST /preview` e
 il PDF compare nell'anteprima (3 su 3). Non provato su macOS e Linux: la issue riguarda
 Windows 11.
+## 2026-09-25 — Un PDF protetto da password rispondeva "document closed or encrypted" (`app.py`)
+
+`pdf_export` aveva già il messaggio chiaro, ma l'estrazione del testo fallisce prima: con un
+PDF che chiede la password di apertura `/analyze`, `/pdf` e `/pdf/preview` rispondevano
+l'errore grezzo di PyMuPDF, e l'UI lo mostrava così com'era premendo "Anonimizza".
+`_text_from_bytes()`, da cui passano tutte e quattro le vie, controlla `needs_pass` appena
+aperto il documento e risponde *"PDF protetto da password: rimuovi la protezione e
+riprova."*, lo stesso testo di `pdf_export`. Un PDF con la sola password del proprietario
+(stampa o copia bloccate) si apre come prima. Al caricamento l'anteprima continua a dire
+"Anteprima del PDF non disponibile": è il messaggio generico che l'UI dà a ogni errore di
+`/preview`. Test: `tests/test_pdf_protetto.py`.
 
 ---
 
