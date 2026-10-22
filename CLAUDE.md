@@ -108,6 +108,16 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   chiaro) — serve a confrontare gli importi o a tenere età/sesso in un caso clinico. Env
   `PII_EXCLUDE_TAGS`, campo `exclude_tags`. UI: icona 🏷️ nell'header → legenda dei 23 tag con
   toggle. La legenda (descrizioni IT/EN + esempi) vive in `TAGS` in cima a `app.py`.
+- **Valori lasciati in chiaro** (falsi positivi): nella tabella del **Dizionario reversibile** ogni voce ha
+  il pulsante 👁️ Mostra / 🛡️ Anonimizza (colonna "In chiaro"); in alternativa clic sul placeholder
+  nell'anteprima. La tabella elenca le voci del risultato completo, anche quelle in chiaro. La chiave è il **valore** (confronto `_norm`, qualunque tag), non il placeholder: si
+  liberano tutte le occorrenze di quel testo, mai un valore diverso se il documento cambia. Il server
+  manda sempre il risultato **completo** e l'UI applica il filtro lato client (`applyKeep`, istantaneo
+  e annullabile). Il PDF censurato riceve la lista come
+  `keep_values` (anche su `/analyze`; lista JSON, nel multipart come stringa JSON) e `analyze()` la
+  applica **dopo la numerazione**, così i placeholder coincidono con quelli a video. Con il
+  dizionario **off** non è disponibile (il client non ha i valori, per scelta). Lista non persistita;
+  si azzera con "Pulisci" o caricando un altro file.
 - **Dizionario reversibile on/off** (`MAPPING_ENABLED`, default **on**; env `PII_MAPPING=0`, campo
   `include_mapping`): con off l'anonimizzazione è **definitiva**. Non è cosmetico — `analyze()` non
   costruisce la mappa, la risposta non ha `mapping`, e i segmenti-entità **perdono il campo `t`**
