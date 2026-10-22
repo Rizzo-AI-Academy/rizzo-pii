@@ -990,12 +990,28 @@ PAGE = r"""
   /* render del PDF (pagine PNG servite da /doc/<id>/page/<n>.png).
      Sfondo scuro come un lettore PDF: le pagine bianche si staccano. */
   .pdfview{padding:12px;background:#e8e6ef}
-  .pdfview .pg{position:relative;width:100%;margin:0 0 12px;background:#fff;border-radius:4px;
-               overflow:hidden;box-shadow:0 1px 3px rgba(33,26,48,.18),0 6px 18px rgba(33,26,48,.10)}
+  .pdfview .pg{position:relative;width:calc(100% * var(--z,1));margin:0 auto 12px;background:#fff;
+               border-radius:4px;overflow:hidden;
+               box-shadow:0 1px 3px rgba(33,26,48,.18),0 6px 18px rgba(33,26,48,.10)}
   .pdfview .pg:last-child{margin-bottom:0}
   .pdfview .pg img{display:block;width:100%;height:auto;min-height:24px}
   .pdfview .pgn{position:absolute;right:7px;bottom:7px;background:rgba(28,35,48,.6);color:#fff;
                 font-size:11px;font-weight:700;border-radius:6px;padding:2px 7px;letter-spacing:.02em}
+  /* zoom: pulsanti +/- sticky in alto a destra, ctrl+rotellina fa lo stesso (issue #92).
+     La barra e' a tutta larghezza ma "vuota" (pointer-events:none) cosi' non ruba i click
+     sulla pagina sotto: solo la pillola dei pulsanti li riceve. */
+  .zoomctl{position:sticky;top:0;z-index:3;display:flex;justify-content:flex-end;
+           pointer-events:none;margin-bottom:8px}
+  .zoomctl .pill{pointer-events:auto;display:flex;align-items:center;gap:1px;
+                 background:rgba(255,255,255,.94);border:1px solid var(--line);border-radius:999px;
+                 padding:3px;box-shadow:0 1px 4px rgba(33,26,48,.15)}
+  .zoomctl button{width:23px;height:23px;border:none;background:transparent;border-radius:999px;
+                  font-size:14px;font-weight:700;color:var(--ink);cursor:pointer;line-height:1;
+                  transition:.12s}
+  .zoomctl button:hover{background:var(--line2)}
+  .zoomctl .zpct{font-size:11px;font-weight:700;color:var(--muted);min-width:36px;text-align:center;
+                 cursor:pointer;user-select:none}
+  .zoomctl .zpct:hover{color:var(--ink)}
   .pdfbusy{display:flex;align-items:center;justify-content:center;gap:10px;height:100%;
            color:var(--muted);font-size:13.5px;font-weight:600}
   .pdfbusy .spin{border-color:rgba(124,58,158,.25);border-top-color:var(--brand)}
@@ -1391,6 +1407,7 @@ const T = {
   v_pdf:"Anteprima PDF", v_raw:"Testo", v_opdf:"PDF censurato",
   t_prev_loading:"Renderizzo il PDF…", t_prev_err:"Anteprima del PDF non disponibile",
   t_pdf_render:"Genero il PDF anonimizzato…",
+  t_zoom_out:"Riduci zoom", t_zoom_in:"Aumenta zoom", t_zoom_reset:"Reimposta zoom",
   empty_prev:"L'anteprima con le PII evidenziate apparirà qui.",
   anon_ph:"Il testo anonimizzato apparirà qui.",
   copy:"Copia per ChatGPT", dl:"Scarica dizionario", dlpdf:"Scarica PDF anonimizzato",
@@ -1454,6 +1471,7 @@ const T = {
   v_pdf:"PDF preview", v_raw:"Text", v_opdf:"Redacted PDF",
   t_prev_loading:"Rendering the PDF…", t_prev_err:"PDF preview not available",
   t_pdf_render:"Building the anonymized PDF…",
+  t_zoom_out:"Zoom out", t_zoom_in:"Zoom in", t_zoom_reset:"Reset zoom",
   empty_prev:"The preview with highlighted PII will appear here.",
   anon_ph:"The anonymized text will appear here.",
   copy:"Copy for ChatGPT", dl:"Download dictionary", dlpdf:"Download anonymized PDF",
@@ -1554,6 +1572,7 @@ function toast(msg,ok=true,ms=1800){const t=$('toast');t.textContent=msg;t.class
    `loading=lazy` -> un PDF di 200 pagine non scarica 200 immagini all'apertura. */
 function renderPages(el,doc){
   el.innerHTML='';
+  el.appendChild(zoomBar(el));
   for(let i=0;i<doc.n_pages;i++){
     const pg=document.createElement('div');pg.className='pg';
     const im=document.createElement('img');
@@ -1565,6 +1584,26 @@ function renderPages(el,doc){
     el.appendChild(pg);
   }
   el.scrollTop=0;
+}
+
+/* barra zoom (issue #92): +/- e reset sulla %, piu' ctrl/cmd+rotellina sull'intera vista.
+   Il livello vive in --z su el stesso, letto da .pdfview .pg{width:...} in CSS; si azzera
+   a ogni nuovo rendering (nuovo documento = vista pulita, come per gli altri stati del pane). */
+function zoomBar(el){
+  const bar=document.createElement('div');bar.className='zoomctl';
+  const pill=document.createElement('div');pill.className='pill';
+  const out=document.createElement('button');out.type='button';out.textContent='−';out.title=tt('t_zoom_out');
+  const pct=document.createElement('span');pct.className='zpct';pct.title=tt('t_zoom_reset');
+  const inn=document.createElement('button');inn.type='button';inn.textContent='+';inn.title=tt('t_zoom_in');
+  const setZ=z=>{z=Math.max(.5,Math.min(3,z));el.style.setProperty('--z',z);pct.textContent=Math.round(z*100)+'%';};
+  const curZ=()=>parseFloat(el.style.getPropertyValue('--z'))||1;
+  out.onclick=()=>setZ(curZ()-.25);
+  inn.onclick=()=>setZ(curZ()+.25);
+  pct.onclick=()=>setZ(1);
+  el.onwheel=e=>{if(!e.ctrlKey&&!e.metaKey)return;e.preventDefault();setZ(curZ()+(e.deltaY<0?.1:-.1));};
+  pill.append(out,pct,inn);bar.appendChild(pill);
+  setZ(1);
+  return bar;
 }
 function busy(el,msg){
   el.innerHTML='<div class="pdfbusy"><span class="spin"></span>'+msg+'</div>';}

@@ -5,6 +5,19 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-10-22 — anteprima PDF: zoom sulle pagine ([issue #92](https://github.com/Rizzo-AI-Academy/rizzo-pii/issues/92))
+
+Le due colonne di anteprima PDF (documento originale e "PDF censurato") mostravano le pagine
+sempre alla stessa dimensione: su un documento con testo piccolo o un layout denso (moduli,
+tabelle) non c'era modo di ingrandire per verificare cosa fosse stato anonimizzato senza
+scaricare il file. Aggiunta una barra di zoom (`−`/`+`/percentuale, che resetta a 100%) sticky
+in alto a destra di ciascuna anteprima, più `Ctrl`/`Cmd` + rotellina come scorciatoia; le due
+colonne zoomano in modo indipendente, dal 50% al 300%. Puro frontend: le pagine restano le
+stesse PNG renderizzate server-side, lo zoom è solo CSS (`width` della pagina in funzione di
+una custom property `--z`) — nessuna modifica al backend, nessun modello coinvolto.
+
+---
+
 ## 2026-09-25 — Su Windows il drag & drop dei file non funzionava (`tauri/src-tauri/src/lib.rs`)
 
 Issue #96. La dropzone è HTML5 (`drop.addEventListener('drop', ...)` in `app.py`), ma la
@@ -21,6 +34,9 @@ ripetuto tre volte per build. Con `main` il drop viene accettato da Tauri e la p
 riceve niente (0 anteprime su 3); con la correzione il file arriva, parte `POST /preview` e
 il PDF compare nell'anteprima (3 su 3). Non provato su macOS e Linux: la issue riguarda
 Windows 11.
+
+---
+
 ## 2026-09-25 — Un PDF protetto da password rispondeva "document closed or encrypted" (`app.py`)
 
 `pdf_export` aveva già il messaggio chiaro, ma l'estrazione del testo fallisce prima: con un
