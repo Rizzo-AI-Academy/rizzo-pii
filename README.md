@@ -9,6 +9,10 @@
 **_Use frontier models without giving up your data._**
 
 <p>
+<a href="https://trendshift.io/repositories/120290?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-120290" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/120290" alt="Rizzo-AI-Academy%2Frizzo-pii | Trendshift" width="250" height="55"/></a>
+</p>
+
+<p>
 <img src="https://img.shields.io/badge/100%25-LOCAL-7c3aed?style=for-the-badge" alt="100% local" />
 <img src="https://img.shields.io/badge/GDPR-BY%20DESIGN-7c3aed?style=for-the-badge" alt="GDPR by design" />
 <img src="https://img.shields.io/badge/EU%20AI%20ACT-ALIGNED-7c3aed?style=for-the-badge" alt="EU AI Act aligned" />
