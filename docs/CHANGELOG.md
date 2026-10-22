@@ -5,6 +5,38 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-09-25 — Il nome del PDF anonimizzato riportava i dati del documento (`app.py`)
+
+Issue #97: il Garante ha contestato a una scuola un provvedimento anonimizzato il cui nome
+file conteneva ancora il cognome dell'alunno. Qui il nome era `{originale}_anonimizzato.pdf`,
+quindi `Rossi_Mario_sospensione.pdf` usciva `Rossi_Mario_sospensione_anonimizzato.pdf` da
+tutte e tre le vie di download (`/pdf`, `/pdf/preview`, `/doc/<id>/file.pdf`).
+
+`_nome_anonimizzato()` sostituisce nel nome ogni valore del dizionario con l'etichetta del
+suo segnaposto: `FULLNAME_1_sospensione_anonimizzato.pdf`. Cerca il valore intero con
+qualunque separatore (`12-03-2024`, `Mario_Rossi`) e, per i nomi di persona, anche le singole
+parole di almeno tre lettere, in qualunque ordine (`Rossi_Mario`, e `Cordella_Francesco` anche
+se il testo lo sillaba). Il confine di parola vale anche fra minuscola e maiuscola e fra
+lettera e cifra (`RossiMario`, `Rossi2024` → `FULLNAME_1_2024`). Maiuscole, accenti e legature
+non contano, compreso l'accento scomposto dei nomi file di macOS. Lavora sul nome originale,
+prima di `_safe_name()`, che ridurrebbe `Niccolò` a `Niccol_`: ancora riconoscibile, e non più
+confrontabile col testo. I valori troppo corti per cercarli nel PDF (`pdf_export._too_noisy`)
+restano fuori anche qui.
+
+Verifica: 35 nomi, fra cui i casi di una revisione indipendente (CamelCase, cifre attaccate,
+nome sillabato in ordine invertito, accenti scomposti, legature), tutti come atteso; restano
+intatti `Rossiello` e `grossi` accanto a `Rossi`, l'anno da solo accanto alla data intera e le
+parole comuni di una ragione sociale. Su 20.012 nomi senza PII, casi limite compresi, il
+risultato è identico a prima.
+
+Limiti: un cognome che compare solo nel nome del file non ha un segnaposto; le particelle di
+due lettere restano (`De` di `DeLuca`), e così il nome se il modello ha tagliato il valore a
+metà della sillabazione (solo `cesco Cordella`); le altre forme di un valore (una data ISO
+per `12/03/2024`, il telefono senza prefisso) non si riconoscono. Test:
+`tests/test_nome_file.py`, end-to-end sulle tre vie di download.
+
+---
+
 ## 2026-09-01 — PDF fillable: i campi modulo entrano in `/analyze` (`pdf_text.py`)
 
 `_text_from_bytes` leggeva solo `page.get_text()`. Nei PDF con AcroForm (moduli
