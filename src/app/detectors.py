@@ -270,7 +270,12 @@ def detect_iban(text):
             continue                    # troncato, oppure il codice prosegue oltre
         if grp:
             g = [x for x in re.split(r"[\s.\-]+", text[start:i]) if x]
-            if len(set(map(len, g[:-1]))) > 1 or len(g[-1]) > len(g[0]):
+            # I gruppi sono uniformi tranne l'ultimo, che porta il resto del codice. Un
+            # documento puo' stampare l'ultimo gruppo INTERO attaccato a quel resto
+            # ("... 0000 0123456" per un IT, resto 3): la coda arriva cosi' a
+            # len(g[0]) + resto. Oltre, la coda ha inghiottito una parola.
+            resto = n % len(g[0]) or len(g[0])
+            if len(set(map(len, g[:-1]))) > 1 or len(g[-1]) > len(g[0]) + resto:
                 continue                # gruppi disuguali: e' prosa, non un IBAN stampato
         if iban_ok(text[start:i]):
             ents.append({"label": "IBAN", "start": start, "end": i,

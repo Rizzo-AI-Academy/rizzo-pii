@@ -58,6 +58,9 @@ INTERI = [
     ("spazio_non_breaking", gruppi(4, " ")),
     ("spazi_multipli", gruppi(4, "   ")),          # PDF giustificato
     ("gruppi_di_5", gruppi(5)),
+    # un documento che stampa l'ultimo gruppo INTERO attaccato al resto: il resto di un IT
+    # e' di 3 caratteri, quindi la coda arriva a 7 (issue #135)
+    ("ultimo_gruppo_unito_al_resto", "IT60 X054 2811 1010 0000 0123456"),
     ("spezzato_a_fine_riga", A_CAPO),
     ("separatori_misti", "IT60-X054 2811-1010.0000 0123 456"),
     # il registro ISO delle lunghezze non copre tutti i paesi: la forma compatta
@@ -89,6 +92,10 @@ NESSUNO = [
      "Codice commessa GR14 0172 7402 1280 riferimento interno."),
     ("il_codice_prosegue_oltre",
      "Codice %s7890 interno." % IB),
+    # la coda puo' assorbire UN gruppo intero in piu' del resto (e' il caso sopra), non due:
+    # oltre quel limite la coda non e' piu' un gruppo stampato ma una parola inghiottita.
+    ("coda_che_assorbe_due_gruppi",
+     "Codice IT60 X054 2811 1010 00000123456 in atti."),
 ]
 
 
@@ -104,6 +111,19 @@ class IbanFormatoDiStampa(unittest.TestCase):
         for nome, testo in NESSUNO:
             with self.subTest(nome):
                 self.assertIsNone(iban_span(testo))
+
+    def test_il_documento_dell_issue_135(self):
+        """Issue #135: due IBAN nella stessa riga, il primo stampato con la coda unita.
+
+        Il caso del report: l'IT restava in chiaro e la sua coda usciva come
+        `[TELEPHONENUM_1]`, mentre il GB era corretto. Ora escono entrambi per intero.
+        """
+        testo = ("Rossi Holdings SpA Bank Account: IT60 X054 2811 1010 0000 0123456\n"
+                 "Smith Innovations Ltd Bank Account: GB82 WEST 1234 5698 7654 32")
+        iban = [testo[e["start"]:e["end"]] for e in detectors.detect_regex(testo)
+                if e["label"] == "IBAN"]
+        self.assertEqual(iban, ["IT60 X054 2811 1010 0000 0123456",
+                                "GB82 WEST 1234 5698 7654 32"])
 
     def test_un_codice_vicino_non_tronca_liban(self):
         """Un altro codice accanto non deve far finire l'IBAN a meta'.
