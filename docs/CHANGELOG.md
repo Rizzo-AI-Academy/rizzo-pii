@@ -5,6 +5,31 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-10-24 — L'IBAN stampato con l'ultimo gruppo unito al resto usciva in chiaro ([issue #135](https://github.com/Rizzo-AI-Academy/rizzo-pii/issues/135))
+
+`detect_iban()` (`src/app/detectors.py`) decide il confine destro dalla forma: consuma esattamente
+`IBAN_LEN` caratteri e poi chiede il mod-97. Prima però c'era una guardia sui gruppi («gruppi
+disuguali: è prosa, non un IBAN stampato») che scartava il candidato quando l'ultimo gruppo era più
+lungo del primo. Un documento che stampa l'ultimo gruppo **intero** attaccato al resto lo fa lungo
+`len(gruppo) + resto` (`... 0000 0123456` per un IT: 4 + 3 = 7), e il candidato veniva buttato: l'IBAN
+restava in chiaro e la coda la prendeva la regex dei telefoni (`IT60 X054 2811 1010 [TELEPHONENUM_1]`).
+Il GB non mostrava il problema solo perché il suo resto è di 2 caratteri, quindi la coda non
+superava il primo gruppo.
+
+La guardia ora ammette l'ultimo gruppo fino a `len(g[0]) + resto`, con `resto = n % len(g[0])`: è
+esattamente un gruppo intero assorbito nella coda. Oltre quel limite la coda non è più un gruppo
+stampato ma una parola inghiottita, e il candidato resta scartato come prima; i gruppi interni
+devono restare uniformi. La fusione (`_merge` in `app.py`) preferisce già le span validate, quindi il
+frammento `TELEPHONENUM` che si sovrappone perde e nessun pezzo dell'IBAN resta etichettato.
+
+Limite noto, ora fissato da un test: una coda che assorbe **due** gruppi interi
+(`IT60 X054 2811 1010 00000123456`) resta fuori. Allargare ancora la guardia vorrebbe dire accettare
+come coda una parola qualsiasi fino a 11 caratteri per un IT.
+
+Nessuna modifica al modello e nessun import nuovo: il file è solo regex + checksum. Test in
+`tests/test_iban_formato_stampa.py` (la coda unita tra i casi che escono per intero, il documento del
+report, e il limite della coda).
+
 ## 2026-10-22 — Il PDF protetto da password si riconosce già al caricamento (`app.py`)
 
 Completa la voce del 2026-09-25: lì il server rispondeva già col messaggio chiaro, ma
