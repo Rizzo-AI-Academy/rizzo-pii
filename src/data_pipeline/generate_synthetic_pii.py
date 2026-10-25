@@ -294,8 +294,74 @@ def _person():
     return random.choice(FEMALE_NAMES), random.choice(SURNAMES), "F"
 
 def _date():
+    """Data qualsiasi fra il 1955 e il 2005. Resta per la data di NASCITA dentro il codice
+    fiscale, che e' un dato interno al codice e non compare come entita' a se'."""
     d, m, y = random.randint(1, 28), random.randint(1, 12), random.randint(1955, 2005)
     return f"{d:02d}/{m:02d}/{y}", (d, m, y)
+
+
+# Stato dell'esempio corrente per le date. Riazzerato da build_example.
+#
+# Perche' serve: ogni {DATE} pescava una data indipendente fra il 1955 e il 2005, e in un
+# documento vero le date non sono indipendenti. Uscivano righe come "Periodo di riferimento:
+# dal 15/01/2003 al 07/05/1964" -- un periodo che va a rovescio -- e "Data di scadenza:
+# 07/04/1982" su una bolletta. Le etichette erano esatte e la prosa impossibile: un contesto
+# impossibile e' un contesto che il modello non incontrera' mai.
+#
+# Il criterio: un documento ha una PROPRIA data, recente, e le date che contiene procedono
+# in avanti da quella. L'eccezione sono le date di nascita, che stanno molto prima -- e si
+# riconoscono da come il testo le introduce, non indovinando.
+_DATE_CTX = {"doc": None, "ultima": None, "testo": ""}
+
+# Come il testo italiano annuncia una data di nascita SUBITO prima di scriverla. La regola
+# e' ancorata alla fine del testo e non attraversa un confine di frase: cercando "nato il"
+# in una finestra larga si prende l'annuncio della frase precedente, e in "nato il
+# 29/08/1945. Dal {DATE}" anche la seconda data diventerebbe una nascita.
+CUE_NASCITA_RE = re.compile(r"(?:nat[oai]|nate|nascita)\b[^.;:\n]{0,20}(?::\s*)?$",
+                            re.IGNORECASE)
+
+
+def _giorni_a_data(giorni_da_1970):
+    """Data d/m/a da un numero di giorni, senza usare datetime (il modulo non e'
+    importato qui e il calcolo serve solo per far avanzare una data di qualche mese)."""
+    import datetime as _dt
+    d = _dt.date(1970, 1, 1) + _dt.timedelta(days=giorni_da_1970)
+    return f"{d.day:02d}/{d.month:02d}/{d.year}", d.toordinal()
+
+
+def _data_documento():
+    """Data del documento: recente, perche' un atto o una bolletta sono di questi anni."""
+    import datetime as _dt
+    inizio = _dt.date(2019, 1, 1).toordinal()
+    fine = _dt.date(2026, 6, 30).toordinal()
+    return random.randint(inizio, fine)
+
+
+def _data_di_nascita():
+    import datetime as _dt
+    return random.randint(_dt.date(1940, 1, 1).toordinal(),
+                          _dt.date(2006, 12, 31).toordinal())
+
+
+def _prossima_data():
+    """La prossima data del documento, coerente con quelle gia' scritte.
+
+    Se il testo appena prima annuncia una nascita, e' una data di nascita e non entra nella
+    catena. Altrimenti parte dalla data del documento e avanza: la prima resta vicina al
+    documento, le successive vanno in avanti di qualche giorno o mese, cosi' "dal ... al ..."
+    ha un verso e una scadenza cade dopo l'emissione."""
+    import datetime as _dt
+    if CUE_NASCITA_RE.search(_DATE_CTX["testo"][-40:]):
+        ordinale = _data_di_nascita()
+        return _dt.date.fromordinal(ordinale).strftime("%d/%m/%Y")
+    if _DATE_CTX["doc"] is None:
+        _DATE_CTX["doc"] = _data_documento()
+    base = _DATE_CTX["ultima"] or _DATE_CTX["doc"]
+    # avanti di 1 giorno a ~10 mesi: copre "dal 3 al 7", "entro 30 giorni", "esercizio 2024"
+    ordinale = base + random.choice([1, 2, 3, 5, 7, 10, 14, 15, 20, 30, 30, 45, 60, 90,
+                                     120, 180, 300])
+    _DATE_CTX["ultima"] = ordinale
+    return _dt.date.fromordinal(ordinale).strftime("%d/%m/%Y")
 
 # Negli atti, nei moduli e nelle intestazioni il nome si scrive anche COGNOME NOME
 # ("Egr. Rossi Mario"). Generandone un ordine solo il modello impara quello: sull'altro
@@ -368,7 +434,7 @@ def province_piece():
     return [(CITIES[random.choice(CITY_NAMES)][1], "PROVINCE")]
 
 def date_piece():
-    return [(_date()[0], "DATE")]
+    return [(_prossima_data(), "DATE")]
 
 def piva_piece():
     return [(partita_iva(), "PIVA")]
@@ -696,6 +762,7 @@ def load_external_templates(path=str(SYNTH_DIR / "legal_templates.json")):
 
 def build_example(template_id, templates):
     template = templates[template_id]
+    _DATE_CTX.update(doc=None, ultima=None, testo="")
     text = ""
     entities = []
     pos = 0
@@ -704,6 +771,9 @@ def build_example(template_id, templates):
             continue
         m = SLOT_RE.fullmatch(part)
         if m:
+            # il testo scritto finora serve a {DATE} per capire se sta per scrivere una
+            # data di nascita ("nato il ...") invece di una data del documento
+            _DATE_CTX["testo"] = text
             for piece_text, label in SLOTS[m.group(1)]():
                 start = len(text)
                 text += piece_text
