@@ -5,6 +5,33 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-10-23 — Su Windows ogni `/analyze` lasciava vivo un pool di thread di torch (`app.py`)
+
+Il server cresceva senza limite: dopo 300 richieste a `/analyze` in sequenza, da 91 a
+4.576 thread e da 1,7 a 3,8 GB (issue #139, misurato con il modello v1.5.0 e
+`torch.get_num_threads()` = 16: 15 thread a richiesta, nella issue erano 7).
+
+La causa non è Flask ma torch: il pool OpenMP (`torch.get_num_threads() - 1` thread)
+nasce per ogni thread che chiama il modello e su Windows non viene liberato quando quel
+thread finisce. Lo fa anche torch da solo: 50 thread che fanno una moltiplicazione e
+terminano lasciano ~750 thread vivi. `app.run(threaded=True)` usa un thread nuovo per
+ogni richiesta, quindi ogni richiesta lasciava un pool intero.
+
+`detect_model()` ora passa l'inferenza a un `ThreadPoolExecutor` con un solo worker:
+il modello gira sempre sullo stesso thread e il pool nasce una volta sola. Dopo 600
+richieste il processo resta a 92 thread e 1,7 GB, sia in sequenza sia con 4 client in
+parallelo. La richiesta singola scende da ~53 a ~34 ms (il pool non si ricrea ogni
+volta); in parallelo il tempo complessivo resta quasi lo stesso, perché sulla CPU torch
+usa già tutti i core. Sui testi di `tests/fixtures_economico_giuridiche.jsonl` le entità
+del modello sono identiche a quelle della chiamata diretta.
+
+Scartato il passaggio a `waitress`, proposto nella issue: tiene fermo il numero di
+thread del server e quindi aggira il problema, ma aggiunge una dipendenza, va cambiato
+nei tre entry point e nel packaging, e lascia il difetto a chi usa `app.run` o importa
+il modulo. Test: `tests/test_thread_inferenza.py`.
+
+---
+
 ## 2026-10-22 — Il PDF protetto da password si riconosce già al caricamento (`app.py`)
 
 Completa la voce del 2026-09-25: lì il server rispondeva già col messaggio chiaro, ma
