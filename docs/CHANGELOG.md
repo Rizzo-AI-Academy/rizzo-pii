@@ -5,6 +5,18 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-11-04 — Ripristino di un PDF con i placeholder: `POST /restore/pdf` (`app.py`, `pdf_export.py`)
+
+Finora il ripristino valeva solo per il testo incollato nella scheda «Ripristina la risposta».
+Se l'LLM produce un **PDF** (relazione, lettera, tabella), i placeholder restavano nel file.
+`pdf_export.restore_pdf()` è l'inverso di `redact_pdf()`: per ogni riga che contiene un
+placeholder del dizionario la riga viene rimossa dal content stream e riscritta nella stessa
+posizione con i valori veri (Helvetica, grassetto se lo era; corpo ridotto fino a 5 pt solo se
+la riga non entra nel margine). Riscrivere la riga intera, e non il solo placeholder, evita che un
+valore più lungo (IBAN al posto di `[IBAN_1]`) si sovrapponga al testo che segue. I placeholder
+non presenti nel dizionario restano visibili e vengono contati (`X-PII-Unknown`). Il dizionario
+arriva nella richiesta e non viene salvato. Test in `tests/test_ripristino_pdf.py`.
+
 ## 2026-10-22 — Il PDF protetto da password si riconosce già al caricamento (`app.py`)
 
 Completa la voce del 2026-09-25: lì il server rispondeva già col messaggio chiaro, ma

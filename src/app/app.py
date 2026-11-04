@@ -31,6 +31,9 @@ Endpoint HTTP:
                   il PDF anonimizzato resta in memoria e si guarda pagina per pagina
   GET  /doc/<id>/page/<n>.png   pagina renderizzata (anteprima a video)
   GET  /doc/<id>/file.pdf       download del documento tenuto in memoria
+  POST /restore/pdf  multipart con un PDF che contiene i placeholder + campo "mapping"
+                  (JSON placeholder -> valore) -> PDF con i valori reali, impaginazione
+                  conservata (inverso di /pdf)
   GET  /settings  legenda dei 23 tag, tag esclusi, stato del dizionario reversibile
   POST /settings  {"excluded_tags": [...], "mapping_enabled": bool} -> salva in prefs.json
                   (/tags e' un alias storico degli stessi due endpoint)
@@ -44,6 +47,7 @@ Preferenze di anonimizzazione (precedenza): campo nella richiesta > CLI --exclud
 """
 
 import bisect
+import json
 import os
 import re
 import secrets
@@ -737,6 +741,36 @@ def pdf_preview_route():
         "skipped": len(report.get("skipped", [])),
         "not_found": len(report.get("not_found", [])),
     })
+
+
+@app.route("/restore/pdf", methods=["POST"])
+def restore_pdf_route():
+    """Ripristina un PDF che contiene i placeholder (ad esempio scaricato dall'LLM):
+    multipart con il file ("file" o "pdf") e il dizionario nel campo "mapping"
+    (JSON {"[FULLNAME_1]": "Mario Rossi", ...}, lo stesso che si salva dall'UI).
+    Risponde con il PDF ripristinato, impaginazione conservata. Il dizionario serve
+    solo a questa richiesta: non viene salvato ne' registrato."""
+    up = _uploaded_file()
+    if up is None:
+        return jsonify({"error": "Nessun file caricato."}), 400
+    name, data = up.filename, up.read()
+    if not _is_pdf(name, data):
+        return jsonify({"error": "Il ripristino vale solo per i PDF."}), 400
+    try:
+        mapping = json.loads(request.form.get("mapping") or "{}")
+    except ValueError:
+        return jsonify({"error": "Dizionario non valido (JSON)."}), 400
+    try:
+        out, report = pdf_export.restore_pdf(data, mapping)
+    except pdf_export.PdfError as e:
+        return jsonify({"error": str(e)}), 400
+    resp = app.response_class(out, mimetype="application/pdf")
+    resp.headers["Content-Disposition"] = f"attachment; filename={_safe_name(name)}"
+    resp.headers["X-PII-Restored"] = str(report["occurrences"])
+    resp.headers["X-PII-Notfound"] = str(len(report["not_found"]))
+    resp.headers["X-PII-Unknown"] = str(len(report["unknown"]))
+    resp.headers["X-PII-Shrunk"] = str(report["shrunk"])
+    return resp
 
 
 # --------------------------------------------------------------------------- #
