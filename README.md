@@ -500,6 +500,13 @@ Documents live in a small in-memory LRU and **never touch disk**. `POST /pdf/pre
 work as `POST /pdf` but keeps the binary server-side and answers with `{doc_id, n_pages, residual,
 skipped}`, so previewing then downloading costs **one** anonymization, not two.
 
+`POST /restore/pdf` is the way back: send a PDF that **contains placeholders** (for example one the
+LLM generated) plus the session dictionary in a `mapping` field (`{"[FULLNAME_1]": "Mario Rossi", ...}`)
+and you get the PDF with the real values, **layout preserved**. Each line that holds a placeholder is
+removed from the content stream and rewritten in place, so a value longer than its placeholder (an IBAN
+instead of `[IBAN_1]`) pushes the rest of the line instead of overlapping it. The dictionary is used for
+that request only: nothing is stored or logged.
+
 ### Reversible or irreversible: your call
 
 By default every PII gets a reversible ID and a **local dictionary**, so you can restore the real

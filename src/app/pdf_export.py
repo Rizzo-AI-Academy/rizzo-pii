@@ -446,6 +446,108 @@ def redact_pdf(pdf_bytes, mapping, fill=REDACT_FILL, text_color=REDACT_TEXT):
     }
 
 
+def restore_pdf(pdf_bytes, mapping):
+    """PDF con i placeholder -> PDF con i valori reali, impaginazione conservata.
+
+    E' il percorso inverso di redact_pdf(): serve a ripristinare un PDF prodotto da
+    un LLM (che contiene [FULLNAME_1], [IBAN_1], ...) usando il dizionario della
+    sessione. Si lavora RIGA PER RIGA: ogni riga che contiene un placeholder noto
+    viene rimossa dal content stream (redazione vera) e riscritta nella stessa
+    posizione con i valori reali, cosi' un valore piu' lungo del placeholder (un IBAN
+    al posto di [IBAN_1]) sposta il resto della riga invece di sovrapporsi. Le righe
+    riscritte usano Helvetica (grassetto se lo era la riga); se la riga non entra
+    fino al margine destro il corpo del testo scende, non sotto i 5 pt.
+
+    mapping: {"[FULLNAME_1]": "Mario Rossi", ...}
+    Ritorna (bytes, report) con report = {
+        "occurrences":    placeholder sostituiti,
+        "by_placeholder": {placeholder: n_occorrenze},
+        "not_found":      placeholder del dizionario assenti dal PDF,
+        "unknown":        placeholder presenti nel PDF ma non nel dizionario,
+        "lines":          righe riscritte,
+        "shrunk":         righe riscritte con un corpo piu' piccolo per starci,
+    }
+    """
+    if not isinstance(mapping, dict) or not mapping:
+        raise PdfError("Dizionario vuoto: carica il dizionario della sessione.")
+    items = {ph: v for ph, v in mapping.items()
+             if isinstance(ph, str) and ph.strip() and isinstance(v, str)}
+    if not items:
+        raise PdfError("Dizionario non valido.")
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        raise PdfError("File PDF non valido o danneggiato.")
+    if doc.needs_pass:
+        doc.close()
+        raise PdfError("PDF protetto da password: rimuovi la protezione e riprova.")
+
+    tag_rx = re.compile(r"\[[A-Z]+(?:_[A-Z]+)*_\d+\]")
+    by_ph = {ph: 0 for ph in items}
+    unknown = set()
+    total = n_lines = n_shrunk = 0
+
+    def sub(m):
+        ph = m.group(0)
+        if ph in items:
+            by_ph[ph] += 1
+            return items[ph]
+        unknown.add(ph)
+        return ph
+
+    for page in doc:
+        rewrites = []
+        for block in page.get_text("dict").get("blocks", []):
+            for line in block.get("lines", []):
+                spans = [s for s in line.get("spans", []) if s.get("text")]
+                if not spans:
+                    continue
+                text = "".join(s["text"] for s in spans)
+                if not any(ph in text for ph in items):
+                    unknown.update(t for t in tag_rx.findall(text) if t not in items)
+                    continue
+                before = sum(by_ph.values())
+                restored = tag_rx.sub(sub, text)
+                total += sum(by_ph.values()) - before
+                first = spans[0]
+                bold = bool(first.get("flags", 0) & 16)
+                c = first.get("color", 0)
+                rewrites.append({
+                    "rect": fitz.Rect(line["bbox"]),
+                    "origin": fitz.Point(first["origin"]),
+                    "size": float(first.get("size", 10.0)) or 10.0,
+                    "font": "hebo" if bold else "helv",
+                    "color": ((c >> 16) / 255.0, ((c >> 8) & 255) / 255.0, (c & 255) / 255.0),
+                    "text": restored,
+                })
+        if not rewrites:
+            continue
+        for w in rewrites:
+            _add_redact_annot(page, w["rect"], None, 6, (1, 1, 1), (0, 0, 0))
+        page.apply_redactions()
+        right = page.rect.x1 - 28.0
+        for w in rewrites:
+            fs = w["size"]
+            width = fitz.get_text_length(w["text"], fontname=w["font"], fontsize=fs)
+            avail = max(right - w["origin"].x, w["rect"].width)
+            if width > avail:
+                fs = max(5.0, round(fs * avail / width, 1))
+                n_shrunk += 1
+            page.insert_text(w["origin"], w["text"], fontname=w["font"], fontsize=fs, color=w["color"])
+            n_lines += 1
+
+    out = doc.tobytes(garbage=3, deflate=True) if n_lines else pdf_bytes
+    doc.close()
+    return out, {
+        "occurrences": total,
+        "by_placeholder": by_ph,
+        "not_found": [ph for ph, n in by_ph.items() if n == 0],
+        "unknown": sorted(unknown),
+        "lines": n_lines,
+        "shrunk": n_shrunk,
+    }
+
+
 def _add_redact_annot(page, rect, text, fontsize, fill, text_color):
     """add_redact_annot con cross_out disattivato dove il binding lo supporta
     (le X diagonali sporcano il placeholder); fallback per le versioni vecchie."""
