@@ -199,6 +199,37 @@ class DetectorFormatTests(unittest.TestCase):
                    for e in detectors.detect_regex(testo) if e["label"] == "CF"}
         self.assertEqual(1, len(trovati))
 
+    def test_importo_senza_migliaia_include_i_centesimi(self):
+        # Senza separatore di migliaia lo span si fermava a tre cifre e la
+        # virgola bloccava l'allargamento: i centesimi restavano in chiaro.
+        casi = [
+            ("Il compenso è di euro 1500,00 oltre accessori.", "euro 1500,00"),
+            ("Importo € 12500,00 da versare.", "€ 12500,00"),
+            ("EUR 12500,50 bonifico.", "EUR 12500,50"),
+            ("Si liquida euro 25000,75 a saldo.", "euro 25000,75"),
+            ("EUR1500,50 senza spazio.", "EUR1500,50"),
+            ("Importo 12500,00 euro da versare.", "12500,00 euro"),
+            ("Importo € 12.500,00 da versare.", "€ 12.500,00"),
+            ("euro 1.250 senza centesimi.", "euro 1.250"),
+            ("€ 1 250,00 con lo spazio delle migliaia.", "€ 1 250,00"),
+        ]
+        for testo, atteso in casi:
+            with self.subTest(testo):
+                self.assertIn(atteso, spans(testo, "AMOUNT"))
+
+    def test_importo_non_divora_la_parola_vicina(self):
+        # "euro"/"EUR" non sono una sottoparola: altrimenti lo span parte a
+        # meta' parola e l'allargamento si prende il resto.
+        for testo in (
+            "neuro 1500,00 nel referto.",
+            "Vendita 12500,00 europeo da registrare.",
+            "Il mercato europeo vale poco.",
+        ):
+            with self.subTest(testo):
+                self.assertEqual([], spans(testo, "AMOUNT"))
+        testo = "Il mercato europeo vale euro 1500,00."
+        self.assertEqual(["euro 1500,00"], spans(testo, "AMOUNT"))
+
     def test_modulo_senza_dipendenze_pesanti(self):
         # E' la premessa della CI: i test dei detector girano senza il modello.
         # L'import va fatto in un processo pulito, altrimenti l'esito dipende da
