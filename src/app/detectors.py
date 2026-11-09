@@ -135,9 +135,30 @@ DETECTORS = [
      re.compile(r"(?<![\w.])(?:\+39[\s.\-]?)?(?:3\d{2}[\s.\-]?\d{3}[\s.\-]?\d{3,4}"
                 r"|0\d{1,3}[\s.\-]?\d{5,8})(?![\w])"),
      None, True),
+    # Importo. Due vincoli, entrambi perche' lo span sbagliato e' peggio di un
+    # mancato match: i centesimi restano in chiaro accanto al placeholder, oppure
+    # una parola vicina ci finisce dentro.
+    #   - La valuta e' una parola intera. Senza, "euro" combacia dentro "neuro"
+    #     ("neuro 1500" diventava un importo) e "EUR" dentro "europeo"
+    #     ("12500,00 europeo" si mangiava anche la parola: l'allargamento ai
+    #     confini di parola prosegue sulle lettere). Una cifra puo' stare
+    #     attaccata ("EUR1500"): il confine vieta solo un'altra lettera.
+    #   - Piu' di tre cifre senza separatore di migliaia. "euro 1500,00" si
+    #     fermava a "euro 1500": la virgola non e' un carattere di parola, quindi
+    #     l'allargamento non raggiunge i centesimi e ",00" resta in chiaro.
+    #     I gruppi (punto o spazio, "€ 12.500,00" / "€ 1 250,00") restano.
     ("AMOUNT",
-     re.compile(r"(?:€|EUR|euro)\s?\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})?"
-                r"|\d{1,3}(?:\.\d{3})*,\d{2}\s?(?:€|EUR|euro)", re.IGNORECASE),
+     re.compile(
+         r"(?:€|(?<!\w)(?:EUR|euro)(?![A-Za-z]))\s?"
+         r"\d{1,3}(?:[.\s]\d{3})+(?:,\d{2})?"
+         r"|(?:€|(?<!\w)(?:EUR|euro)(?![A-Za-z]))\s?"
+         r"\d+(?:,\d{2})?"
+         r"|(?<!\d)\d{1,3}(?:\.\d{3})+(?:,\d{2})\s?"
+         r"(?:€|(?:EUR|euro)(?![A-Za-z]))"
+         r"|(?<!\d)\d+(?:,\d{2})\s?"
+         r"(?:€|(?:EUR|euro)(?![A-Za-z]))",
+         re.IGNORECASE,
+     ),
      None, True),
     # il trattino e' un separatore quanto lo spazio ("AB-123-CD" nei moduli e negli
     # export): senza, la targa scritta cosi' non viene vista da nessuno dei due lati,
