@@ -74,6 +74,8 @@ class OnnxTokenClassifier:
         # sovrascrive con model_max_length, quindi qui si fa lo stesso.
         self.tokenizer = Tokenizer.from_file(os.path.join(model_dir, "tokenizer.json"))
         self.tokenizer.no_padding()
+        pad = self.tokenizer.token_to_id("<pad>")
+        self.pad_id = int(pad) if pad is not None else 0   # padding manuale in _predict_batch
         if 0 < max_len < 10**9:
             self.tokenizer.enable_truncation(max_len)
         else:
@@ -100,6 +102,37 @@ class OnnxTokenClassifier:
 
     def _predict_one(self, text):
         logits, enc = self.logits(text)
+        return self._entities(text, logits, enc)
+
+    def _predict_batch(self, texts, batch_size):
+        """Come _predict_one su ogni testo, ma con UNA session.run per gruppo di
+        batch_size testi: si ordinano per lunghezza (poco padding), si allineano con
+        <pad> + attention_mask a 0 e di ogni riga si tengono solo i logits dei token
+        veri. Su tante stringhe brevi (le celle di un CSV) il costo fisso di ogni
+        session.run domina: farne una per gruppo e' molto piu' veloce."""
+        encs = self.tokenizer.encode_batch(list(texts))
+        out = [None] * len(texts)
+        order = sorted(range(len(texts)), key=lambda i: len(encs[i].ids))
+        for k in range(0, len(order), batch_size):
+            idx = order[k:k + batch_size]
+            width = max(len(encs[i].ids) for i in idx)
+            ids = np.full((len(idx), width), self.pad_id, dtype=np.int64)
+            mask = np.zeros((len(idx), width), dtype=np.int64)
+            for row, i in enumerate(idx):
+                n = len(encs[i].ids)
+                ids[row, :n] = encs[i].ids
+                mask[row, :n] = 1
+            feeds = {"input_ids": ids}
+            if "attention_mask" in self.input_names:
+                feeds["attention_mask"] = mask
+            logits = self.session.run(["logits"], feeds)[0]
+            for row, i in enumerate(idx):
+                n = len(encs[i].ids)
+                out[i] = self._entities(texts[i], logits[row, :n].astype(np.float32, copy=False),
+                                        encs[i])
+        return out
+
+    def _entities(self, text, logits, enc):
         maxes = np.max(logits, axis=-1, keepdims=True)
         shifted = np.exp(logits - maxes)
         scores = shifted / shifted.sum(axis=-1, keepdims=True)
@@ -139,7 +172,11 @@ class OnnxTokenClassifier:
             })
         return ents
 
-    def __call__(self, inputs):
+    def __call__(self, inputs, batch_size=None):
+        """Come la pipeline HF: una stringa -> lista di entita'; una lista -> lista di
+        liste. batch_size > 1 raggruppa i testi in una sola inferenza per gruppo."""
         if isinstance(inputs, str):
             return self._predict_one(inputs)
+        if batch_size and batch_size > 1 and len(inputs) > 1:
+            return self._predict_batch(inputs, int(batch_size))
         return [self._predict_one(t) for t in inputs]
