@@ -24,7 +24,7 @@ TESTO = "Mario Rossi, IBAN IT60X0542811101000000123456"
 @unittest.skipIf(APP is None, "app.py non importabile (torch/flask/fitz assenti)")
 class SourceText(unittest.TestCase):
     def _post(self, **extra):
-        with patch.object(APP, "nlp", lambda chunks: [[] for _ in chunks]):
+        with patch.object(APP, "nlp", lambda chunks, **kw: [[] for _ in chunks]):
             r = APP.app.test_client().post("/analyze", json={"text": TESTO, **extra})
         self.assertEqual(r.status_code, 200)
         return r.get_json()
