@@ -5,6 +5,47 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-11-13 — Supporto nativo ai file CSV (`csv_engine.py`, `csv_jobs.py`, `registry.py`, `app.py`)
+
+Serviva anonimizzare in locale export tabellari molto grandi (log applicativi e di audit, export di
+CRM/ticketing, anagrafiche, elenchi di transazioni: anche GB e milioni di righe) senza perdere la struttura né le correlazioni:
+incollarli come testo non scala (limite di 50 MB, tutto in RAM) e distrugge le colonne. Ora la
+dropzone accetta uno o più `.csv` e passa a una modalità dedicata: anteprima delle prime righe,
+un checkbox "Anonimizza" per colonna (tutte attive di default, più "tutte · nessuna"), avanzamento,
+anteprima dell'output e download.
+
+Scelte e motivazioni:
+- **Un solo motore, un solo comportamento.** Ogni colonna è `anonymize` (stesso motore di
+  `analyze()`: modello + rete regex/checksum, **date comprese**, salvo tag `DATE`/`TIME` esclusi dai
+  toggle) oppure `preserve` (intatta). Niente euristiche sugli header né modalità speciali: il piano
+  di default è tutto `anonymize`. Il costo è il modello: `finalize` ritorna `large`/`large_threshold`
+  e sopra la soglia (il `MAX_CONTENT_LENGTH` dell'app, oggi 50 MB, letto a runtime) la UI invita a
+  disattivare le colonne senza dati personali.
+- **Un solo sistema di pseudonimi.** `registry.Registry` riusa formato `[TAG_N]` e
+  normalizzazione di `analyze()`: lo stesso valore ha
+  lo stesso pseudonimo in righe, colonne e file dello stesso job, e il dizionario scaricato si
+  carica nella tab "Ripristina" come quello di sempre. La chiave è il valore normalizzato
+  **senza tag** (il primo tag vince), così un'email resta `[EMAIL_1]` anche se altrove il modello
+  la etichetta diversamente. Niente persistenza tra job diversi: per scelta.
+- **Streaming, memoria prevedibile.** `csv_engine.py` è solo-stdlib (il modello arriva per
+  iniezione da `detect_spans_batch`): legge e scrive riga per riga, celle al modello a batch,
+  cache LRU limitata. Cresce solo il registro (~200 MB per milione di valori unici).
+- **Niente output parziali scambiabili per completi**: si scrive `.partial` e si rinomina solo a
+  fine run. Righe malformate saltate e contate (solo il numero di riga), o stop con `strict`.
+- **Eccezione al "mai su disco"**: un CSV da GB non sta in RAM, quindi upload a pezzi in file
+  temporanei nella cartella dati dell'app, cancellati a fine job, dopo 2 h di abbandono o
+  all'avvio successivo. Nessun valore di cella in log o messaggi d'errore.
+- **Modello**: celle da analizzare a batch (`detect_spans_batch(texts, excluded)`, `MODEL_BATCH_SIZE`), inferenze
+  serializzate da un lock perché job CSV e `/analyze` condividono la pipeline. Misure indicative
+  in [docs/CSV.md](CSV.md).
+
+Test: `tests/test_registry.py`, `test_csv_engine.py`, `test_csv_jobs.py`,
+`test_detect_spans_batch.py` (delimitatori, BOM, multilinea e JSON, pseudonimi coerenti fra file,
+colonne analizzate/preservate, avviso `large`, file grande generato, righe malformate,
+annullamento, pulizia dei temporanei).
+
+---
+
 ## 2026-10-22 — Il PDF protetto da password si riconosce già al caricamento (`app.py`)
 
 Completa la voce del 2026-09-25: lì il server rispondeva già col messaggio chiaro, ma
