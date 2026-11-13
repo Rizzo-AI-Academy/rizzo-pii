@@ -58,6 +58,24 @@
                    font-size:13.5px;font-weight:700;cursor:pointer;letter-spacing:.01em;
                    transition:opacity .15s}
   .cfg-form button:hover{opacity:.88}
+
+  /* download del modello al primo avvio */
+  .bar.det i{animation:none;left:0;width:0;transition:width .25s linear}
+  .dl-meta{font-size:12px;color:#1c2330;font-weight:600;margin:0;font-variant-numeric:tabular-nums}
+  .dl-err{display:none;flex-direction:column;align-items:center;gap:12px;
+          background:#fff;border:1px solid #e6e9f0;border-radius:14px;
+          padding:20px 24px;box-shadow:0 2px 8px rgba(20,28,46,.08);
+          max-width:340px;width:100%;box-sizing:border-box}
+  .dl-err h2{font-size:15px;margin:0;font-weight:800}
+  .dl-err p{font-size:12.5px;color:#6b7383;text-align:center;line-height:1.5;margin:0}
+  .dl-err .why{color:#c1121f;font-weight:600;word-break:break-word;
+               display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  .dl-err code{font-size:11px;background:#f4f6fb;border-radius:6px;padding:2px 5px;word-break:break-all}
+  .dl-err .row{display:flex;gap:8px;width:100%}
+  .dl-err button{flex:1;padding:9px 0;border-radius:8px;font-size:13px;font-weight:700;
+                 cursor:pointer;font-family:inherit}
+  .dl-err .primary{border:none;background:linear-gradient(135deg,#c1121f,#7d0a12);color:#fff}
+  .dl-err .ghost{border:1px solid #d0d4dd;background:#fff;color:#1c2330}
 </style>
 </head>
 <body>
@@ -84,7 +102,21 @@
       <img id="mascot" src="mascot.png" alt="Rizzo PII">
       <h1>Rizzo PII</h1>
       <div class="bar"><i></i></div>
+      <p class="dl-meta" id="dlMeta" hidden></p>
       <p class="note">Avvio del modello in corso…<br>il primo avvio può richiedere qualche secondo.</p>
+    </div>
+
+    <!-- errore di download del modello (nascosto di default) -->
+    <div class="dl-err" id="dlErr">
+      <h2>Download del modello non riuscito</h2>
+      <p class="why" id="dlWhy"></p>
+      <p>Controlla la connessione e riprova: il download riparte da dove si era fermato.
+         Se la rete blocca huggingface.co, usa l'installer <b>offline</b> oppure copia i file
+         del modello in <code id="dlDir"></code></p>
+      <div class="row">
+        <button type="button" class="ghost" id="dlOpen">Apri cartella</button>
+        <button type="button" class="primary" id="dlRetry">Riprova</button>
+      </div>
     </div>
 
     <!-- form configurazione host/porta (nascosto di default) -->
@@ -140,6 +172,91 @@
     if (bar) bar.style.display = '';
     var note = lb.querySelector('.note');
     if (note) note.textContent = 'Nuovo tentativo di avvio…';
+  }
+
+  // -----------------------------------------------------------------------
+  // Download del modello al primo avvio (chiamate da Rust, vedi model.rs)
+  // -----------------------------------------------------------------------
+  var dlSamples = [];   // [ms, byte] recenti, per velocità e tempo stimato
+
+  function fmtMB(b) {
+    var mb = b / 1048576;
+    return mb >= 1000 ? (mb / 1024).toFixed(2).replace('.', ',') + ' GB'
+                      : Math.round(mb) + ' MB';
+  }
+
+  /** Avanzamento: done/total in byte. */
+  function showDownload(done, total) {
+    document.getElementById('dlErr').style.display = 'none';
+    var lb = document.getElementById('loadingBlock');
+    lb.style.display = 'flex';
+    var bar = lb.querySelector('.bar');
+    bar.style.display = '';
+    bar.classList.add('det');
+    var pct = total ? Math.min(100, done * 100 / total) : 0;
+    bar.querySelector('i').style.width = pct.toFixed(1) + '%';
+
+    var now = Date.now();
+    dlSamples.push([now, done]);
+    while (dlSamples.length > 2 && now - dlSamples[0][0] > 8000) dlSamples.shift();
+    var info = fmtMB(done) + ' di ' + fmtMB(total) + ' · ' + Math.floor(pct) + '%';
+    if (dlSamples.length > 1) {
+      var dt = (now - dlSamples[0][0]) / 1000, db = done - dlSamples[0][1];
+      if (dt > 1 && db > 0) {
+        var speed = db / dt, left = (total - done) / speed;
+        info += ' · ' + (speed / 1048576).toFixed(1).replace('.', ',') + ' MB/s';
+        info += left >= 90 ? ' · ~' + Math.ceil(left / 60) + ' min' : ' · ~' + Math.ceil(left) + ' s';
+      }
+    }
+    var meta = document.getElementById('dlMeta');
+    meta.hidden = false;
+    meta.textContent = info;
+    lb.querySelector('.note').innerHTML =
+      'Primo avvio: scarico il modello da Hugging Face.<br>' +
+      'Succede una volta sola. I tuoi documenti non lasciano il computer.';
+  }
+
+  /** Download finito e verificato: ora si avvia il backend. */
+  function showStarting() {
+    var lb = document.getElementById('loadingBlock');
+    lb.style.display = 'flex';
+    document.getElementById('dlErr').style.display = 'none';
+    document.getElementById('dlMeta').hidden = true;
+    var bar = lb.querySelector('.bar');
+    bar.style.display = '';
+    bar.classList.remove('det');
+    bar.querySelector('i').style.width = '';
+    lb.querySelector('.note').innerHTML = 'Modello scaricato e verificato.<br>Avvio in corso…';
+  }
+
+  /** Errore di download: messaggio + cartella del modello. */
+  function showDownloadError(msg, dir) {
+    document.getElementById('loadingBlock').style.display = 'none';
+    document.getElementById('dlWhy').textContent = msg;
+    document.getElementById('dlDir').textContent = dir;
+    document.getElementById('dlErr').style.display = 'flex';
+    dlSamples = [];
+  }
+
+  document.getElementById('dlRetry').addEventListener('click', function() {
+    dlSamples = [];
+    showStarting();
+    document.querySelector('#loadingBlock .note').textContent = 'Nuovo tentativo…';
+    window.__TAURI_INTERNALS__.invoke('retry_download').catch(function(e) {
+      showDownloadError('Errore interno: ' + e, document.getElementById('dlDir').textContent);
+    });
+  });
+  document.getElementById('dlOpen').addEventListener('click', function() {
+    window.__TAURI_INTERNALS__.invoke('open_model_folder');
+  });
+
+  // Gli eval fatti da Rust prima che questa pagina fosse caricata si perdono:
+  // appena pronti si chiede la versione e l'ultimo stato del download.
+  if (window.__TAURI_INTERNALS__) {
+    window.__TAURI_INTERNALS__.invoke('splash_sync').then(function(st) {
+      if (st && st.version) document.getElementById('ver').textContent = 'v' + st.version;
+      if (st && st.js) { try { (0, eval)(st.js); } catch (e) {} }
+    }).catch(function() {});
   }
 
   // Handler del bottone "Salva e riprova"

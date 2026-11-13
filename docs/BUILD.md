@@ -45,6 +45,13 @@ build_env\Scripts\pyinstaller.exe build_sidecar.spec --noconfirm `
 Output: `tauri\src-tauri\backend\pii-backend\pii-backend.exe` (+ `_internal\`, modello, asset) ≈ 1,4 GB
 (1,2 GB sono il modello; con torch erano 1,8 GB).
 
+Con **`$env:PII_BUNDLE_MODEL = "0"`** il sidecar esce **senza modello** (~155 MB) e l'installer
+pesa ~60-90 MB (59 MB in locale, ~90 MB dalla CI): l'app scarica il modello da Hugging Face al primo avvio — vedi
+[§ Modello al primo avvio](#modello-al-primo-avvio-installer-leggero-e-offline).
+Nota: `target\release\backend\` (usata lanciando `app.exe` direttamente) si aggiorna solo quando
+ricompila `build.rs`; dopo aver cambiato il sidecar, `rm -r target\release\backend` + tocca
+`src-tauri\build.rs`. L'installer NSIS invece prende sempre `src-tauri\backend\`.
+
 ### 2. Build dell'app + installer
 ```powershell
 cd tauri
@@ -137,6 +144,49 @@ PyTorch (pipeline HF `aggregation_strategy="simple"`) su 300 frasi della validat
   | RAM dopo l'uso | ~870 MB | ~670 MB |
 
   Sul testo lungo il throughput è pari: il guadagno è in installazione, avvio e memoria.
+
+---
+
+## Modello al primo avvio (installer leggero e offline)
+
+La CI produce **due installer Windows** dalla stessa build:
+
+| installer | dimensione | modello |
+|---|---|---|
+| `Rizzo-PII-<ver>-Windows-Setup.exe` | ~90 MB | scaricato da Hugging Face al primo avvio |
+| `Rizzo-PII-<ver>-Windows-Setup-offline.exe` | ~1,15 GB | dentro l'installer, nessuna rete richiesta |
+
+Il leggero è quello linkato dalla landing. L'offline serve a PC senza internet o a reti
+aziendali che bloccano `huggingface.co`.
+
+**Come funziona** ([`tauri/src-tauri/src/model.rs`](../tauri/src-tauri/src/model.rs)):
+
+1. All'avvio Tauri guarda se il sidecar ha il modello dentro (`_internal/pii_model/`): se sì,
+   è l'offline e non scarica niente.
+2. Altrimenti cerca il modello in `%LOCALAPPDATA%\rizzo-pii\models\rizzo-pii-0.3B-v<ver>\`
+   (Linux `~/.local/share/rizzo-pii/…`, macOS `~/Library/Application Support/rizzo-pii/…`).
+   Il marcatore `.verified` dice che è già stato scaricato e verificato.
+3. Se manca, lo scarica da `huggingface.co/rizzoaiacademy/rizzo-pii-0.3B` a un **commit
+   fissato** (`MODEL_COMMIT`), solo i 6 file ONNX + tokenizer (1,18 GB). Ogni file è verificato
+   con **dimensione + sha256** (`MODEL_FILES`) prima di essere usato. Il download va in
+   `*.part` e **riprende** da dove si era fermato (chiusura dell'app, rete caduta), con 4
+   tentativi per file; il proxy si legge da `HTTPS_PROXY`/`HTTP_PROXY`.
+4. Lancia il sidecar con **`PII_MODEL_DIR`** puntato a quella cartella (in `app.py` vince sul
+   modello impacchettato).
+
+Lo splash mostra MB scaricati, percentuale, velocità e tempo stimato. In caso di errore mostra
+un motivo breve (il dettaglio è in `~/rizzo-pii/tauri.log`) con **Riprova** e **Apri cartella**,
+per copiare i file a mano.
+
+**Misure** (Windows, rete domestica): download completo ~55 s a ~22 MB/s; ripresa dopo
+chiusura verificata (560 MB già scaricati non vengono riscaricati); avvii successivi senza
+download, backend pronto in ~4 s.
+
+**Nuova versione del modello**: esporta e verifica l'ONNX
+(`src/training/export_onnx.py`), caricalo in `onnx/` sul nuovo ramo HF, poi aggiorna in
+`model.rs` `MODEL_VERSION`, `MODEL_COMMIT` (commit del ramo) e `MODEL_FILES` (dimensioni e
+sha256), e in CI `MODEL_REV`/`MODEL_DIR`. Se sha256 e file pubblicati non coincidono, il
+download fallisce di proposito.
 
 ---
 
