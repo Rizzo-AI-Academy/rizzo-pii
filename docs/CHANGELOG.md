@@ -5,6 +5,23 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-11-13 — Il modello usa la GPU dei Mac Apple Silicon (MPS) (`app.py`)
+
+Il modello girava su CUDA oppure su CPU: sui Mac con Apple Silicon restava sempre sulla CPU
+anche con la GPU integrata disponibile. Ora il dispositivo si sceglie **CUDA → MPS → CPU**
+(`/health` riporta quale). In una misura su testi brevi (2000 righe di un log sintetico) MPS è
+circa **2,2× più veloce** della CPU, con entità identiche.
+
+- **`PII_DEVICE`** = `auto` (default) | `cpu` | `mps` | `cuda` forza il dispositivo, ad esempio
+  per confrontare le prestazioni o per aggirare un problema del driver. Se quello chiesto non è
+  disponibile si avvisa e si torna alla scelta automatica.
+- **Ripiego su CPU**: MPS non implementa tutti gli operatori di PyTorch e ha meno memoria. Se
+  un'inferenza su MPS fallisce, l'app lo scrive nel log (solo il tipo di errore, mai il testo),
+  ricostruisce la pipeline su CPU e riprova; da lì in poi resta su CPU. Su CUDA e CPU gli errori
+  non vengono nascosti.
+
+Windows e Linux non cambiano: CUDA se c'è, altrimenti CPU. Test in `tests/test_device.py`.
+
 ## 2026-10-22 — Il PDF protetto da password si riconosce già al caricamento (`app.py`)
 
 Completa la voce del 2026-09-25: lì il server rispondeva già col messaggio chiaro, ma
