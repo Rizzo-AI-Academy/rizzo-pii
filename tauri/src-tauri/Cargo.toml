@@ -22,3 +22,6 @@ serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 tauri = { version = "2.11.3", features = [] }
 dirs = "6"
+# download del modello al primo avvio (model.rs): HTTPS con rustls, verifica sha256
+ureq = "2.12"
+sha2 = "0.10"

@@ -7,6 +7,11 @@
 // Flask. Alla chiusura il processo figlio viene terminato.
 // L'host e la porta sono configurabili via config.json (default 127.0.0.1:5005).
 // NB: porta 5005 e non 5000 perche' su macOS la 5000 e' occupata da AirPlay Receiver.
+//
+// Modello: l'installer "offline" lo ha dentro il sidecar; quello leggero lo scarica da
+// Hugging Face al primo avvio (vedi model.rs) e lo passa al backend con PII_MODEL_DIR.
+
+mod model;
 
 use std::fs;
 use std::io::{Read, Write};
@@ -21,7 +26,7 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// Logging diagnostico su file (~/rizzo-pii/tauri.log).
 /// Usa un file nella stessa directory del backend.log.
-fn tlog(msg: &str) {
+pub(crate) fn tlog(msg: &str) {
     use std::io::Write;
     let dir = dirs::home_dir().unwrap_or_default().join("rizzo-pii");
     let _ = fs::create_dir_all(&dir);
@@ -46,6 +51,17 @@ struct BackendProcess(Mutex<Option<Child>>);
 
 /// Stato condiviso: host e porta correnti letti dal config.json.
 struct ServerAddr(Mutex<(String, u16)>);
+
+/// Cartella del modello scaricato da passare al backend (None = modello nel pacchetto).
+struct ModelDir(Mutex<Option<PathBuf>>);
+
+/// Evita due download in parallelo (doppio clic su "Riprova").
+struct Downloading(Mutex<bool>);
+
+/// Ultimo stato del download mostrato nello splash (JS). Un eval fatto prima che la
+/// pagina dello splash sia caricata si perde: la pagina, appena pronta, chiede questo
+/// stato con `splash_sync` e lo riapplica.
+struct LastSplash(Mutex<Option<String>>);
 
 // ---------------------------------------------------------------------------
 // Configurazione persistente
@@ -157,12 +173,147 @@ fn sidecar_exe(resource_dir: &std::path::Path) -> PathBuf {
         .join(bin_name)
 }
 
-/// Lancia il sidecar impostando le variabili PII_HOST e PII_PORT.
-fn spawn_sidecar(exe: &std::path::Path, host: &str, port: u16) -> std::io::Result<Child> {
-    Command::new(exe)
-        .env("PII_HOST", host)
-        .env("PII_PORT", port.to_string())
-        .spawn()
+/// Lancia il sidecar impostando PII_HOST e PII_PORT e, se il modello e' stato scaricato,
+/// PII_MODEL_DIR (che app.py preferisce al modello impacchettato).
+fn spawn_sidecar(
+    exe: &std::path::Path,
+    host: &str,
+    port: u16,
+    model_dir: Option<&std::path::Path>,
+) -> std::io::Result<Child> {
+    let mut cmd = Command::new(exe);
+    cmd.env("PII_HOST", host).env("PII_PORT", port.to_string());
+    if let Some(dir) = model_dir {
+        cmd.env("PII_MODEL_DIR", dir);
+    }
+    cmd.spawn()
+}
+
+/// Esegue una funzione JS dello splash (se c'e' ancora) e la ricorda per `splash_sync`.
+fn splash_js(handle: &tauri::AppHandle, js: &str) {
+    *handle.state::<LastSplash>().0.lock().unwrap() = Some(js.to_string());
+    if let Some(splash) = handle.get_webview_window("splash") {
+        let _ = splash.eval(js);
+    }
+}
+
+/// Stringa Rust -> letterale stringa JS (escape completo).
+fn js_str(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| String::from("\"\""))
+}
+
+/// Avvia il sidecar (salvo che il nostro backend sia gia' in ascolto), attende che
+/// risponda, apre la finestra principale e chiude lo splash. Non blocca.
+fn launch_backend(handle: &tauri::AppHandle, host: String, port: u16) {
+    let url = format!("http://{}:{}", host, port);
+    let ours = is_our_backend(&host, port);
+    tlog(&format!("is_our_backend({}:{}): {}", host, port, ours));
+    if !ours {
+        match handle.path().resource_dir() {
+            Ok(dir) => {
+                let exe = sidecar_exe(&dir);
+                let model_dir = handle.state::<ModelDir>().0.lock().unwrap().clone();
+                tlog(&format!("spawn sidecar: {:?} (modello: {:?})", exe, model_dir));
+                match spawn_sidecar(&exe, &host, port, model_dir.as_deref()) {
+                    Ok(child) => {
+                        tlog(&format!("sidecar avviato, pid={}", child.id()));
+                        handle.state::<BackendProcess>().0.lock().unwrap().replace(child);
+                    }
+                    Err(e) => tlog(&format!("ERRORE spawn sidecar: {}", e)),
+                }
+            }
+            Err(e) => tlog(&format!("resource_dir non risolvibile: {}", e)),
+        }
+    }
+
+    let handle = handle.clone();
+    std::thread::spawn(move || {
+        if poll_backend(&handle, &host, port).is_ok() {
+            let built = WebviewWindowBuilder::new(
+                &handle,
+                "main",
+                WebviewUrl::External(url.parse().unwrap()),
+            )
+            .title("Rizzo PII")
+            .inner_size(1240.0, 840.0)
+            .min_inner_size(900.0, 600.0)
+            .center()
+            // il drop lo gestisce la pagina (HTML5): su Windows il gestore nativo di
+            // Tauri si prende i file trascinati e l'evento non arriva mai (issue #96)
+            .disable_drag_drop_handler()
+            .build();
+
+            if built.is_ok() {
+                if let Some(splash) = handle.get_webview_window("splash") {
+                    let _ = splash.close();
+                }
+            }
+        }
+    });
+}
+
+/// Si assicura che il modello ci sia (nel pacchetto, gia' scaricato, o scaricandolo ora
+/// con l'avanzamento nello splash) e poi avvia il backend. Non blocca.
+fn ensure_model_then_launch(handle: &tauri::AppHandle) {
+    let (host, port) = handle.state::<ServerAddr>().0.lock().unwrap().clone();
+    // backend gia' attivo (seconda istanza, o rilancio): niente da scaricare
+    if is_our_backend(&host, port) {
+        launch_backend(handle, host, port);
+        return;
+    }
+    let bundled = handle
+        .path()
+        .resource_dir()
+        .map(|d| model::bundled(&d))
+        .unwrap_or(false);
+    if bundled {
+        tlog("modello nel pacchetto (installer offline)");
+        *handle.state::<ModelDir>().0.lock().unwrap() = None;
+        launch_backend(handle, host, port);
+        return;
+    }
+    let dir = model::model_dir(&config_dir());
+    if model::ready(&dir) {
+        tlog(&format!("modello gia' scaricato in {:?}", dir));
+        *handle.state::<ModelDir>().0.lock().unwrap() = Some(dir);
+        launch_backend(handle, host, port);
+        return;
+    }
+
+    {
+        let state = handle.state::<Downloading>();
+        let mut busy = state.0.lock().unwrap();
+        if *busy {
+            return;
+        }
+        *busy = true;
+    }
+    let handle = handle.clone();
+    std::thread::spawn(move || {
+        tlog(&format!("download del modello in {:?}", dir));
+        splash_js(&handle, &format!("if(window.showDownload){{showDownload(0,{})}}", model::total_bytes()));
+        let h2 = handle.clone();
+        let res = model::download(&dir, |done, total| {
+            splash_js(&h2, &format!("if(window.showDownload){{showDownload({},{})}}", done, total));
+        });
+        *handle.state::<Downloading>().0.lock().unwrap() = false;
+        match res {
+            Ok(()) => {
+                tlog("download del modello completato e verificato");
+                *handle.state::<ModelDir>().0.lock().unwrap() = Some(dir);
+                splash_js(&handle, "if(window.showStarting){showStarting()}");
+                launch_backend(&handle, host, port);
+            }
+            Err(e) => {
+                tlog(&format!("ERRORE download modello: {}", e));
+                splash_js(&handle, &format!(
+                    "if(window.showDownloadError){{showDownloadError({},{})}}",
+                    js_str(&e),
+                    js_str(&dir.to_string_lossy())
+                ));
+            }
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -279,52 +430,39 @@ fn retry_backend(app_handle: tauri::AppHandle) {
         guard.clone()
     };
     tlog(&format!("retry_backend: config {}:{}", host, port));
-    let url = format!("http://{}:{}", host, port);
+    launch_backend(&app_handle, host, port);
+}
 
-    // spawn del sidecar
-    if !is_our_backend(&host, port) {
-        if let Ok(dir) = app_handle.path().resource_dir() {
-            let exe = sidecar_exe(&dir);
-            tlog(&format!("retry_backend: spawn {:?}", exe));
-            match spawn_sidecar(&exe, &host, port) {
-                Ok(child) => {
-                    app_handle
-                        .state::<BackendProcess>()
-                        .0
-                        .lock()
-                        .unwrap()
-                        .replace(child);
-                }
-                Err(e) => eprintln!("avvio backend fallito ({:?}): {}", exe, e),
-            }
-        }
-    }
+/// Chiamato dallo splash appena caricato: versione + ultimo stato del download.
+#[tauri::command]
+fn splash_sync(app_handle: tauri::AppHandle) -> serde_json::Value {
+    let last = app_handle.state::<LastSplash>().0.lock().unwrap().clone();
+    json!({
+        "version": app_handle.package_info().version.to_string(),
+        "js": last,
+    })
+}
 
-    // polling in un thread separato
-    let handle = app_handle.clone();
-    std::thread::spawn(move || {
-        if poll_backend(&handle, &host, port).is_ok() {
-            let built = WebviewWindowBuilder::new(
-                &handle,
-                "main",
-                WebviewUrl::External(url.parse().unwrap()),
-            )
-            .title("Rizzo PII")
-            .inner_size(1240.0, 840.0)
-            .min_inner_size(900.0, 600.0)
-            .center()
-            // il drop lo gestisce la pagina (HTML5): su Windows il gestore nativo di
-            // Tauri si prende i file trascinati e l'evento non arriva mai (issue #96)
-            .disable_drag_drop_handler()
-            .build();
+/// "Riprova" dopo un download fallito: riparte da dove si era fermato.
+#[tauri::command]
+fn retry_download(app_handle: tauri::AppHandle) {
+    tlog("retry_download: chiamato");
+    ensure_model_then_launch(&app_handle);
+}
 
-            if built.is_ok() {
-                if let Some(splash) = handle.get_webview_window("splash") {
-                    let _ = splash.close();
-                }
-            }
-        }
-    });
+/// Apre nel file manager la cartella del modello (per copiarci i file a mano).
+#[tauri::command]
+fn open_model_folder() {
+    let dir = model::model_dir(&config_dir());
+    let _ = fs::create_dir_all(&dir);
+    let opener = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let _ = Command::new(opener).arg(&dir).spawn();
 }
 
 // ---------------------------------------------------------------------------
@@ -354,11 +492,17 @@ pub fn run() {
     tauri::Builder::default()
         .manage(BackendProcess(Mutex::new(None)))
         .manage(ServerAddr(Mutex::new((host.clone(), port))))
-        .invoke_handler(tauri::generate_handler![save_config, retry_backend])
+        .manage(ModelDir(Mutex::new(None)))
+        .manage(Downloading(Mutex::new(false)))
+        .manage(LastSplash(Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![
+            save_config,
+            retry_backend,
+            retry_download,
+            open_model_folder,
+            splash_sync
+        ])
         .setup(move |app| {
-            let handle = app.handle().clone();
-            let url = format!("http://{}:{}", host, port);
-
             // mostra la versione reale (da tauri.conf.json) nello splash
             let version = app.package_info().version.to_string();
             if let Some(splash) = app.get_webview_window("splash") {
@@ -368,53 +512,8 @@ pub fn run() {
                 ));
             }
 
-            // 1) avvia il backend sidecar (salvo che un'istanza sia gia' in ascolto)
-            let ours = is_our_backend(&host, port);
-            tlog(&format!("is_our_backend({}:{}): {}", host, port, ours));
-            if !ours {
-                match app.path().resource_dir() {
-                    Ok(dir) => {
-                        let exe = sidecar_exe(&dir);
-                        tlog(&format!("spawn sidecar: {:?}", exe));
-                        match spawn_sidecar(&exe, &host, port) {
-                            Ok(child) => {
-                                tlog(&format!("sidecar avviato, pid={}", child.id()));
-                                app.state::<BackendProcess>()
-                                    .0
-                                    .lock()
-                                    .unwrap()
-                                    .replace(child);
-                            }
-                            Err(e) => tlog(&format!("ERRORE spawn sidecar: {}", e)),
-                        }
-                    }
-                    Err(e) => eprintln!("resource_dir non risolvibile: {}", e),
-                }
-            }
-
-            // 2) attende il server, poi apre la finestra principale e chiude lo splash
-            let host2 = host.clone();
-            std::thread::spawn(move || {
-                if poll_backend(&handle, &host2, port).is_ok() {
-                    let built = WebviewWindowBuilder::new(
-                        &handle,
-                        "main",
-                        WebviewUrl::External(url.parse().unwrap()),
-                    )
-                    .title("Rizzo PII")
-                    .inner_size(1240.0, 840.0)
-                    .min_inner_size(900.0, 600.0)
-                    .center()
-                    .disable_drag_drop_handler()    // vedi retry_backend: issue #96
-                    .build();
-
-                    if built.is_ok() {
-                        if let Some(splash) = handle.get_webview_window("splash") {
-                            let _ = splash.close();
-                        }
-                    }
-                }
-            });
+            // modello (nel pacchetto / gia' scaricato / da scaricare), poi il backend
+            ensure_model_then_launch(app.handle());
 
             Ok(())
         })
