@@ -5,7 +5,7 @@ delle cartelle in **[README.md](README.md)**. Documenti di dettaglio:
 **[docs/TASSONOMIA_TAG.md](docs/TASSONOMIA_TAG.md)** (i 22 tag),
 **[docs/DATASET.md](docs/DATASET.md)** (composizione completa di train/validation) e
 **[docs/TRAINING.md](docs/TRAINING.md)** (unione dei due dataset HF, accortezze sui tag,
-iperparametri).
+iperparametri) e **[docs/CSV.md](docs/CSV.md)** (anonimizzazione CSV).
 
 ## Cos'è questo progetto
 
@@ -116,6 +116,33 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   soggetto): è utile all'LLM e da sola non riporta al valore. UI: switch nella card di input, ambra
   quando è off. `source_text` continua a tornare — è il documento che hai appena mandato tu, non una
   chiave di ripristino.
+- **CSV nativi** (dettaglio in **[docs/CSV.md](docs/CSV.md)**) — tre moduli **solo-stdlib**
+  (niente torch, testabili in CI: `tests/test_csv_*.py`, `tests/test_registry.py`):
+  `registry.py` (**`Registry`**, uno per job: chiave = valore normalizzato **senza tag**, il primo tag
+  vince, formato `[TAG_N]` compatibile con "Ripristina"; vive in memoria, ~150-250 B/valore unico),
+  `csv_engine.py` (**streaming** file→file via `.partial`+rename; ogni colonna è `MODES =
+  ("anonymize", "preserve")`: `anonymize` passa dallo **stesso motore di `analyze()`** (modello + rete
+  regex/checksum, date comprese salvo tag `DATE`/`TIME` esclusi), `preserve` lascia la cella intatta;
+  `default_plan(header)` = tutte `anonymize`, nessuna euristica sugli header; `sniff()`,
+  `process_file()`; il rilevatore entra solo da `detect_fn` iniettato; righe malformate saltate e
+  contate per numero di riga, `strict` per fermarsi; fedeltà di delimitatore/BOM/newline/ordine,
+  `QUOTE_MINIMAL`; mai valori di cella in log/errori) e `csv_jobs.py` (Blueprint Flask sotto `/csv`).
+  Endpoint: `POST /csv/uploads`, `PUT /csv/uploads/<uid>?offset=N` (pezzi da 8 MB),
+  `POST /csv/uploads/<uid>/finalize` (sniff + piano di default; ritorna anche `large` e
+  `large_threshold`),
+  `DELETE /csv/uploads/<uid>`, `POST /csv/jobs` (coda FIFO, un job alla volta),
+  `GET /csv/jobs/<jid>`, `POST /csv/jobs/<jid>/cancel`, `GET /csv/jobs/<jid>/files/<i>`, `GET /csv/jobs/<jid>/files/<i>/preview`,
+  `GET /csv/jobs/<jid>/dictionary`, `DELETE /csv/jobs/<jid>`.
+  **Il costo è il modello**: sopra la soglia `large_threshold` = `MAX_CONTENT_LENGTH` dell'app (oggi
+  50 MB, letto a runtime, non fissato nella feature) la UI avvisa di disattivare le colonne senza dati
+  personali. **Eccezione alla regola "mai su disco"**: upload e output sono temporanei in
+  `<config_dir>/csv_jobs/<istanza>/`, cancellati a fine job e **spazzati all'avvio** (`sweep_stale`,
+  lock per istanza); il dizionario resta solo in memoria. Coerenza degli pseudonimi **dentro un job**,
+  non tra job (fuori scopo per scelta). `app.py` li usa tramite `detect_spans_batch(texts, excluded=())` (modello in un'unica
+  chiamata per batch, `MODEL_BATCH_SIZE`; inferenze serializzate da un lock) e `registry.Registry`
+  direttamente, più la **modalità CSV** nella `PAGE` (upload a pezzi, checkbox "Anonimizza" per colonna
+  + "tutte · nessuna", polling del job). Limiti: nessuna CLI, nessuna persistenza tra esecuzioni, solo UTF-8/UTF-8 BOM,
+  niente dialoghi file nativi Tauri.
 - `pdf_export.py` + endpoint **`POST /pdf`** — **download del PDF anonimizzato** (issue #7, punto 1),
   bottone "📄 Scarica PDF anonimizzato" nella card Risultato. Due modalità: se l'input era un **PDF**
   si fa **redazione vera** del documento originale (`apply_redactions()`: il testo esce dal content
