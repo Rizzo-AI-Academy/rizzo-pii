@@ -59,6 +59,10 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   metriche train/val, logga su **W&B** (run `rizzo-pii:0.3B-v{VERSION}`). **Modello versionato**:
   ogni run grande salva in `models/rizzo-pii-0.3B-v{VERSION}/` (storico, niente sovrascrittura;
   `MODEL_VERSION` in cima al file o `--version`; storia in `models/registry.json`). Vedi "Parametri".
+- `export_onnx.py` — esporta il modello in **ONNX fp32 (nessuna quantizzazione)** →
+  `models/<versione>/onnx/model.onnx` + `model.onnx_data` (pesi separati = mmap, RAM ~mezza) e
+  **verifica** contro la pipeline HF (logits + entità su 300 frasi di validation; exit 1 se divergono).
+  Va rilanciato per ogni nuova versione prima di buildare il sidecar.
 - `test_pii.py` — inferenza CLI sul modello salvato (entità + testo anonimizzato). Risolve in automatico
   l'**ultima** versione `rizzo-pii-0.3B-v*` (fallback al vecchio non versionato → legacy; override `PII_MODEL_DIR`).
 
@@ -142,6 +146,13 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   non cercabili senza devastare il documento. Se in tutto il PDF non si trova **nessuna** occorrenza
   → `422`, non un PDF "anonimizzato" che non lo è (caso tipico: scansione, serve OCR → punti 2-4
   della issue). Nessuna dipendenza dal modello: `pdf_export.py` è testabile in isolamento.
+- `onnx_ner.py` — **backend di inferenza senza torch/transformers** (onnxruntime + tokenizers +
+  numpy): replica `pipeline("token-classification", aggregation_strategy="simple")`, stessa forma
+  di output. `app.py` lo usa se trova `onnx/model.onnx` (o `model.onnx`) nella cartella del modello,
+  altrimenti ricade sulla pipeline transformers; `PII_BACKEND=onnx|torch` forza; `/health` riporta
+  `backend`. Gli spec PyInstaller impacchettano **solo** il modello ONNX + tokenizer/config ed
+  **escludono torch/transformers** (sidecar 1,8 → 1,4 GB, avvio ~2× più rapido). Dettagli in
+  `docs/BUILD.md` § Modello ONNX.
 - `serve.py` — entry **headless** (solo Flask, niente browser): è il backend dell'app Tauri; log su
   `%LOCALAPPDATA%\rizzo-pii\backend.log`. Pre-check porta + `sys.exit(76)` se occupata.
   `desktop_app.py` — entry PyInstaller legacy (apre il browser); stesso pre-check.
