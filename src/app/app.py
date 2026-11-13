@@ -67,6 +67,7 @@ import fitz  # PyMuPDF
 from flask import Flask, Response, jsonify, request, send_from_directory
 
 import ocr
+import csv_jobs
 import pdf_export
 import pdf_text
 import server_config
@@ -1229,6 +1230,13 @@ def port_check():
     except (ValueError, TypeError):
         return jsonify({"available": False})
     return jsonify({"available": server_config.port_available(host, port)})
+
+
+# Job CSV (upload a pezzi, coda, download in streaming): vedi csv_jobs.py
+app.register_blueprint(csv_jobs.create_blueprint(
+    _get_prefs, lambda: globals().get("detect_spans_batch"), valid_tags=TAG_NAMES,
+    # avviso "file grande" alla stessa soglia del limite di upload dell'app (oggi 50 MB)
+    large_threshold=lambda: app.config["MAX_CONTENT_LENGTH"]))
 
 
 # --------------------------------------------------------------------------- #
