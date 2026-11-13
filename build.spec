@@ -4,7 +4,8 @@ from PyInstaller.utils.hooks import collect_all
 
 datas, binaries, hiddenimports = [], [], []
 # raccoglie codice + dati delle librerie con import dinamici
-for pkg in ("transformers", "tokenizers", "safetensors", "huggingface_hub", "regex"):
+# Inferenza con ONNX Runtime (src/app/onnx_ner.py): NIENTE torch/transformers nel pacchetto.
+for pkg in ("onnxruntime", "tokenizers"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
@@ -13,14 +14,28 @@ for pkg in ("transformers", "tokenizers", "safetensors", "huggingface_hub", "reg
 # il modello addestrato va incluso nel pacchetto (sorgente: models/rizzo-pii-0.3B,
 # destinazione dentro l'exe: "pii_model" -> app.py lo risolve via _resource_path).
 # Finche' rizzo-pii-0.3B non e' stato addestrato si puo' usare models/pii_model_legacy.
-datas += [("models/rizzo-pii-0.3B-v1.5.0", "pii_model")]
+# Del modello si impacchetta SOLO cio' che serve a onnxruntime: il model.onnx (fp32, gli
+# stessi pesi di PyTorch, prodotto da src/training/export_onnx.py) + tokenizer e config.
+# Il model.safetensors (1,2 GB) resta fuori: con lui dentro il modello sarebbe doppio.
+MODEL_DIR = "models/rizzo-pii-0.3B-v1.5.0"
+import os as _os
+if not _os.path.isfile(f"{MODEL_DIR}/onnx/model.onnx_data"):
+    raise SystemExit(f"manca {MODEL_DIR}/onnx/model.onnx(_data): "
+                     f"python src/training/export_onnx.py --model-dir {MODEL_DIR}")
+# model.onnx = grafo, model.onnx_data = pesi (mappati in memoria): sempre insieme.
+datas += [(f"{MODEL_DIR}/onnx/model.onnx", "pii_model"),
+          (f"{MODEL_DIR}/onnx/model.onnx_data", "pii_model")]
+datas += [(f"{MODEL_DIR}/{f}", "pii_model")
+          for f in ("config.json", "tokenizer.json", "tokenizer_config.json",
+                    "special_tokens_map.json")]
 datas += [("src/app/assets", "assets")]   # mascotte/icone -> app.py le serve da _resource_path("assets")
-hiddenimports += ["fitz", "flask", "sklearn.utils._typedefs"]
+hiddenimports += ["fitz", "flask", "onnx_ner"]
 
 # escludi tutto cio' che non serve (riduce dimensione e rumore)
 excludes = [
     "tensorflow", "tensorflow_intel", "tf_keras", "keras", "jax", "jaxlib", "flax",
     "vllm", "FlagEmbedding", "flagembedding", "torchvision", "torchaudio",
+    "torch", "transformers", "safetensors", "accelerate", "sklearn", "sympy",
     "matplotlib", "pandas", "scipy", "IPython", "notebook", "PyQt5", "PySide2",
 ]
 

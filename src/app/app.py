@@ -53,7 +53,6 @@ from collections import OrderedDict
 from pathlib import Path
 
 import fitz  # PyMuPDF
-import torch
 from flask import (Flask, jsonify, render_template_string, request,
                    send_from_directory)
 
@@ -65,7 +64,7 @@ import server_config
 from detectors import (DETECTORS, SOFT_REGEX_LABELS, cf_ok,  # noqa: F401
                        complete_time, detect_iban, detect_regex, iban_ok, luhn_ok,
                        piva_ok)
-from transformers import pipeline
+from onnx_ner import OnnxTokenClassifier, find_onnx
 
 
 def _resource_path(rel):
@@ -129,16 +128,30 @@ OVERLAP = 20         # parole di sovrapposizione tra chunk consecutivi
 # --------------------------------------------------------------------------- #
 # Caricamento modello (una sola volta all'avvio)
 # --------------------------------------------------------------------------- #
-device = 0 if torch.cuda.is_available() else -1
-print(f"Carico il modello da {MODEL_DIR} su {'GPU' if device == 0 else 'CPU'}...")
-nlp = pipeline(
-    "token-classification",
-    model=MODEL_DIR,
-    tokenizer=MODEL_DIR,
-    aggregation_strategy="simple",
-    device=device,
-)
-print("Modello pronto.")
+# Due backend con lo stesso risultato (verificato da src/training/export_onnx.py):
+#   onnx  -> onnxruntime + tokenizers, niente torch: e' quello dell'app impacchettata.
+#   torch -> pipeline di transformers (CPU o GPU): serve se il .onnx non c'e'.
+# PII_BACKEND=onnx|torch forza la scelta; di default si usa ONNX quando c'e' il model.onnx.
+_backend = os.environ.get("PII_BACKEND", "auto").strip().lower()
+_onnx_path = find_onnx(MODEL_DIR)
+if _backend == "onnx" or (_backend != "torch" and _onnx_path):
+    print(f"Carico il modello ONNX da {_onnx_path or MODEL_DIR} (CPU)...")
+    nlp = OnnxTokenClassifier(MODEL_DIR, onnx_path=_onnx_path)
+    MODEL_BACKEND, MODEL_DEVICE = "onnx", "cpu"
+else:
+    import torch
+    from transformers import pipeline
+    device = 0 if torch.cuda.is_available() else -1
+    print(f"Carico il modello da {MODEL_DIR} su {'GPU' if device == 0 else 'CPU'}...")
+    nlp = pipeline(
+        "token-classification",
+        model=MODEL_DIR,
+        tokenizer=MODEL_DIR,
+        aggregation_strategy="simple",
+        device=device,
+    )
+    MODEL_BACKEND, MODEL_DEVICE = "torch", ("cuda" if device == 0 else "cpu")
+print(f"Modello pronto ({MODEL_BACKEND}).")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
@@ -502,7 +515,8 @@ def health():
         "model": os.path.basename(str(MODEL_DIR).rstrip("/\\")),
         "model_version": APP_MODEL_VERSION,
         "app_version": APP_VERSION,
-        "device": "cuda" if device == 0 else "cpu",
+        "device": MODEL_DEVICE,
+        "backend": MODEL_BACKEND,
         "tags": len(TAG_NAMES),
         "excluded_tags": excl,
         "mapping_enabled": mapping,
