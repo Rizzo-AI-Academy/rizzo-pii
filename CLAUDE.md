@@ -168,7 +168,7 @@ scrive `config.json`, rilancia il sidecar e riprova. Splash con badge UE/GDPR + 
 `save_config(host, port)`, `retry_backend`, `retry_download`, `open_model_folder`, `splash_sync`.
 
 **Modello al primo avvio — `tauri/src-tauri/src/model.rs`:** due installer Windows dalla stessa build.
-Il **leggero** (`Rizzo-PII-<ver>-Windows-Setup.exe`, ~60 MB, sidecar con `PII_BUNDLE_MODEL=0`) non ha i
+Il **leggero** (`Rizzo-PII-<ver>-Windows-Setup.exe`, ~90 MB dalla CI, sidecar con `PII_BUNDLE_MODEL=0`) non ha i
 pesi: al primo avvio Tauri scarica da HF i 6 file ONNX (repo `rizzoaiacademy/rizzo-pii-0.3B`,
 **commit fissato** `MODEL_COMMIT` + **sha256 per file** in `MODEL_FILES`), con ripresa (`.part` +
 Range), 4 tentativi, proxy da `HTTPS_PROXY`, avanzamento nello splash. Li tiene in

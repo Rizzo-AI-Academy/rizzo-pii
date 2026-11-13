@@ -46,7 +46,7 @@ Output: `tauri\src-tauri\backend\pii-backend\pii-backend.exe` (+ `_internal\`, m
 (1,2 GB sono il modello; con torch erano 1,8 GB).
 
 Con **`$env:PII_BUNDLE_MODEL = "0"`** il sidecar esce **senza modello** (~155 MB) e l'installer
-pesa ~60 MB: l'app scarica il modello da Hugging Face al primo avvio — vedi
+pesa ~60-90 MB (59 MB in locale, ~90 MB dalla CI): l'app scarica il modello da Hugging Face al primo avvio — vedi
 [§ Modello al primo avvio](#modello-al-primo-avvio-installer-leggero-e-offline).
 Nota: `target\release\backend\` (usata lanciando `app.exe` direttamente) si aggiorna solo quando
 ricompila `build.rs`; dopo aver cambiato il sidecar, `rm -r target\release\backend` + tocca
@@ -153,7 +153,7 @@ La CI produce **due installer Windows** dalla stessa build:
 
 | installer | dimensione | modello |
 |---|---|---|
-| `Rizzo-PII-<ver>-Windows-Setup.exe` | ~60 MB | scaricato da Hugging Face al primo avvio |
+| `Rizzo-PII-<ver>-Windows-Setup.exe` | ~90 MB | scaricato da Hugging Face al primo avvio |
 | `Rizzo-PII-<ver>-Windows-Setup-offline.exe` | ~1,15 GB | dentro l'installer, nessuna rete richiesta |
 
 Il leggero è quello linkato dalla landing. L'offline serve a PC senza internet o a reti

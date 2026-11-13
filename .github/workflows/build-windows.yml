@@ -108,7 +108,7 @@ jobs:
           Remove-Item -Recurse -Force build/sidecar_work
 
       # Due installer dalla stessa build Rust:
-      #   Rizzo-PII-<ver>-Windows-Setup.exe          leggero (~150 MB): al primo avvio
+      #   Rizzo-PII-<ver>-Windows-Setup.exe          leggero (~90 MB): al primo avvio
       #       l'app scarica il modello da Hugging Face (tauri/src-tauri/src/model.rs);
       #   Rizzo-PII-<ver>-Windows-Setup-offline.exe  completo (~1,15 GB): modello dentro,
       #       per PC senza internet o reti che bloccano huggingface.co.
