@@ -32,7 +32,7 @@ def _pdf(**cifratura):
 @unittest.skipIf(APP is None, "app.py non importabile (torch/flask/fitz assenti)")
 class PdfProtetto(unittest.TestCase):
     def _post(self, route, dati):
-        with patch.object(APP, "nlp", lambda chunks: [[] for _ in chunks]):
+        with patch.object(APP, "nlp", lambda chunks, **kw: [[] for _ in chunks]):
             return APP.app.test_client().post(
                 route, data={"file": (io.BytesIO(dati), "atto.pdf")},
                 content_type="multipart/form-data")

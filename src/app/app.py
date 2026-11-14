@@ -57,6 +57,7 @@ import torch
 from flask import (Flask, jsonify, render_template_string, request,
                    send_from_directory)
 
+import csv_jobs
 import pdf_export
 import pdf_text
 import server_config
@@ -129,15 +130,46 @@ OVERLAP = 20         # parole di sovrapposizione tra chunk consecutivi
 # --------------------------------------------------------------------------- #
 # Caricamento modello (una sola volta all'avvio)
 # --------------------------------------------------------------------------- #
-device = 0 if torch.cuda.is_available() else -1
-print(f"Carico il modello da {MODEL_DIR} su {'GPU' if device == 0 else 'CPU'}...")
-nlp = pipeline(
-    "token-classification",
-    model=MODEL_DIR,
-    tokenizer=MODEL_DIR,
-    aggregation_strategy="simple",
-    device=device,
-)
+MODEL_BATCH_SIZE = 32   # chunk per forward pass del modello (detect_spans_batch / detect_model)
+
+
+def _pick_device(forced=None):
+    """CUDA se c'e', altrimenti Apple MPS (GPU dei Mac Apple Silicon), altrimenti CPU.
+
+    env PII_DEVICE = auto (default) | cpu | mps | cuda forza il dispositivo, es. per
+    misurare l'impatto della CPU. Se quello chiesto non e' disponibile si avvisa e si
+    torna alla scelta automatica."""
+    forced = (forced if forced is not None else os.environ.get("PII_DEVICE", "auto")).strip().lower()
+    mps = getattr(torch.backends, "mps", None)
+    avail = {"cpu": True, "cuda": torch.cuda.is_available(),
+             "mps": mps is not None and mps.is_available()}
+    if forced in avail:
+        if avail[forced]:
+            return forced
+        print(f"ATTENZIONE: PII_DEVICE={forced} non disponibile, scelta automatica.", file=sys.stderr)
+    elif forced not in ("", "auto"):
+        print(f"ATTENZIONE: PII_DEVICE={forced!r} sconosciuto (auto|cpu|mps|cuda), scelta automatica.",
+              file=sys.stderr)
+    if avail["cuda"]:
+        return "cuda"
+    if avail["mps"]:
+        return "mps"
+    return "cpu"
+
+
+def _build_pipeline(dev):
+    return pipeline(
+        "token-classification",
+        model=MODEL_DIR,
+        tokenizer=MODEL_DIR,
+        aggregation_strategy="simple",
+        device={"cuda": 0, "mps": "mps", "cpu": -1}[dev],
+    )
+
+
+DEVICE_NAME = _pick_device()   # "cuda" | "mps" | "cpu" (riportato da /health)
+print(f"Carico il modello da {MODEL_DIR} su {DEVICE_NAME.upper()}...")
+nlp = _build_pipeline(DEVICE_NAME)
 print("Modello pronto.")
 
 app = Flask(__name__)
@@ -293,16 +325,45 @@ def chunk_text(text, max_words=MAX_WORDS, overlap=OVERLAP):
     return chunks
 
 
-def detect_model(text):
-    """Entita' trovate dal modello mmBERT su tutti i chunk, su offset globali."""
-    chunks = chunk_text(text)
-    ents = []
-    if chunks:
-        results = nlp([c for c, _ in chunks])
+# Un'inferenza alla volta: le richieste Flask (threaded) e il worker dei job CSV
+# condividono la stessa pipeline, che non e' thread-safe.
+_NLP_LOCK = threading.Lock()
+
+
+def _run_nlp(inputs):
+    """nlp() a batch esplicito, serializzato. Se MPS fallisce (operatore non supportato,
+    memoria...) ricostruisce la pipeline su CPU e riprova, una volta per tutte. Il lock
+    copre sia l'inferenza sia il cambio di pipeline."""
+    global nlp, DEVICE_NAME
+    with _NLP_LOCK:
+        try:
+            return nlp(inputs, batch_size=MODEL_BATCH_SIZE)
+        except Exception as exc:                      # noqa: BLE001
+            if DEVICE_NAME != "mps":
+                raise
+            # solo il tipo di errore: mai il testo dell'utente
+            print(f"ATTENZIONE: inferenza su MPS fallita ({type(exc).__name__}), passo alla CPU.",
+                  file=sys.stderr)
+            nlp = _build_pipeline("cpu")
+            DEVICE_NAME = "cpu"
+            return nlp(inputs, batch_size=MODEL_BATCH_SIZE)
+
+
+def detect_model_many(texts):
+    """Come detect_model, ma su tanti testi: tutti i chunk di tutti i testi vanno al
+    modello in UNA chiamata (batch). Ritorna [(ents, n_chunks), ...] nell'ordine di `texts`."""
+    per_text = [chunk_text(t) for t in texts]
+    flat = [c for chunks in per_text for c, _ in chunks]
+    results = []
+    if flat:
+        results = _run_nlp(flat)
         if isinstance(results, dict):                 # singolo chunk -> normalizza
             results = [results]
-        for (_, off), res in zip(chunks, results):
-            for e in res:
+    out, k = [], 0
+    for chunks in per_text:
+        ents = []
+        for _, off in chunks:
+            for e in results[k]:
                 ents.append({
                     "label": e["entity_group"],
                     "start": int(e["start"]) + off,
@@ -311,7 +372,14 @@ def detect_model(text):
                     "validated": False,
                     "source": "modello",
                 })
-    return ents, len(chunks)
+            k += 1
+        out.append((ents, len(chunks)))
+    return out
+
+
+def detect_model(text):
+    """Entita' trovate dal modello mmBERT su tutti i chunk, su offset globali."""
+    return detect_model_many([text])[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -398,12 +466,7 @@ def analyze(text, excluded=None, mapping_enabled=True):
     soggetto, ma da sola non fa risalire al valore."""
     excluded = set(excluded or ())
     model_ents, n_chunks = detect_model(text)
-    # il modello taglia i minuti delle ore: la regex dell'ora completa SOLO le sue span TIME
-    complete_time(model_ents, text)
-    cands = model_ents + detect_regex(text)
-    if excluded:
-        cands = [e for e in cands if e["label"] not in excluded]
-    kept = _merge(cands, text)
+    kept = _merge(_candidates(text, model_ents, excluded), text)
 
     # ID reversibili: stesso (label, valore-normalizzato) -> stesso placeholder.
     counters, seen, mapping = {}, {}, {}
@@ -458,6 +521,27 @@ def analyze(text, excluded=None, mapping_enabled=True):
     }
 
 
+def _candidates(text, model_ents, excluded):
+    complete_time(model_ents, text)   # il modello taglia i minuti delle ore
+    cands = model_ents + detect_regex(text)
+    if excluded:
+        cands = [e for e in cands if e["label"] not in excluded]
+    return cands
+
+
+def detect_spans_batch(texts, excluded=()):
+    """Span (start, end, label) non sovrapposte per ciascun testo: stessa pipeline di
+    analyze() (modello + ora + regex, tag esclusi, _merge), ma il modello vede tutti i
+    chunk di tutti i testi in un'unica chiamata. Nessun placeholder: lo fa il chiamante."""
+    excluded = set(excluded or ())
+    model = [m for m, _ in detect_model_many(texts)]
+    out = []
+    for text, ments in zip(texts, model):
+        kept = _merge(_candidates(text, ments, excluded), text)
+        out.append([(e["start"], e["end"], e["label"]) for e in kept])
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Endpoints
 # --------------------------------------------------------------------------- #
@@ -502,7 +586,7 @@ def health():
         "model": os.path.basename(str(MODEL_DIR).rstrip("/\\")),
         "model_version": APP_MODEL_VERSION,
         "app_version": APP_VERSION,
-        "device": "cuda" if device == 0 else "cpu",
+        "device": DEVICE_NAME,
         "tags": len(TAG_NAMES),
         "excluded_tags": excl,
         "mapping_enabled": mapping,
@@ -867,6 +951,13 @@ def port_check():
     return jsonify({"available": server_config.port_available(host, port)})
 
 
+# Job CSV (upload a pezzi, coda, download in streaming): vedi csv_jobs.py
+app.register_blueprint(csv_jobs.create_blueprint(
+    _get_prefs, lambda: globals().get("detect_spans_batch"), valid_tags=TAG_NAMES,
+    # avviso "file grande" alla stessa soglia del limite di upload dell'app (oggi 50 MB)
+    large_threshold=lambda: app.config["MAX_CONTENT_LENGTH"]))
+
+
 # --------------------------------------------------------------------------- #
 # UI (single page)
 # --------------------------------------------------------------------------- #
@@ -1172,6 +1263,56 @@ PAGE = r"""
   .tg-row .ex{font-size:11.5px;color:var(--soft)}
   .tg-row.off{opacity:.55}
   .tg-row.off .nm{text-decoration:line-through}
+
+  /* modalita' CSV: lista file + anteprima tabellare con un interruttore "Anonimizza" per colonna (sx),
+     avanzamento del job e download (dx). Le tabelle scorrono in orizzontale. */
+  .csvview{padding:10px 12px;display:flex;flex-direction:column;gap:12px}
+  .csvbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12.5px;color:var(--muted)}
+  .csvbar select{border:1px solid var(--line);border-radius:8px;padding:5px 8px;font:inherit;
+                 font-size:12.5px;background:#fff;color:var(--ink)}
+  .csvbar label{display:inline-flex;align-items:center;gap:6px;cursor:pointer;user-select:none}
+  .csvbar input{accent-color:var(--brand)}
+  .csvfile{border:1px solid var(--line);border-radius:10px;background:#fff;overflow:hidden;flex:none}
+  .csvfile .fh{display:flex;align-items:center;gap:4px 9px;padding:8px 11px;border-bottom:1px solid var(--line2);
+               font-size:13px;flex-wrap:wrap}
+  .csvfile .fh b{overflow-wrap:anywhere}
+  .csvfile .fh .meta2{color:var(--soft);font-size:12px}
+  .csvfile .fh .x{margin-left:auto;background:none;border:0;padding:2px 6px;color:var(--soft);font-size:15px}
+  .csvfile .fh .x:hover{color:var(--ink)}
+  .csvfile .msg{padding:10px 12px;font-size:12.5px;color:var(--muted)}
+  .csvfile .msg.err{color:#b91c1c}
+  .csvwrap{overflow:auto;max-height:340px}
+  .csvtbl{border-collapse:separate;border-spacing:0;font-size:12.5px;width:max-content;min-width:100%}
+  .csvtbl th,.csvtbl td{padding:5px 9px;border-bottom:1px solid var(--line2);white-space:nowrap;
+                        max-width:220px;overflow:hidden;text-overflow:ellipsis;text-align:left}
+  .csvtbl thead tr:first-child th{top:0;z-index:2;background:#faf9fc;text-transform:none;letter-spacing:0;
+                                  padding:6px 6px}
+  .csvtbl thead tr:nth-child(2) th{top:34px;z-index:2;color:var(--ink);font-family:ui-monospace,Consolas,monospace;
+                                   font-size:12px;text-transform:none;letter-spacing:0}
+  .csvtbl .ctog{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;
+                cursor:pointer;user-select:none;color:var(--ink)}
+  .csvtbl .ctog input{accent-color:var(--brand);margin:0;cursor:pointer}
+  .csvtbl .m-anonymize{background:#edf8f1}
+  .csvtbl .m-preserve{color:var(--soft)}
+  .csvtbl thead .m-preserve .ctog{color:var(--soft);font-weight:500}
+  .csvfile .fh .all{background:none;border:0;padding:0 2px;font:inherit;font-size:12px;
+                    color:var(--brand);cursor:pointer;text-decoration:underline}
+  .csvfile .fh .all:disabled{color:var(--soft);cursor:default;text-decoration:none}
+  .csvfile .callout{margin:9px 11px;font-size:12.5px;padding:9px 12px}
+  .bar{height:7px;border-radius:999px;background:var(--line2);overflow:hidden;margin:6px 0 4px}
+  .bar i{display:block;height:100%;background:var(--brand);border-radius:999px;transition:width .3s}
+  .bar.ok i{background:var(--ok)} .bar.err i{background:#c2410c}
+  .cjob{display:flex;flex-direction:column;gap:10px}
+  .cjob .cf{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fff}
+  .cjob .cf .nm{font-size:13px;font-weight:600;overflow-wrap:anywhere}
+  .cjob .cf .sub{font-size:12.5px;color:var(--muted)}
+  .cjob .cf .sub.err{color:#b91c1c}
+  .cstate{font-size:11px;font-weight:800;letter-spacing:.05em;border-radius:999px;padding:2px 9px;
+          background:var(--line2);color:var(--muted);text-transform:uppercase}
+  .cstate.running,.cstate.queued{background:#f1e9f7;color:var(--brand-dk)}
+  .cstate.done{background:#eaf7ef;color:var(--ok)}
+  .cstate.error{background:#fef2f2;color:#b91c1c}
+  .cstate.cancelled{background:#fff7ed;color:#9a3412}
 </style>
 </head>
 <body>
@@ -1219,11 +1360,12 @@ PAGE = r"""
           </div></div>
         <div class="bd">
           <div class="view pdfview" id="pdfSrcView" style="display:none"></div>
+          <div class="view csvview" id="csvSrcView" style="display:none"></div>
           <textarea id="src" data-i18n-ph="src_ph" placeholder="Incolla qui il testo dell'atto, del contratto o della sentenza…&#10;&#10;Oppure trascina un PDF nell'area qui sotto."></textarea>
           <label class="drop" id="drop">
             <span class="ic">📄</span>
-            <span id="dropTxt">Trascina un <b>PDF</b> o un <b>.md</b> qui, oppure <b>scegli un file</b></span>
-            <input type="file" id="pdf" accept=".pdf,.md,.markdown,.txt,application/pdf,text/markdown,text/plain" hidden>
+            <span id="dropTxt">Trascina un <b>PDF</b>, un <b>.md</b> o uno o più <b>CSV</b> qui, oppure <b>scegli un file</b></span>
+            <input type="file" id="pdf" accept=".pdf,.md,.markdown,.txt,.csv,.tsv,application/pdf,text/markdown,text/plain,text/csv" multiple hidden>
           </label>
           <div class="mapsw" id="mapSw">
             <button class="tsw" id="mapToggle" role="switch" aria-checked="true"
@@ -1247,7 +1389,7 @@ PAGE = r"""
         <div class="hd">
           <h2 data-i18n="out_title">② Risultato</h2>
           <div class="right">
-            <div class="seg-tabs">
+            <div class="seg-tabs" id="outTabs">
               <button class="on" id="vPrev" onclick="setView('prev')" data-i18n="v_prev">Anteprima</button>
               <button id="vText" onclick="setView('text')" data-i18n="v_text">Testo da copiare</button>
               <button id="vPdf" onclick="setView('pdf')" data-i18n="v_opdf">PDF censurato</button>
@@ -1263,9 +1405,10 @@ PAGE = r"""
             <div class="preview" id="prev" style="display:none"></div>
           </div>
           <div class="view pdfview" id="pdfOutView" style="display:none"></div>
+          <div class="view" id="csvOutView" style="display:none"></div>
           <textarea class="mono" id="anon" style="display:none" readonly
                     data-i18n-ph="anon_ph" placeholder="Il testo anonimizzato apparirà qui."></textarea>
-          <div class="row">
+          <div class="row" id="outRow">
             <button class="btn" id="copy">📋 <span data-i18n="copy">Copia per ChatGPT</span></button>
             <button class="ghost" id="dlpdf">📄 <span data-i18n="dlpdf">Scarica PDF anonimizzato</span></button>
             <button class="ghost" id="dl">⬇️ <span data-i18n="dl">Scarica dizionario</span></button>
@@ -1406,9 +1549,9 @@ const T = {
   tagline:"modello locale su CPU · GDPR compliant", badge:"100% in locale",
   notice:"<b>Versione in sviluppo.</b> Il modello AI non è perfetto e può commettere errori: verifica sempre il risultato prima di usarlo. Queste sono le prime versioni e il progetto è completamente <b>open source</b>. Se ti è utile, <b>lascia una ⭐ alla repo</b> e contribuisci a migliorarlo: <a href=\"https://github.com/Rizzo-AI-Academy/rizzo-pii\" target=\"_blank\" rel=\"noopener\">apri la repo su GitHub ↗</a>",
   tab1:"Anonimizza", tab2:"Ripristina la risposta",
-  in_title:"① Il tuo documento", in_hint:"incolla testo o trascina un PDF / .md",
+  in_title:"① Il tuo documento", in_hint:"incolla testo o trascina un PDF / .md / CSV",
   src_ph:"Incolla qui il testo dell'atto, del contratto o della sentenza…\n\nOppure trascina un PDF o un file .md nell'area qui sotto.",
-  drop:"Trascina un <b>PDF</b> o un <b>.md</b> qui, oppure <b>scegli un file</b>",
+  drop:"Trascina un <b>PDF</b>, un <b>.md</b> o uno o più <b>CSV</b> qui, oppure <b>scegli un file</b>",
   go:"Anonimizza", clear:"Pulisci",
   out_title:"② Risultato", v_prev:"Anteprima", v_text:"Testo da copiare",
   v_pdf:"Anteprima PDF", v_raw:"Testo", v_opdf:"PDF censurato",
@@ -1440,7 +1583,33 @@ const T = {
   t_no_dict:"Nessun dizionario: caricane uno .json", t_restored:"Valori ripristinati",
   t_nothing_copy:"Niente da copiare", t_restored_copied:"Testo ripristinato copiato",
   t_dict_loaded:"Dizionario caricato", t_json_invalid:"JSON non valido",
-  t_drag_pdf:"Formato non supportato: usa PDF, .md o .txt",
+  t_drag_pdf:"Formato non supportato: usa PDF, .md, .txt o .csv",
+  drop_csv:n=>"📊 <b>"+n+" file CSV</b> · trascinane altri o <b>scegli</b>",
+  csv_hint:"CSV: scegli quali colonne anonimizzare (le altre restano in chiaro)",
+  csv_mixed:"Solo i CSV sono stati caricati: gli altri file vanno elaborati a parte",
+  csv_reading_out:"Anteprima del risultato…",
+  csv_out_preview:(n,c)=>"anteprima anonimizzata · prime "+n+" righe · "+c+" colonne",
+  csv_strict:"Fermati alla prima riga malformata",
+  csv_analyze:"Anonimizza", csv_all:"tutte", csv_none:"nessuna",
+  csv_col_on:"Colonna anonimizzata: le PII vengono sostituite da un placeholder",
+  csv_col_off:"Colonna lasciata in chiaro: non viene nemmeno analizzata",
+  csv_large:n=>"<b>File grande (oltre "+n+" MB)</b>: anonimizzare ogni colonna richiede tempo. Lascia in chiaro le colonne che non contengono dati personali per ridurre i tempi.",
+  csv_uploading:p=>"Caricamento… "+p+"%", csv_reading:"Lettura dell'intestazione…",
+  csv_cols:(c,d,e)=>c+" colonne · separatore "+d+" · "+e,
+  csv_preview_n:n=>"prime "+n+" righe",
+  csv_empty:"Scegli quali colonne anonimizzare e premi <b>Anonimizza</b>: l'avanzamento e i file da scaricare appariranno qui.",
+  csv_wait_upload:"Attendi la fine del caricamento", csv_none_ready:"Nessun CSV pronto",
+  csv_busy:"Un job CSV è già in corso", csv_running_go:"Avvio…",
+  st_queued:"in coda", st_running:"in corso", st_done:"completato", st_error:"errore",
+  st_cancelled:"annullato",
+  csv_rows:(n,s)=>n+" righe"+(s?" · "+s+" saltate":""),
+  csv_skipped_at:l=>"righe saltate: "+l,
+  csv_dl:"Scarica", csv_dl_dict:n=>"Scarica dizionario ("+n+" ID)",
+  csv_cancel:"Annulla", csv_queue:n=>"in coda · posizione "+n,
+  csv_dict_off:"Dizionario disattivato: l'anonimizzazione di questi CSV è <b>definitiva</b>.",
+  csv_done_toast:n=>"CSV anonimizzati · "+n+" righe",
+  csv_dict_local:n=>"dizionario in memoria per il ripristino · "+n+" ID",
+  csv_dict_big:"Dizionario grande: scaricalo e caricalo nel ripristino",
   pii_found:(n,u)=>n+" PII trovate · "+u+" valori unici",
   dict_n:n=>n+" ID nel dizionario",
   dict_loaded_n:n=>"dizionario caricato · "+n+" ID",
@@ -1471,9 +1640,9 @@ const T = {
   tagline:"local model on CPU · GDPR compliant", badge:"100% local",
   notice:"<b>Work in progress.</b> The AI model isn't perfect and can make mistakes: always double-check the result before relying on it. These are the very first versions and the project is fully <b>open source</b>. If you find it useful, <b>leave a ⭐ on the repo</b> and help improve it: <a href=\"https://github.com/Rizzo-AI-Academy/rizzo-pii\" target=\"_blank\" rel=\"noopener\">open the repo on GitHub ↗</a>",
   tab1:"Anonymize", tab2:"Restore the answer",
-  in_title:"① Your document", in_hint:"paste text or drop a PDF / .md",
+  in_title:"① Your document", in_hint:"paste text or drop a PDF / .md / CSV",
   src_ph:"Paste here the text of the deed, contract or judgment…\n\nOr drop a PDF or a .md file onto the area below.",
-  drop:"Drop a <b>PDF</b> or a <b>.md</b> here, or <b>choose a file</b>",
+  drop:"Drop a <b>PDF</b>, a <b>.md</b> or one or more <b>CSV</b> files here, or <b>choose a file</b>",
   go:"Anonymize", clear:"Clear",
   out_title:"② Result", v_prev:"Preview", v_text:"Text to copy",
   v_pdf:"PDF preview", v_raw:"Text", v_opdf:"Redacted PDF",
@@ -1505,7 +1674,33 @@ const T = {
   t_no_dict:"No dictionary: load a .json one", t_restored:"Values restored",
   t_nothing_copy:"Nothing to copy", t_restored_copied:"Restored text copied",
   t_dict_loaded:"Dictionary loaded", t_json_invalid:"Invalid JSON",
-  t_drag_pdf:"Unsupported format: use PDF, .md or .txt",
+  t_drag_pdf:"Unsupported format: use PDF, .md, .txt or .csv",
+  drop_csv:n=>"📊 <b>"+n+" CSV file"+(n===1?"":"s")+"</b> · drop more or <b>choose</b>",
+  csv_hint:"CSV: choose which columns to anonymize (the others stay in clear text)",
+  csv_mixed:"Only the CSV files were loaded: process the other files separately",
+  csv_reading_out:"Loading the result preview…",
+  csv_out_preview:(n,c)=>"anonymized preview · first "+n+" rows · "+c+" columns",
+  csv_strict:"Stop at the first malformed row",
+  csv_analyze:"Anonymize", csv_all:"all", csv_none:"none",
+  csv_col_on:"Anonymized column: PII is replaced by a placeholder",
+  csv_col_off:"Column left in clear text: not even analyzed",
+  csv_large:n=>"<b>Large file (over "+n+" MB)</b>: anonymizing every column takes time. Leave in clear text the columns that contain no personal data to speed it up.",
+  csv_uploading:p=>"Uploading… "+p+"%", csv_reading:"Reading the header…",
+  csv_cols:(c,d,e)=>c+" columns · delimiter "+d+" · "+e,
+  csv_preview_n:n=>"first "+n+" rows",
+  csv_empty:"Choose which columns to anonymize and press <b>Anonymize</b>: progress and the files to download will appear here.",
+  csv_wait_upload:"Wait for the upload to finish", csv_none_ready:"No CSV ready",
+  csv_busy:"A CSV job is already running", csv_running_go:"Starting…",
+  st_queued:"queued", st_running:"running", st_done:"done", st_error:"error",
+  st_cancelled:"cancelled",
+  csv_rows:(n,s)=>n+" rows"+(s?" · "+s+" skipped":""),
+  csv_skipped_at:l=>"skipped rows: "+l,
+  csv_dl:"Download", csv_dl_dict:n=>"Download dictionary ("+n+" IDs)",
+  csv_cancel:"Cancel", csv_queue:n=>"queued · position "+n,
+  csv_dict_off:"Dictionary off: anonymization of these CSVs is <b>irreversible</b>.",
+  csv_done_toast:n=>"CSVs anonymized · "+n+" rows",
+  csv_dict_local:n=>"dictionary kept for restoring · "+n+" IDs",
+  csv_dict_big:"Large dictionary: download it and load it in Restore",
   pii_found:(n,u)=>n+" PII found · "+u+" unique values",
   dict_n:n=>n+" IDs in the dictionary",
   dict_loaded_n:n=>"dictionary loaded · "+n+" IDs",
@@ -1552,6 +1747,7 @@ function applyLang(l){
   renderMapping();
   if(TAGS.length && $('tagsOverlay').classList.contains('open')) renderTags();
   if(DATA) render();
+  if(CSV) csvRender();
 }
 
 /* ---- scroll sincronizzato editor (sx) <-> anteprima/testo (dx) ---- */
@@ -1667,6 +1863,7 @@ async function onFile(f){
 
 /* ---- analyze ---- */
 async function run(){
+  if(CSV){csvStart();return;}
   const file=$('pdf').files[0];const text=$('src').value.trim();
   if(!file&&!text){toast(tt('t_need_input'),false);return;}
   $('go').disabled=true;const old=$('go').innerHTML;
@@ -1905,7 +2102,7 @@ $('dictFile').onchange=e=>{const f=e.target.files[0];if(!f)return;
 
 /* ---- input helpers ---- */
 $('go').onclick=run;
-$('clear').onclick=()=>{$('src').value='';$('pdf').value='';$('dropTxt').innerHTML=tt('drop');
+$('clear').onclick=()=>{if(CSV)csvExit();$('src').value='';$('pdf').value='';$('dropTxt').innerHTML=tt('drop');
   DATA=null;$('prev').style.display='none';$('emptyPrev').style.display='';
   $('anon').value='';$('meta').innerHTML='';$('legend').innerHTML='';
   $('dictCard').style.display='none';$('ulock').textContent='';
@@ -1920,14 +2117,335 @@ $('src').addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Ente
 
 /* pdf picker + dropzone */
 const drop=$('drop');
-$('pdf').onchange=e=>{const f=e.target.files[0];if(f)onFile(f);};
+$('pdf').onchange=e=>{const fs=[...e.target.files];const cs=fs.filter(isCsv);
+  if(cs.length){e.target.value='';if(cs.length<fs.length)toast(tt('csv_mixed'),false);csvAdd(cs);return;}
+  const f=fs[0];if(f){if(CSV)csvExit();onFile(f);}};
 ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hot');}));
 ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hot');}));
 const OK_EXT=/\.(pdf|md|markdown|txt|text)$/i;
-drop.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];
-  if(f&&(f.type==='application/pdf'||OK_EXT.test(f.name))){
+drop.addEventListener('drop',e=>{const fs=[...e.dataTransfer.files];
+  const cs=fs.filter(isCsv);if(cs.length){if(cs.length<fs.length)toast(tt('csv_mixed'),false);csvAdd(cs);return;}
+  const f=fs[0];
+  if(f&&(f.type==='application/pdf'||OK_EXT.test(f.name))){if(CSV)csvExit();
     const dt=new DataTransfer();dt.items.add(f);$('pdf').files=dt.files;
     onFile(f);}else toast(tt('t_drag_pdf'),false);});
+
+/* ---- CSV: upload a pezzi su un job del server, piano per colonna, avanzamento ----
+   Un CSV puo' pesare GB: il browser lo manda a fette (File.slice, chunk_size dal
+   server) in un file temporaneo locale; il server ne legge solo l'inizio per
+   l'anteprima e propone un piano. Il job gira in un thread del server e si segue
+   col polling; i file anonimizzati si scaricano in streaming. Niente lascia la
+   macchina: e' tutto su 127.0.0.1 come il resto dell'app. */
+let CSV=null;                 // {files:[...], strict, job, status}
+let CSV_SEQ=0;
+const CSV_DICT_LOCAL_MAX=20000;   // oltre: il dizionario non va in localStorage
+const isCsv=f=>/\.(csv|tsv)$/i.test(f.name)||f.type==='text/csv';
+const jpost=(url,body)=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify(body||{})});
+const nf=n=>(n||0).toLocaleString(L);
+function fmtBytes(n){const u=['B','KB','MB','GB'];let i=0;while(n>=1024&&i<3){n/=1024;i++;}
+  return (i?n.toFixed(1):n)+' '+u[i];}
+const csvActive=()=>CSV&&CSV.status&&['queued','running'].includes(CSV.status.state);
+
+function csvEnter(){
+  if(CSV)return;
+  CSV={files:[],strict:false,job:null,status:null};
+  // fuori la modalita' testo/PDF: il file eventualmente scelto prima non conta piu'
+  $('pdf').value='';SRC_DOC=null;DATA=null;
+  $('src').style.display='none';$('pdfSrcView').style.display='none';$('srcTabs').style.display='none';
+  $('csvSrcView').style.display='';
+  $('outTabs').style.display='none';$('outRow').style.display='none';
+  $('viewPrev').style.display='none';$('anon').style.display='none';$('pdfOutView').style.display='none';
+  $('csvOutView').style.display='';$('dictCard').style.display='none';
+  document.querySelector('.app').classList.remove('has-result');
+}
+function csvExit(){
+  if(!CSV)return;
+  const c=CSV;CSV=null;
+  // via dal server tutto quel che e' temporaneo: job (input+output+registro) e upload sciolti
+  if(c.job)fetch('/csv/jobs/'+c.job,{method:'DELETE'}).catch(()=>{});
+  for(const it of c.files){it.gone=true;
+    if(it.uid&&!c.job)fetch('/csv/uploads/'+it.uid,{method:'DELETE'}).catch(()=>{});}
+  $('csvSrcView').style.display='none';$('csvSrcView').innerHTML='';
+  $('csvOutView').style.display='none';$('csvOutView').innerHTML='';
+  $('src').style.display='';$('outTabs').style.display='';$('outRow').style.display='';
+  $('inHint').innerHTML=tt('in_hint');$('inHint').style.display='';
+  $('dropTxt').innerHTML=tt('drop');
+  setView('prev');
+}
+
+async function csvAdd(files){
+  if(csvActive()){toast(tt('csv_busy'),false);return;}
+  if(CSV&&CSV.job){csvExit();}          // job finito: nuovi file -> si riparte da zero
+  csvEnter();
+  const items=files.map(f=>({key:++CSV_SEQ,file:f,uid:null,fin:null,plan:null,
+                             state:'uploading',sent:0,error:null}));
+  CSV.files.push(...items);
+  csvRender();
+  for(const it of items)await csvUpload(it);   // uno alla volta: il disco ringrazia
+}
+
+async function csvUpload(it,keepPlan){
+  const mine=CSV;
+  it.state='uploading';it.sent=0;it.error=null;
+  try{
+    let r=await jpost('/csv/uploads',{name:it.file.name,size:it.file.size});
+    let d=await r.json();if(!r.ok)throw new Error(d.error||r.status);
+    it.uid=d.upload_id;const cs=d.chunk_size;let off=0;
+    while(off<it.file.size){
+      if(it.gone||CSV!==mine)return;
+      r=await fetch('/csv/uploads/'+it.uid+'?offset='+off,{method:'PUT',
+        headers:{'Content-Type':'application/octet-stream'},body:it.file.slice(off,off+cs)});
+      d=await r.json();if(!r.ok)throw new Error(d.error||r.status);
+      off=d.received;it.sent=off;csvProgress(it);
+    }
+    it.state='reading';csvProgress(it);
+    r=await jpost('/csv/uploads/'+it.uid+'/finalize',{});
+    d=await r.json();if(!r.ok)throw new Error(d.error||r.status);
+    if(it.gone||CSV!==mine)return;
+    it.fin=d;
+    if(!(keepPlan&&it.plan&&it.plan.length===d.header.length))it.plan=d.plan;
+    it.state='ready';
+  }catch(e){it.state='error';it.error=e.message;}
+  if(CSV===mine&&!keepPlan)csvRender();
+}
+
+function csvProgress(it){
+  const el=document.getElementById('csvmsg'+it.key);if(!el)return;
+  el.className='msg';
+  el.innerHTML=it.state==='reading'?tt('csv_reading')
+    :T[L].csv_uploading(it.file.size?Math.floor(100*it.sent/it.file.size):100)
+     +'<div class="bar"><i style="width:'+(it.file.size?100*it.sent/it.file.size:0)+'%"></i></div>';
+}
+
+function csvRemove(key){
+  if(csvActive())return;
+  const it=CSV.files.find(f=>f.key===key);if(!it)return;
+  it.gone=true;CSV.files=CSV.files.filter(f=>f!==it);
+  if(it.uid&&!CSV.job)fetch('/csv/uploads/'+it.uid,{method:'DELETE'}).catch(()=>{});
+  if(!CSV.files.length){csvExit();return;}
+  csvRender();
+}
+
+/* ogni colonna: "anonymize" (stesso motore del testo: modello + regex/checksum) o
+   "preserve" (lasciata intatta). Nessun'altra modalita'. */
+function csvMode(it,c){return ((it.plan||[])[c]||{}).mode==='preserve'?'preserve':'anonymize';}
+function csvSetCol(key,col,on){
+  const it=CSV.files.find(f=>f.key===key);if(!it)return;
+  const mode=on?'anonymize':'preserve';
+  it.plan[col]={mode};
+  // ricolora la colonna senza ridisegnare la tabella (non perde lo scroll)
+  document.querySelectorAll('#csvt'+key+' [data-c="'+col+'"]').forEach(el=>{
+    el.className=el.className.replace(/\bm-\S+/g,'').trim()+' m-'+mode;});
+  const cb=document.getElementById('csvc'+key+'_'+col);
+  if(cb){cb.checked=on;cb.parentNode.title=tt(on?'csv_col_on':'csv_col_off');}
+}
+function csvSetAll(key,on){
+  const it=CSV.files.find(f=>f.key===key);if(!it||!it.fin)return;
+  it.fin.header.forEach((_,c)=>csvSetCol(key,c,on));
+}
+
+function csvRender(){
+  if(!CSV)return;
+  $('dropTxt').innerHTML=T[L].drop_csv(CSV.files.length);
+  $('inHint').innerHTML=tt('csv_hint');$('inHint').style.display='';
+  csvRenderSrc();csvRenderOut();
+}
+
+function csvRenderSrc(){
+  const v=$('csvSrcView');const lock=!!CSV.job;
+  let h='<div class="csvbar"><label><input type="checkbox" id="csvStrict"'+(CSV.strict?' checked':'')+(lock?' disabled':'')+'> '
+    +tt('csv_strict')+'</label></div>';
+  for(const it of CSV.files){
+    h+='<div class="csvfile"><div class="fh">📊 <b>'+escapeHtml(it.file.name)+'</b>'
+      +'<span class="meta2">'+fmtBytes(it.file.size)
+      +(it.fin?' · '+T[L].csv_cols(it.fin.header.length,
+          '<span class="kbd">'+escapeHtml(it.fin.delimiter==='\t'?'TAB':it.fin.delimiter||'?')+'</span>',
+          escapeHtml(it.fin.encoding||''))
+          +' · '+T[L].csv_preview_n(it.fin.preview.length):'')+'</span>'
+      +(it.state==='ready'?'<span class="meta2">'+tt('csv_analyze')+': <button class="all"'+(lock?' disabled':'')
+          +' onclick="csvSetAll('+it.key+',true)">'+tt('csv_all')+'</button> · <button class="all"'+(lock?' disabled':'')
+          +' onclick="csvSetAll('+it.key+',false)">'+tt('csv_none')+'</button></span>':'')
+      +(lock?'':'<button class="x" title="✕" onclick="csvRemove('+it.key+')">✕</button>')+'</div>';
+    if(it.state==='error'){
+      h+='<div class="msg err" id="csvmsg'+it.key+'">⚠️ '+escapeHtml(String(it.error||tt('t_error')))+'</div>';
+    }else if(it.state!=='ready'){
+      h+='<div class="msg" id="csvmsg'+it.key+'"></div>';
+    }else{
+      const f=it.fin;
+      if(f.large&&f.large_threshold)h+='<div class="callout"><span class="ic">⏱️</span><div>'
+        +T[L].csv_large(Math.round(f.large_threshold/1048576))+'</div></div>';
+      h+='<div class="csvwrap"><table class="csvtbl" id="csvt'+it.key+'"><thead><tr>';
+      f.header.forEach((_,c)=>{const m=csvMode(it,c);const on=m==='anonymize';
+        h+='<th data-c="'+c+'" class="m-'+m+'"><label class="ctog" title="'+tt(on?'csv_col_on':'csv_col_off')+'">'
+          +'<input type="checkbox" id="csvc'+it.key+'_'+c+'"'+(on?' checked':'')+(lock?' disabled':'')
+          +' onchange="csvSetCol('+it.key+','+c+',this.checked)" aria-label="'+escapeHtml(tt('csv_analyze')+': '+f.header[c])+'">'
+          +tt('csv_analyze')+'</label></th>';});
+      h+='</tr><tr>';
+      f.header.forEach((name,c)=>{const m=csvMode(it,c);
+        h+='<th data-c="'+c+'" class="m-'+m+'" title="'+escapeHtml(name)+'">'+escapeHtml(name)+'</th>';});
+      h+='</tr></thead><tbody>';
+      for(const row of f.preview){
+        h+='<tr>';
+        f.header.forEach((_,c)=>{const m=csvMode(it,c);const val=String(row[c]??'');
+          h+='<td data-c="'+c+'" class="m-'+m+'" title="'+escapeHtml(val)+'">'+escapeHtml(val)+'</td>';});
+        h+='</tr>';
+      }
+      h+='</tbody></table></div>';
+    }
+    h+='</div>';
+  }
+  v.innerHTML=h;
+  for(const it of CSV.files)if(it.state==='uploading'||it.state==='reading')csvProgress(it);
+  const st=$('csvStrict');if(st)st.onchange=e=>{CSV.strict=e.target.checked;};
+}
+
+function csvRenderOut(){
+  const v=$('csvOutView');const s=CSV.status;
+  if(!s){v.innerHTML='<div class="empty"><img src="/assets/mascot_doc.png" alt="" '
+    +'onerror="this.remove()"><div>'+tt('csv_empty')+'</div></div>';return;}
+  const pct=s.bytes_total?Math.min(100,100*s.bytes_done/s.bytes_total):0;
+  let h='<div class="cjob"><div class="csvbar"><span class="cstate '+s.state+'">'+tt('st_'+s.state)+'</span>'
+    +'<span>'+T[L].csv_rows(nf(s.rows_done),s.rows_skipped?nf(s.rows_skipped):0)+'</span>'
+    +(s.state==='queued'&&s.position?'<span>'+T[L].csv_queue(s.position)+'</span>':'')
+    +(s.seconds?'<span class="hint">'+s.seconds.toFixed(1)+' s</span>':'')+'</div>'
+    +'<div class="bar'+(s.state==='done'?' ok':s.state==='error'?' err':'')+'"><i style="width:'
+      +(s.state==='done'?100:pct)+'%"></i></div>';
+  if(s.error)h+='<div class="cf"><div class="sub err">⚠️ '+escapeHtml(s.error)+'</div></div>';
+  s.files.forEach((f,i)=>{
+    const fp=f.state==='done'?100:(f.bytes_total?100*f.bytes_done/f.bytes_total:0);
+    h+='<div class="cf"><div class="nm">'+escapeHtml(f.name)+' → '+escapeHtml(f.out_name)
+      +' <span class="cstate '+f.state+'">'+tt('st_'+f.state)+'</span></div>'
+      +'<div class="bar'+(f.state==='done'?' ok':f.state==='error'?' err':'')+'"><i style="width:'+fp+'%"></i></div>'
+      +'<div class="sub">'+T[L].csv_rows(nf(f.rows_done),f.rows_skipped?nf(f.rows_skipped):0)
+      +(f.skipped_lines&&f.skipped_lines.length?' · '+T[L].csv_skipped_at(f.skipped_lines.join(', ')
+          +(f.rows_skipped>f.skipped_lines.length?'…':'')):'')+'</div>'
+      +(f.error?'<div class="sub err">⚠️ '+escapeHtml(f.error)+'</div>':'');
+    const labs=Object.entries(f.by_label||{});
+    if(labs.length)h+='<div class="legend" style="padding:8px 0 0;border:0">'+labs.map(([k,n])=>{
+      const c=colors(k);return '<span class="chip" style="cursor:default"><span class="sw" style="background:'
+        +c.bd+'"></span>'+escapeHtml(k)+'<span class="n">'+nf(n)+'</span></span>';}).join('')+'</div>';
+    if(f.state==='done'){
+      h+=csvOutTable(i);
+      h+='<div class="row" style="margin-top:8px"><button class="btn" title="'+escapeHtml(f.out_name)
+      +'" onclick="csvDownload('+i+')">⬇️ '+tt('csv_dl')+' CSV</button></div>';
+    }
+    h+='</div>';
+  });
+  h+='<div class="row">';
+  if(s.state==='done'&&s.mapping_enabled&&s.dictionary_size)
+    h+='<button class="ghost" onclick="csvDownload(-1)">⬇️ '+T[L].csv_dl_dict(nf(s.dictionary_size))+'</button>';
+  if(['queued','running'].includes(s.state))
+    h+='<button class="ghost" onclick="csvCancel()">✖ '+tt('csv_cancel')+'</button>';
+  if(s.state==='done'&&CSV.dictNote)h+='<span class="hint">'+escapeHtml(CSV.dictNote)+'</span>';
+  h+='</div>';
+  if(!s.mapping_enabled)h+='<div class="callout" style="margin:0"><span class="ic">🔒</span><div>'
+    +tt('csv_dict_off')+'</div></div>';
+  v.innerHTML=h+'</div>';
+}
+
+/* anteprima dell'output: stessa tabella dell'input, placeholder colorati per tag */
+const PH_RX=/\[([A-Z][A-Z0-9_]*?)_(\d+)\]/g;
+function csvPhCell(v){
+  return escapeHtml(v).replace(PH_RX,(m,lab)=>{const c=colors(lab);
+    return '<span style="background:'+c.bg+';border:1px solid '+c.bd+';color:'+c.tx
+      +';border-radius:6px;padding:0 4px;font-weight:600">'+m+'</span>';});
+}
+function csvOutTable(i){
+  const P=(CSV.outPrev||{})[i];
+  if(P===undefined){csvLoadOutPrev(i);return '<div class="sub" style="margin-top:8px">'+tt('csv_reading_out')+'</div>';}
+  if(!P)return '';
+  let h='<div class="csvfile" style="margin-top:8px"><div class="fh"><span class="meta2">'
+    +T[L].csv_out_preview(P.preview.length,P.header.length)+'</span></div>'
+    +'<div class="csvwrap"><table class="csvtbl"><thead><tr>';
+  P.header.forEach(n=>{h+='<th title="'+escapeHtml(n)+'">'+escapeHtml(n)+'</th>';});
+  h+='</tr></thead><tbody>';
+  for(const row of P.preview){h+='<tr>';
+    P.header.forEach((_,c)=>{const v=String(row[c]??'');
+      h+='<td title="'+escapeHtml(v)+'">'+csvPhCell(v)+'</td>';});
+    h+='</tr>';}
+  return h+'</tbody></table></div></div>';
+}
+async function csvLoadOutPrev(i){
+  const jid=CSV&&CSV.job;if(!jid)return;
+  CSV.outPrev=CSV.outPrev||{};
+  if(i in CSV.outPrev)return;
+  CSV.outPrev[i]=null;                    // in corso: niente richieste doppie
+  try{const r=await fetch('/csv/jobs/'+jid+'/files/'+i+'/preview');
+    if(!CSV||CSV.job!==jid)return;
+    CSV.outPrev[i]=r.ok?await r.json():false;}catch(e){if(CSV&&CSV.job===jid)CSV.outPrev[i]=false;}
+  if(CSV&&CSV.job===jid)csvRenderOut();
+}
+
+async function csvStart(){
+  if(csvActive()){toast(tt('csv_busy'),false);return;}
+  if(CSV.files.some(f=>f.state==='uploading'||f.state==='reading')){toast(tt('csv_wait_upload'),false);return;}
+  const go=$('go');go.disabled=true;const old=go.innerHTML;
+  go.innerHTML='<span class="spin"></span> '+tt('csv_running_go');
+  try{
+    if(CSV.job){
+      // rilancio (es. piano cambiato): gli input del job precedente sono stati consumati,
+      // si ricaricano dai File che il browser tiene ancora, mantenendo il piano scelto
+      await fetch('/csv/jobs/'+CSV.job,{method:'DELETE'}).catch(()=>{});
+      CSV.job=null;CSV.status=null;CSV.dictNote='';CSV.outPrev={};
+      for(const it of CSV.files)await csvUpload(it,true);
+      csvRender();
+    }
+    const ready=CSV.files.filter(f=>f.state==='ready');
+    if(!ready.length){toast(tt('csv_none_ready'),false);return;}
+    const body={files:ready.map(f=>({upload_id:f.uid,plan:f.plan})),strict:CSV.strict};
+    if(TAGS_LOADED){body.exclude_tags=[...EXCL];body.include_mapping=MAPPING;}
+    const r=await jpost('/csv/jobs',body);const d=await r.json();
+    if(!r.ok){toast(d.error||tt('t_error'),false);return;}
+    // i file non pronti (errore) restano fuori dal job
+    CSV.files=ready;CSV.job=d.job_id;CSV.outPrev={};CSV.status={state:'queued',position:d.position,files:[],
+      rows_done:0,rows_skipped:0,bytes_done:0,bytes_total:1,mapping_enabled:MAPPING};
+    csvRender();csvPoll(CSV.job);
+  }catch(e){toast(tt('t_error')+': '+e.message,false);}
+  finally{go.disabled=false;go.innerHTML=old;}
+}
+
+async function csvPoll(jid){
+  while(CSV&&CSV.job===jid){
+    try{
+      const r=await fetch('/csv/jobs/'+jid);if(!r.ok)return;
+      const s=await r.json();if(!CSV||CSV.job!==jid)return;
+      CSV.status=s;
+      if(!['queued','running'].includes(s.state)){
+        if(s.state==='done'){toast(T[L].csv_done_toast(nf(s.rows_done)));await csvLocalDict(s);}
+        csvRender();return;
+      }
+      csvRenderOut();
+    }catch(e){}
+    await new Promise(ok=>setTimeout(ok,500));
+  }
+}
+
+/* dizionario del job nella sessione (tab "Ripristina") se e' piccolo; altrimenti si scarica */
+async function csvLocalDict(s){
+  CSV.dictNote='';
+  if(!s.mapping_enabled||!s.dictionary_size)return;
+  if(s.dictionary_size>CSV_DICT_LOCAL_MAX){CSV.dictNote=tt('csv_dict_big');return;}
+  try{
+    const r=await fetch('/csv/jobs/'+s.job_id+'/dictionary');if(!r.ok)return;
+    MAP=await r.json();localStorage.setItem('pii_map',JSON.stringify(MAP));
+    CSV.dictNote=T[L].csv_dict_local(nf(Object.keys(MAP).length));
+  }catch(e){}
+}
+
+function csvDownload(i){
+  if(!CSV||!CSV.job)return;
+  const a=document.createElement('a');
+  if(i<0){a.href='/csv/jobs/'+CSV.job+'/dictionary';a.download='dizionario_anonimizzazione.json';}
+  else{a.href='/csv/jobs/'+CSV.job+'/files/'+i;a.download=CSV.status.files[i].out_name;}
+  document.body.appendChild(a);a.click();a.remove();
+}
+
+async function csvCancel(){
+  if(!CSV||!CSV.job)return;
+  try{const r=await fetch('/csv/jobs/'+CSV.job+'/cancel',{method:'POST'});
+    if(r.ok){CSV.status=await r.json();csvRenderOut();}}catch(e){}
+}
 
 /* scroll sincronizzato: editor (sx) <-> anteprima e testo (dx) */
 linkScroll($('src'),$('viewPrev'));linkScroll($('viewPrev'),$('src'));
