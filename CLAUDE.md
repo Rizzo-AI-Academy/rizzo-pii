@@ -83,7 +83,10 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   TELEFONO/IBAN/CF/PIVA/carta/importo/targa/**URL**; IBAN/CF/PIVA/carta validati con checksum, che ha
   priorità sul modello). `URL` è un **23° tag solo-regex**: il modello non lo conosce; matcha schema,
   `www.` e domini nudi solo su una **lista chiusa di TLD** (senza, `p.iva`/`S.r.l.` diventerebbero
-  domini). `APP_VERSION`. Endpoint: `GET /health` (readiness senza inference, 200/503),
+  domini). `APP_VERSION`. Dispositivo del modello **CUDA → MPS (Apple Silicon) → CPU**
+  (`DEVICE_NAME`, riportato da `/health`; env `PII_DEVICE=auto|cpu|mps|cuda` per forzarlo; se
+  l'inferenza su MPS fallisce si ricostruisce la pipeline su CPU e si riprova).
+  Endpoint: `GET /health` (readiness senza inference, 200/503),
   `POST /analyze`, `POST /pdf`, `POST /preview`, `POST /pdf/preview`, `GET /doc/<id>/page/<n>.png`,
   `GET /doc/<id>/file.pdf`, `GET/POST /settings` (alias storico `/tags`), `GET/POST /config`,
   `GET /port-check`; CLI `--host`/`--port`/`--exclude-tags`/`--no-mapping`.

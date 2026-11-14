@@ -132,15 +132,44 @@ OVERLAP = 20         # parole di sovrapposizione tra chunk consecutivi
 # --------------------------------------------------------------------------- #
 MODEL_BATCH_SIZE = 32   # chunk per forward pass del modello (detect_spans_batch / detect_model)
 
-device = 0 if torch.cuda.is_available() else -1
-print(f"Carico il modello da {MODEL_DIR} su {'GPU' if device == 0 else 'CPU'}...")
-nlp = pipeline(
-    "token-classification",
-    model=MODEL_DIR,
-    tokenizer=MODEL_DIR,
-    aggregation_strategy="simple",
-    device=device,
-)
+
+def _pick_device(forced=None):
+    """CUDA se c'e', altrimenti Apple MPS (GPU dei Mac Apple Silicon), altrimenti CPU.
+
+    env PII_DEVICE = auto (default) | cpu | mps | cuda forza il dispositivo, es. per
+    misurare l'impatto della CPU. Se quello chiesto non e' disponibile si avvisa e si
+    torna alla scelta automatica."""
+    forced = (forced if forced is not None else os.environ.get("PII_DEVICE", "auto")).strip().lower()
+    mps = getattr(torch.backends, "mps", None)
+    avail = {"cpu": True, "cuda": torch.cuda.is_available(),
+             "mps": mps is not None and mps.is_available()}
+    if forced in avail:
+        if avail[forced]:
+            return forced
+        print(f"ATTENZIONE: PII_DEVICE={forced} non disponibile, scelta automatica.", file=sys.stderr)
+    elif forced not in ("", "auto"):
+        print(f"ATTENZIONE: PII_DEVICE={forced!r} sconosciuto (auto|cpu|mps|cuda), scelta automatica.",
+              file=sys.stderr)
+    if avail["cuda"]:
+        return "cuda"
+    if avail["mps"]:
+        return "mps"
+    return "cpu"
+
+
+def _build_pipeline(dev):
+    return pipeline(
+        "token-classification",
+        model=MODEL_DIR,
+        tokenizer=MODEL_DIR,
+        aggregation_strategy="simple",
+        device={"cuda": 0, "mps": "mps", "cpu": -1}[dev],
+    )
+
+
+DEVICE_NAME = _pick_device()   # "cuda" | "mps" | "cpu" (riportato da /health)
+print(f"Carico il modello da {MODEL_DIR} su {DEVICE_NAME.upper()}...")
+nlp = _build_pipeline(DEVICE_NAME)
 print("Modello pronto.")
 
 app = Flask(__name__)
@@ -302,9 +331,22 @@ _NLP_LOCK = threading.Lock()
 
 
 def _run_nlp(inputs):
-    """nlp() a batch esplicito, serializzato."""
+    """nlp() a batch esplicito, serializzato. Se MPS fallisce (operatore non supportato,
+    memoria...) ricostruisce la pipeline su CPU e riprova, una volta per tutte. Il lock
+    copre sia l'inferenza sia il cambio di pipeline."""
+    global nlp, DEVICE_NAME
     with _NLP_LOCK:
-        return nlp(inputs, batch_size=MODEL_BATCH_SIZE)
+        try:
+            return nlp(inputs, batch_size=MODEL_BATCH_SIZE)
+        except Exception as exc:                      # noqa: BLE001
+            if DEVICE_NAME != "mps":
+                raise
+            # solo il tipo di errore: mai il testo dell'utente
+            print(f"ATTENZIONE: inferenza su MPS fallita ({type(exc).__name__}), passo alla CPU.",
+                  file=sys.stderr)
+            nlp = _build_pipeline("cpu")
+            DEVICE_NAME = "cpu"
+            return nlp(inputs, batch_size=MODEL_BATCH_SIZE)
 
 
 def detect_model_many(texts):
@@ -544,7 +586,7 @@ def health():
         "model": os.path.basename(str(MODEL_DIR).rstrip("/\\")),
         "model_version": APP_MODEL_VERSION,
         "app_version": APP_VERSION,
-        "device": "cuda" if device == 0 else "cpu",
+        "device": DEVICE_NAME,
         "tags": len(TAG_NAMES),
         "excluded_tags": excl,
         "mapping_enabled": mapping,
