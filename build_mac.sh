@@ -17,11 +17,19 @@
 # -> "bundle ambiguous" -> notarizzazione invalida. Quindi ricopiamo il backend
 # preservando i symlink (cp -R) e firmiamo a mano, poi notarizziamo .app e .dmg.
 #
-# Uso:
-#   bash build_mac.sh                # app + dmg
-#   bash build_mac.sh app            # solo .app
+# Due varianti, come su Windows/Linux (VARIANT=...):
+#   - lite    (default): il .dmg NON contiene il modello; l'app lo scarica da Hugging Face
+#                        al primo avvio (tauri/src-tauri/src/model.rs)
+#   - offline          : modello dentro il .dmg, nessuna rete richiesta
 #
-# Prerequisiti: Xcode CLT, Rust, Node18+, un venv CPU con pyinstaller (VENV=...).
+# Uso:
+#   bash release_mac.sh                        # TUTTO: venv, modello, lite + offline, upload
+#   VARIANT=lite    bash build_mac.sh          # solo la variante leggera (app + dmg)
+#   VARIANT=offline bash build_mac.sh          # solo quella offline
+#   bash build_mac.sh app                      # solo .app
+#
+# Prerequisiti: Xcode CLT, Rust, Node18+, un venv CPU con pyinstaller + onnxruntime
+# (VENV=...; release_mac.sh lo crea da solo).
 # ============================================================================
 set -uo pipefail
 
@@ -33,19 +41,28 @@ VENV="${VENV:-.venv}"
 BUNDLES="${*:-app dmg}"
 APP="$ROOT/tauri/src-tauri/target/release/bundle/macos/Rizzo PII.app"
 ENT="$ROOT/tauri/macos_python_entitlements.plist"
-DMG_OUT="$ROOT/tauri/src-tauri/target/release/bundle/dmg/Rizzo-PII-2.0.0-macOS-arm64.dmg"
+VARIANT="${VARIANT:-lite}"
+case "$VARIANT" in
+  lite)    SUFFIX="";         BUNDLE_MODEL=0 ;;
+  offline) SUFFIX="-offline"; BUNDLE_MODEL=1 ;;
+  *) echo "ERRORE: VARIANT deve essere lite o offline (non '$VARIANT')"; exit 1 ;;
+esac
+VER="$(python3 -c 'import json;print(json.load(open("tauri/src-tauri/tauri.conf.json"))["version"])')"
+DMG_OUT="$ROOT/tauri/src-tauri/target/release/bundle/dmg/Rizzo-PII-$VER-macOS-arm64$SUFFIX.dmg"
+echo ">>> Rizzo PII $VER — variante $VARIANT"
 
 # ---- 0) controlli ----------------------------------------------------------
-[ -d "$MODEL_DIR" ] || { echo "ERRORE: modello mancante: $MODEL_DIR"; exit 1; }
-[ -x "$VENV/bin/pyinstaller" ] || { echo "ERRORE: pyinstaller mancante in $VENV"; exit 1; }
+[ -x "$VENV/bin/pyinstaller" ] || { echo "ERRORE: pyinstaller mancante in $VENV (usa release_mac.sh)"; exit 1; }
 command -v cargo >/dev/null || { echo "ERRORE: Rust/cargo non trovato"; exit 1; }
 command -v npm   >/dev/null || { echo "ERRORE: npm non trovato"; exit 1; }
+# il modello ONNX serve solo alla variante offline (release_mac.sh lo scarica da HF)
+if [ "$VARIANT" = offline ] && [ ! -f "$MODEL_DIR/onnx/model.onnx_data" ]; then
+  echo "ERRORE: manca $MODEL_DIR/onnx/model.onnx_data (lancia release_mac.sh, che lo scarica)"; exit 1
+fi
 
-# ---- 0b) modello in ONNX (fp32, stessi pesi): il sidecar non contiene torch --------
-[ -f "$MODEL_DIR/onnx/model.onnx_data" ] || "$VENV/bin/python" src/training/export_onnx.py --model-dir "$MODEL_DIR"
-
-# ---- 1) sidecar PyInstaller ------------------------------------------------
-"$VENV/bin/pyinstaller" build_sidecar.spec --noconfirm \
+# ---- 1) sidecar PyInstaller (lite: senza modello) ---------------------------
+rm -rf tauri/src-tauri/backend
+PII_BUNDLE_MODEL="$BUNDLE_MODEL" "$VENV/bin/pyinstaller" build_sidecar.spec --noconfirm \
   --distpath tauri/src-tauri/backend --workpath build/sidecar_work_mac
 [ -f tauri/src-tauri/backend/pii-backend/pii-backend ] \
   || { echo "ERRORE: sidecar macOS non prodotto"; exit 1; }
@@ -71,7 +88,11 @@ cd "$ROOT"
 if [ "$MODE" != "NOTARIZE" ]; then
   ( cd "$ROOT/tauri" && APPLE_SIGNING_IDENTITY="$APPLE_SIGNING_IDENTITY" \
       npx tauri build --bundles $BUNDLES )
+  # stesso nome del percorso NOTARIZE, quello che si allega alla release
+  TDMG="$(ls -t "$ROOT"/tauri/src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null | grep -v 'Rizzo-PII-' | head -1 || true)"
+  [ -n "$TDMG" ] && mv -f "$TDMG" "$DMG_OUT"
   echo "FATTO ($MODE). Artefatti in tauri/src-tauri/target/release/bundle/{macos,dmg}/"
+  [ -f "$DMG_OUT" ] && echo "  $DMG_OUT"
   exit 0
 fi
 
