@@ -192,6 +192,15 @@ download fallisce di proposito.
 
 ## Build Linux (.deb/.AppImage)
 
+**In CI (la strada per le release):** [`.github/workflows/build-linux.yml`](../.github/workflows/build-linux.yml)
+gira su `ubuntu-22.04` (glibc vecchia = AppImage compatibile con più distro) a ogni tag `v*`,
+come `build-windows.yml`, e allega alla release **quattro** pacchetti: `.AppImage` e `.deb`
+leggeri (modello scaricato al primo avvio) e `-offline` (modello dentro). Prima di impacchettare
+avvia il sidecar con il modello e controlla che `/health` e `/analyze` rispondano.
+A mano: `gh workflow run build-linux.yml` (artifact del run) o `-f release_tag=vX.Y.Z`.
+
+In locale (sotto) si ottiene la variante **offline**, con il modello dentro.
+
 **Non si compila da Windows** (PyInstaller e i bundle Tauri Linux/`webkit2gtk` vanno fatti su
 Linux). Usa una macchina Ubuntu/Debian o **WSL2**. Tutto è automatizzato in **`build_linux.sh`**
 (root): stesso `build_sidecar.spec`, ma il sidecar esce come `pii-backend` (senza `.exe`) e i
