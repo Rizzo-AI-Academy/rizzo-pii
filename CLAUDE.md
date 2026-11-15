@@ -165,7 +165,18 @@ attende il server sulla porta configurata e mostra l'UI. Se il sidecar esce con 
 occupata), lo splash mostra un form di configurazione (host + porta) con "Salva e riprova": Tauri
 scrive `config.json`, rilancia il sidecar e riprova. Splash con badge UE/GDPR + versione. `npx tauri build`
 → installer NSIS per-utente. Dettagli e comandi in `docs/BUILD.md`. Comandi Tauri esposti allo splash:
-`save_config(host, port)` e `retry_backend`.
+`save_config(host, port)`, `retry_backend`, `retry_download`, `open_model_folder`, `splash_sync`.
+
+**Modello al primo avvio — `tauri/src-tauri/src/model.rs`:** due installer Windows dalla stessa build.
+Il **leggero** (`Rizzo-PII-<ver>-Windows-Setup.exe`, ~90 MB dalla CI, sidecar con `PII_BUNDLE_MODEL=0`) non ha i
+pesi: al primo avvio Tauri scarica da HF i 6 file ONNX (repo `rizzoaiacademy/rizzo-pii-0.3B`,
+**commit fissato** `MODEL_COMMIT` + **sha256 per file** in `MODEL_FILES`), con ripresa (`.part` +
+Range), 4 tentativi, proxy da `HTTPS_PROXY`, avanzamento nello splash. Li tiene in
+`<config dir>/models/rizzo-pii-0.3B-v<ver>/` (marcatore `.verified` = niente re-hash agli avvii
+successivi) e li passa al sidecar con **`PII_MODEL_DIR`**, che in `app.py` vince sul modello
+impacchettato. L'**offline** (`…-Setup-offline.exe`) ha i pesi in `_internal/pii_model/`: Tauri lo
+riconosce e non scarica nulla. **Nuova versione del modello** = pubblicare l'ONNX su HF, poi
+aggiornare `MODEL_VERSION`/`MODEL_COMMIT`/`MODEL_FILES` in `model.rs` (+ `MODEL_REV` in CI).
 
 **Config:** `.env` (segreti W&B, **gitignorato**), `.gitignore`, `build.spec`/`build_sidecar.spec`/
 `installer.iss` + `tauri/` (packaging).

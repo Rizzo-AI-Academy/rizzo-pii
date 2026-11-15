@@ -80,13 +80,15 @@ def _resource_path(rel):
 # Metti None per usare AUTOMATICAMENTE l'ultima versione `-v*` disponibile.
 APP_MODEL_VERSION = "1.5.0"
 
-# Dentro l'exe il modello e' impacchettato come "pii_model" (vedi build.spec).
+# Override a runtime: env PII_MODEL_DIR, che vince su tutto. E' anche il modo in cui
+# l'app desktop passa il modello SCARICATO al primo avvio (installer leggero, vedi
+# tauri/src-tauri/src/model.rs). Dentro l'exe, altrimenti, il modello e' quello
+# impacchettato come "pii_model" (installer offline, vedi build_sidecar.spec).
 # In sviluppo: pin sopra -> auto-ultima versione -> vecchio non versionato -> legacy.
-# Override puntuale a runtime: env PII_MODEL_DIR.
-if getattr(sys, "_MEIPASS", None):
-    MODEL_DIR = _resource_path("pii_model")
-elif os.environ.get("PII_MODEL_DIR"):
+if os.environ.get("PII_MODEL_DIR"):
     MODEL_DIR = os.environ["PII_MODEL_DIR"]
+elif getattr(sys, "_MEIPASS", None):
+    MODEL_DIR = _resource_path("pii_model")
 else:
     import re
     _models = Path(__file__).resolve().parents[2] / "models"
@@ -121,7 +123,7 @@ if not getattr(sys, "_MEIPASS", None) and not os.path.isdir(MODEL_DIR):
     sys.exit(2)
 
 ASSETS_DIR = _resource_path("assets")   # mascotte / icone (servite su /assets/<file>)
-APP_VERSION = "2.0.0"                    # versione mostrata nell'UI (allineata a tauri.conf.json)
+APP_VERSION = "2.1.0"                    # versione mostrata nell'UI (allineata a tauri.conf.json)
 MAX_WORDS = 120      # parole per chunk (~180 subword, sotto i 512 del training)
 OVERLAP = 20         # parole di sovrapposizione tra chunk consecutivi
 
