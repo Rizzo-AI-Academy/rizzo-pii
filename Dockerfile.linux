@@ -31,7 +31,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 RUN python3 -m venv /opt/venv \
  && /opt/venv/bin/pip install --upgrade pip \
  && /opt/venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu torch \
- && /opt/venv/bin/pip install "transformers==4.57.3" tokenizers safetensors flask pymupdf pyinstaller
+ && /opt/venv/bin/pip install "transformers==4.57.3" tokenizers safetensors flask pymupdf pyinstaller onnx onnxruntime
 ENV VENV=/opt/venv
 
 # libpython condivisa: PyInstaller ne ha bisogno per impacchettare il backend

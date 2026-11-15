@@ -28,6 +28,10 @@ python-dotenv
 # Local anonymization app (Flask UI + PDF parsing)
 flask
 pymupdf
+# Inferenza dell'app senza torch (src/app/onnx_ner.py) + export (src/training/export_onnx.py)
+onnx
+onnxruntime
+tokenizers
 
 # Loss / metric plots produced by the training script
 matplotlib

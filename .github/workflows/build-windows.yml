@@ -3,10 +3,13 @@
 #
 #   git tag -a v2.0.1 -m "Rizzo PII 2.0.1" && git push origin v2.0.1
 #
-# Serve un runner Windows: PyInstaller non cross-compila e il sidecar e' Python+torch,
-# quindi da macOS/Linux (Docker compreso) l'.exe non si puo' produrre.
+# Serve un runner Windows: PyInstaller non cross-compila, quindi da macOS/Linux (Docker
+# compreso) l'.exe non si puo' produrre.
 #
-# Il modello e' gitignorato (1,23 GB): si scarica da Hugging Face, repo PUBBLICO
+# Il sidecar NON contiene torch: inferenza con onnxruntime su onnx/model.onnx (fp32), che si
+# scarica gia' pronto da Hugging Face. torch qui non si installa nemmeno.
+#
+# Il modello e' gitignorato (ONNX, 1,2 GB): si scarica da Hugging Face, repo PUBBLICO
 # rizzoaiacademy/rizzo-pii-0.3B branch v1.5.0 -> nessun token.
 #
 # Complementare a release.yml (che crea/aggiorna la release del tag su ubuntu in pochi
@@ -65,20 +68,25 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('tauri/src-tauri/Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
 
-      # torch dall'indice cpu: il wheel di default su Windows tira dentro CUDA (~2,5 GB
-      # di roba inutile qui, e il runner ha poco disco).
-      - name: Dipendenze Python (CPU)
+      # Niente torch: il sidecar gira su onnxruntime e il modello ONNX e' gia' su HF.
+      - name: Dipendenze Python (CPU, senza torch)
         run: |
           python -m pip install --upgrade pip
-          pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-          pip install --no-cache-dir "transformers==4.57.3" tokenizers safetensors `
+          pip install --no-cache-dir tokenizers numpy onnxruntime `
             flask pymupdf pyinstaller "huggingface_hub[cli]"
 
-      - name: Scarica il modello da Hugging Face
+      # Solo i file che finiscono nel sidecar: il grafo ONNX + i pesi (fp32, gli stessi del
+      # model.safetensors, esportati e verificati con src/training/export_onnx.py) e il
+      # tokenizer. Il model.safetensors (1,2 GB) non serve e non si scarica.
+      - name: Scarica il modello ONNX da Hugging Face
         run: |
-          hf download "$env:MODEL_REPO" --revision "$env:MODEL_REV" --local-dir "$env:MODEL_DIR"
-          if (-not (Test-Path "$env:MODEL_DIR/model.safetensors")) {
-            throw "modello non scaricato: $env:MODEL_DIR/model.safetensors mancante"
+          # file elencati uno per uno: con piu' valori, --include ne prende solo il primo e
+          # tratta gli altri come nomi di file, saltando in silenzio onnx/.
+          hf download "$env:MODEL_REPO" onnx/model.onnx onnx/model.onnx_data `
+            config.json tokenizer.json tokenizer_config.json special_tokens_map.json `
+            --revision "$env:MODEL_REV" --local-dir "$env:MODEL_DIR"
+          foreach ($f in "onnx/model.onnx", "onnx/model.onnx_data", "tokenizer.json", "config.json") {
+            if (-not (Test-Path "$env:MODEL_DIR/$f")) { throw "modello non scaricato: $env:MODEL_DIR/$f mancante" }
           }
 
       - name: Sidecar PyInstaller

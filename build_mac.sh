@@ -41,6 +41,9 @@ DMG_OUT="$ROOT/tauri/src-tauri/target/release/bundle/dmg/Rizzo-PII-2.0.0-macOS-a
 command -v cargo >/dev/null || { echo "ERRORE: Rust/cargo non trovato"; exit 1; }
 command -v npm   >/dev/null || { echo "ERRORE: npm non trovato"; exit 1; }
 
+# ---- 0b) modello in ONNX (fp32, stessi pesi): il sidecar non contiene torch --------
+[ -f "$MODEL_DIR/onnx/model.onnx_data" ] || "$VENV/bin/python" src/training/export_onnx.py --model-dir "$MODEL_DIR"
+
 # ---- 1) sidecar PyInstaller ------------------------------------------------
 "$VENV/bin/pyinstaller" build_sidecar.spec --noconfirm \
   --distpath tauri/src-tauri/backend --workpath build/sidecar_work_mac

@@ -1,7 +1,8 @@
 # Build dell'app desktop (CPU — Windows, Linux e macOS)
 
 Crea un eseguibile/installer **standalone e offline** dell'anonimizzatore PII.
-Usa una build **CPU di PyTorch** (gira su qualsiasi PC, niente CUDA richiesta).
+Il modello gira con **ONNX Runtime su CPU** (qualsiasi PC, niente CUDA, **niente PyTorch** nel
+pacchetto): il `model.onnx` è lo stesso modello fp32, non quantizzato — vedi [§ Modello ONNX](#modello-onnx-niente-pytorch-nel-pacchetto).
 Windows: vedi sotto. **Linux** (.deb/.AppImage): vedi **[§ Build Linux](#build-linux-debappimage)**.
 **macOS** (.app/.dmg): vedi **[§ Build macOS](#build-macos-appdmg)**.
 
@@ -14,7 +15,7 @@ Esistono due modi di impacchettare, entrambi CPU/offline:
 
 ## Architettura (perché un "sidecar")
 
-Il motore dell'app è **Python + PyTorch + il modello mmBERT**: non gira dentro Rust/WebView.
+Il motore dell'app è **Python + ONNX Runtime + il modello mmBERT**: non gira dentro Rust/WebView.
 Per questo, sia con Tauri sia col build legacy, il backend è il **server Flask** (`src/app/app.py`)
 impacchettato con PyInstaller. Con Tauri la finestra nativa lo lancia come **processo figlio
 (sidecar)**, attende che risponda su `127.0.0.1:5005`, poi mostra l'UI; alla chiusura lo termina.
@@ -27,6 +28,13 @@ impacchettato con PyInstaller. Con Tauri la finestra nativa lo lancia come **pro
 - **Rust** (`rustup`), **Node.js** + **npm**, **WebView2 Runtime** (già presente su Win10/11 aggiornati).
 - Il **venv CPU** `build_env/` (vedi § PyInstaller, passo 1) per costruire il sidecar.
 
+### 0. Esportare il modello in ONNX (una volta per versione)
+```powershell
+python src/training/export_onnx.py --model-dir models/rizzo-pii-0.3B-v1.5.0
+```
+Crea `onnx/model.onnx` + `onnx/model.onnx_data` nella cartella del modello e verifica che le
+entità coincidano con PyTorch (esce con 1 se no). Senza questi file lo spec si ferma subito.
+
 ### 1. Costruire il sidecar (backend headless)
 Entry dedicato `src/app/serve.py` (solo Flask, niente browser); spec `build_sidecar.spec`.
 Si costruisce **dentro le risorse Tauri**:
@@ -34,7 +42,8 @@ Si costruisce **dentro le risorse Tauri**:
 build_env\Scripts\pyinstaller.exe build_sidecar.spec --noconfirm `
   --distpath tauri\src-tauri\backend --workpath build\sidecar_work
 ```
-Output: `tauri\src-tauri\backend\pii-backend\pii-backend.exe` (+ `_internal\`, modello, asset) ≈ 1,8 GB.
+Output: `tauri\src-tauri\backend\pii-backend\pii-backend.exe` (+ `_internal\`, modello, asset) ≈ 1,4 GB
+(1,2 GB sono il modello; con torch erano 1,8 GB).
 
 ### 2. Build dell'app + installer
 ```powershell
@@ -57,14 +66,17 @@ Installer **per-utente** (niente admin), in italiano, con shortcut e disinstalla
 ### Build Windows da macOS/Linux → GitHub Actions
 
 **Non si compila da un altro SO**, nemmeno con Docker: su macOS i container sono Linux, e
-PyInstaller non cross-compila (il sidecar è Python+torch, va costruito sul SO di destinazione).
+PyInstaller non cross-compila (il sidecar è Python + onnxruntime, va costruito sul SO di destinazione).
 La strada è un runner Windows di GitHub Actions: **[`.github/workflows/build-windows.yml`](../.github/workflows/build-windows.yml)**
 fa gli stessi passi 1 e 2 su `windows-latest` e allega l'installer alla release del tag.
 
 Il modello è gitignorato: il workflow lo scarica da Hugging Face, repo **pubblico**
 [`rizzoaiacademy/rizzo-pii-0.3B`](https://huggingface.co/rizzoaiacademy/rizzo-pii-0.3B)
-branch `v1.5.0` → nessun token, nessun secret. Per cambiare modello si aggiornano insieme
-`MODEL_REPO`/`MODEL_REV`/`MODEL_DIR` nel workflow e il path in `build_sidecar.spec`.
+branch `v1.5.0` → nessun token, nessun secret. Scarica **solo l'ONNX** (`onnx/model.onnx` +
+`model.onnx_data`) e il tokenizer. Per cambiare modello si aggiornano insieme
+`MODEL_REPO`/`MODEL_REV`/`MODEL_DIR` nel workflow e il path in `build_sidecar.spec`, e **prima**
+si pubblica l'ONNX sul nuovo ramo HF (export + verifica in locale, poi upload in `onnx/`):
+senza, il workflow si ferma con "modello non scaricato".
 
 Due modi di lanciarlo:
 ```bash
@@ -90,10 +102,41 @@ non sovrascrive un asset con lo stesso nome).
 Accortezze:
 - **Limite di 2 GiB per asset di release.** L'NSIS sta sui ~1,5-1,8 GB: passa, ma con poco
   margine. Se cresce, l'upload risponde 422.
-- **Disco del runner** ~25 GB liberi: per questo si usa l'indice `whl/cpu` di torch (il wheel
-  Windows di default tira dentro CUDA) e si cancella `build/sidecar_work` dopo PyInstaller.
+- **Disco del runner** ~25 GB liberi: il workflow non installa torch e scarica da HF solo
+  `onnx/` + tokenizer/config (niente `model.safetensors`); si cancella `build/sidecar_work` dopo PyInstaller.
 - **Tempi**: ~35 min il primo run, ~15 i successivi (cache di cargo su `src-tauri/target`).
 - L'installer **non è firmato** → SmartScreen avvisa al primo avvio, come per la build locale.
+
+---
+
+## Modello ONNX (niente PyTorch nel pacchetto)
+
+L'app impacchettata non usa PyTorch: carica `model.onnx` con **onnxruntime**
+([`src/app/onnx_ner.py`](../src/app/onnx_ner.py), dipendenze: onnxruntime + tokenizers + numpy).
+È lo **stesso modello fp32**, senza quantizzazione: cambia il runtime, non i pesi.
+[`src/training/export_onnx.py`](../src/training/export_onnx.py) lo esporta e lo confronta con
+PyTorch (pipeline HF `aggregation_strategy="simple"`) su 300 frasi della validation:
+**0 entità diverse**, scarto massimo sui logits ~3e-4 (rumore numerico).
+
+- **Due file, sempre insieme**: `model.onnx` (grafo, 0,5 MB) + `model.onnx_data` (pesi).
+  I pesi separati vengono mappati in memoria: della tabella degli embedding (256k token, il 64%
+  del modello) entra in RAM solo ciò che serve.
+- **Selezione in `app.py`**: se nella cartella del modello c'è `onnx/model.onnx` (o `model.onnx`)
+  usa ONNX, altrimenti la pipeline transformers (CPU/GPU). `PII_BACKEND=onnx|torch` forza la scelta.
+  `/health` riporta `backend`.
+- **Nello spec** entrano solo `model.onnx`, `model.onnx_data`, `config.json` e i file del tokenizer:
+  il `model.safetensors` resta fuori, e così non si impacchetta il modello due volte.
+- **Misure sul sidecar Windows** (v1.5.0, stessa macchina):
+
+  | | torch (prima) | ONNX (ora) |
+  |---|---|---|
+  | cartella del sidecar | 1,8 GB | 1,4 GB |
+  | avvio fino a `/health` 200 | 7,6–9,5 s | 3,2–4,0 s |
+  | prima `/analyze` (frase breve) | 3,6 s (warm-up) | 0,09 s |
+  | `/analyze` ~800 parole | ~4,1 s | ~3,8–4,6 s (pari) |
+  | RAM dopo l'uso | ~870 MB | ~670 MB |
+
+  Sul testo lungo il throughput è pari: il guadagno è in installazione, avvio e memoria.
 
 ---
 
@@ -191,7 +234,7 @@ Note specifiche di macOS:
 python -m venv build_env
 build_env\Scripts\python.exe -m pip install --upgrade pip
 build_env\Scripts\python.exe -m pip install --index-url https://download.pytorch.org/whl/cpu torch
-build_env\Scripts\python.exe -m pip install "transformers==4.57.3" tokenizers safetensors flask pymupdf pyinstaller
+build_env\Scripts\python.exe -m pip install "transformers==4.57.3" tokenizers safetensors flask pymupdf pyinstaller onnx onnxruntime
 ```
 
 ### 2. Build dell'eseguibile
@@ -210,7 +253,8 @@ Output: `installer_out\AnonimizzatorePII-Setup.exe` — installer per-utente (ni
 con shortcut nel menu Start e disinstallazione.
 
 ## Note
-- **Dimensione**: la cartella/installer è di alcuni GB (PyTorch + modello incluso). Normale.
+- **Dimensione**: ~1,4 GB, quasi tutto modello (1,2 GB). torch serve solo nel venv per l'export
+  ONNX: gli spec lo escludono dal pacchetto.
 - **Rigenerare col modello definitivo**: il modello è impacchettato dalla cartella versionata
   `models\rizzo-pii-0.3B-v{VERSION}\` (vedi `datas` in `build.spec` / `build_sidecar.spec`; build
   attuale **v1.5.0**). Quando riaddestri una nuova versione, aggiorna quel path negli spec e rifai
