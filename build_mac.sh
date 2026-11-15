@@ -104,8 +104,11 @@ sign() { codesign --force --options runtime --timestamp --sign "$ID" "$@"; }
 # ritorni-carrello e l'ultima riga puo' non finire nel file -> falso negativo.
 notarize_status() {
   xcrun notarytool submit "$1" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
-    --team-id "$APPLE_TEAM_ID" --wait --output-format json 2>/dev/null \
-    | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status","?"))'
+    --team-id "$APPLE_TEAM_ID" --wait --output-format json 2>"$ROOT/build/notarytool.err" \
+    | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status","?"))' 2>/dev/null
+  # stato vuoto = notarytool fallito prima di inviare (es. 403 accordo Apple scaduto): mostra perche'
+  [ -s "$ROOT/build/notarytool.err" ] && sed 's/^/    notarytool: /' "$ROOT/build/notarytool.err" >&2
+  return 0
 }
 
 echo ">>> [1/8] tauri build (firma Developer ID, SENZA notarize di Tauri)"
