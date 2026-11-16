@@ -760,14 +760,14 @@ _The mascot, a hedgehog, guards the document and **stays inside the EU**. Built 
 
 <a href="https://github.com/Rizzo-AI-Academy/rizzo-pii/stargazers">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/star_history_dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="docs/star_history_light.png" />
-    <img src="docs/star_history_light.png" alt="Star History Chart" width="700" />
+    <source media="(prefers-color-scheme: dark)" srcset="docs/star_history_dark_20261116.png" />
+    <source media="(prefers-color-scheme: light)" srcset="docs/star_history_light_20261116.png" />
+    <img src="docs/star_history_light_20261116.png" alt="Star History Chart" width="700" />
   </picture>
 </a>
 
 <sub>Rendered locally by <code>scripts/plot_star_history.py</code> — no third-party service, no GitHub App
-installed on the org. Refresh it with <code>python scripts/plot_star_history.py</code> and commit the PNGs.</sub>
+installed on the org. Refresh it with <code>python scripts/plot_star_history.py</code>: it writes dated PNGs (no stale browser cache) and repoints this README, then commit.</sub>
 
 </div>
 
