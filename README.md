@@ -512,9 +512,21 @@ curl -X POST localhost:5005/settings -H 'Content-Type: application/json' \
      -d '{"ocr_mode": "auto", "ocr_preset": "balanced", "ocr_redact_seals": true}'
 ```
 
-The models (~60 MB) are fetched once with `python scripts/fetch_ocr_models.py` into `models/ocr/`
-and bundled inside the desktop app; see [docs/BUILD.md](docs/BUILD.md). OCR is not perfect: on a
-scan, always look at the `PDF censurato` view before sharing the file.
+**The models.** All of them are the official [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)
+models by the PaddlePaddle team (Apache-2.0), **unchanged and not fine-tuned**: we only run them in
+ONNX and re-implemented the pre/post-processing for ONNX Runtime.
+
+| Stage | Model | Size | ONNX from |
+| --- | --- | --: | --- |
+| Layout (fast, default) | PP-DocLayout-M — PicoDet-L, 23 classes [[11]](#references) | 23 MB | converted with `paddle2onnx`, published at [rizzoaiacademy/rizzo-ocr](https://huggingface.co/rizzoaiacademy/rizzo-ocr) |
+| Layout (accurate) | PP-DocLayout_plus-L — RT-DETR-L [[11]](#references) | 124 MB | [PaddlePaddle/PP-DocLayout_plus-L_onnx](https://huggingface.co/PaddlePaddle/PP-DocLayout_plus-L_onnx) |
+| Text detection | PP-OCRv6 small / tiny det [[10]](#references) | 10 / 2 MB | [PaddlePaddle/PP-OCRv6_small_det_onnx](https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx) · [tiny](https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_det_onnx) |
+| Text recognition | PP-OCRv6 small / tiny rec (CTC, accented Italian letters included) [[10]](#references) | 21 / 5 MB | [PaddlePaddle/PP-OCRv6_small_rec_onnx](https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx) · [tiny](https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_rec_onnx) |
+| Table structure | SLANet_plus [[9]](#references) | 8 MB | [PaddlePaddle/SLANet_plus_onnx](https://huggingface.co/PaddlePaddle/SLANet_plus_onnx) |
+
+They are fetched once (~70 MB) with `python scripts/fetch_ocr_models.py` into `models/ocr/` and
+bundled inside the desktop app; see [docs/BUILD.md](docs/BUILD.md). OCR is not perfect: on a scan,
+always look at the `PDF censurato` view before sharing the file.
 
 ### Get the anonymized document back as a PDF
 
@@ -824,6 +836,9 @@ installed on the org. Refresh it with <code>python scripts/plot_star_history.py<
 6. Microsoft. *Presidio: Data Protection and De-identification SDK*. Open source (MIT).
 7. Regulation (EU) 2016/679: General Data Protection Regulation (GDPR).
 8. Regulation (EU) 2024/1689: Artificial Intelligence Act (EU AI Act).
+9. Cui, C., Sun, T., Lin, M. et al. *PaddleOCR 3.0 Technical Report*, 2025. [arXiv:2507.05595](https://arxiv.org/abs/2507.05595). Code: [PaddlePaddle/PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) (Apache-2.0).
+10. Zhang, Y., Wang, X., Lin, M. et al. *PP-OCRv6: From 1.5M to 34.5M Parameters, Surpassing Billion-Scale VLMs on OCR Tasks*, 2026. [arXiv:2606.13108](https://arxiv.org/abs/2606.13108).
+11. Sun, T., Cui, C., Du, Y., Liu, Y. *PP-DocLayout: A Unified Document Layout Detection Model to Accelerate Large-Scale Data Construction*, 2025. [arXiv:2503.17213](https://arxiv.org/abs/2503.17213).
 
 ---
 
