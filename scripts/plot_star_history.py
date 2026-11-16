@@ -5,9 +5,13 @@ and restoring the service would mean installing a third-party GitHub App on the 
 For a privacy project that trade is not worth a decorative chart, so we read the
 stargazers ourselves with a personal token and commit the rendered PNG.
 
-Writes two files (the README picks one via prefers-color-scheme):
-    docs/star_history_light.png
-    docs/star_history_dark.png
+Writes two files (the README picks one via prefers-color-scheme), dated:
+    docs/star_history_light_YYYYMMDD.png
+    docs/star_history_dark_YYYYMMDD.png
+
+The date is in the file name on purpose: with a fixed name browsers (and GitHub's
+cache) keep showing the old chart after a refresh. The script deletes the previous
+charts and points the README at the new files, so a run is just: run, commit.
 
 Usage:
     python scripts/plot_star_history.py                 # repo taken from git remote
@@ -42,6 +46,9 @@ import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "docs"
+README = ROOT / "README.md"
+# vecchi nomi fissi (star_history_light.png) e nuovi con la data
+CHART_RE = re.compile(r"star_history_(light|dark)(?:_\d{8})?\.png")
 API = "https://api.github.com"
 PER_PAGE = 100
 
@@ -195,8 +202,25 @@ def main() -> None:
     print(f"{len(stars)} stars, from {stars[0]:%Y-%m-%d} to {stars[-1]:%Y-%m-%d}")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    for theme in THEMES:
-        render(stars, repo, theme, args.out_dir / f"star_history_{theme}.png")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    names = {theme: f"star_history_{theme}_{stamp}.png" for theme in THEMES}
+    for theme, name in names.items():
+        render(stars, repo, theme, args.out_dir / name)
+
+    # via i grafici precedenti: ne resta uno per tema
+    for old in args.out_dir.glob("star_history_*.png"):
+        if old.name not in names.values() and CHART_RE.fullmatch(old.name):
+            old.unlink()
+            print(f"  removed {old.relative_to(ROOT)}")
+
+    # il README punta ai file nuovi (solo se i grafici stanno nella docs/ di sempre)
+    if args.out_dir.resolve() == OUT_DIR.resolve() and README.exists():
+        text = README.read_text(encoding="utf-8")
+        new = re.sub(r"docs/" + CHART_RE.pattern,
+                     lambda m: f"docs/{names[m.group(1)]}", text)
+        if new != text:
+            README.write_text(new, encoding="utf-8")
+            print(f"  updated {README.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":
