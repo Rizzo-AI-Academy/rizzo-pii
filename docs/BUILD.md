@@ -299,6 +299,17 @@ docker run --rm -e VENV=/opt/venv -e APPIMAGE_EXTRACT_AND_RUN=1 \
 
 ## Build macOS (.app/.dmg)
 
+**Release (firmata e notarizzata): `bash release_mac.sh` dal Mac.** Un solo comando che:
+- crea `.venv` con le sole dipendenze del sidecar ONNX, senza torch;
+- scarica il modello ONNX da HF;
+- costruisce con `build_mac.sh` le due varianti, `Rizzo-PII-<ver>-macOS-arm64.dmg` (leggera,
+  modello al primo avvio) e `…-offline.dmg`, firmandole e notarizzandole se c'è
+  `.env.notarize`;
+- le allega alla release `v<ver>` con `gh` (`UPLOAD=0` per saltare).
+
+Non è in CI perché la firma Developer ID usa il certificato nel portachiavi del Mac.
+`VARIANT=lite|offline bash build_mac.sh` costruisce una sola variante.
+
 Come per Linux, **non si compila da un altro SO**: PyInstaller e il bundle Tauri macOS vanno
 fatti su un Mac. Tutto automatizzato in **`build_macos.sh`** (root), speculare a `build_linux.sh`:
 stesso `build_sidecar.spec`, sidecar `pii-backend` senza estensione (il Rust in

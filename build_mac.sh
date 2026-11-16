@@ -17,11 +17,19 @@
 # -> "bundle ambiguous" -> notarizzazione invalida. Quindi ricopiamo il backend
 # preservando i symlink (cp -R) e firmiamo a mano, poi notarizziamo .app e .dmg.
 #
-# Uso:
-#   bash build_mac.sh                # app + dmg
-#   bash build_mac.sh app            # solo .app
+# Due varianti, come su Windows/Linux (VARIANT=...):
+#   - lite    (default): il .dmg NON contiene il modello; l'app lo scarica da Hugging Face
+#                        al primo avvio (tauri/src-tauri/src/model.rs)
+#   - offline          : modello dentro il .dmg, nessuna rete richiesta
 #
-# Prerequisiti: Xcode CLT, Rust, Node18+, un venv CPU con pyinstaller (VENV=...).
+# Uso:
+#   bash release_mac.sh                        # TUTTO: venv, modello, lite + offline, upload
+#   VARIANT=lite    bash build_mac.sh          # solo la variante leggera (app + dmg)
+#   VARIANT=offline bash build_mac.sh          # solo quella offline
+#   bash build_mac.sh app                      # solo .app
+#
+# Prerequisiti: Xcode CLT, Rust, Node18+, un venv CPU con pyinstaller + onnxruntime
+# (VENV=...; release_mac.sh lo crea da solo).
 # ============================================================================
 set -uo pipefail
 
@@ -33,24 +41,34 @@ VENV="${VENV:-.venv}"
 BUNDLES="${*:-app dmg}"
 APP="$ROOT/tauri/src-tauri/target/release/bundle/macos/Rizzo PII.app"
 ENT="$ROOT/tauri/macos_python_entitlements.plist"
-DMG_OUT="$ROOT/tauri/src-tauri/target/release/bundle/dmg/Rizzo-PII-2.0.0-macOS-arm64.dmg"
+VARIANT="${VARIANT:-lite}"
+case "$VARIANT" in
+  lite)    SUFFIX="";         BUNDLE_MODEL=0 ;;
+  offline) SUFFIX="-offline"; BUNDLE_MODEL=1 ;;
+  *) echo "ERRORE: VARIANT deve essere lite o offline (non '$VARIANT')"; exit 1 ;;
+esac
+VER="$(python3 -c 'import json;print(json.load(open("tauri/src-tauri/tauri.conf.json"))["version"])')"
+DMG_OUT="$ROOT/tauri/src-tauri/target/release/bundle/dmg/Rizzo-PII-$VER-macOS-arm64$SUFFIX.dmg"
+echo ">>> Rizzo PII $VER — variante $VARIANT"
 
 # ---- 0) controlli ----------------------------------------------------------
-[ -d "$MODEL_DIR" ] || { echo "ERRORE: modello mancante: $MODEL_DIR"; exit 1; }
-[ -x "$VENV/bin/pyinstaller" ] || { echo "ERRORE: pyinstaller mancante in $VENV"; exit 1; }
+[ -x "$VENV/bin/pyinstaller" ] || { echo "ERRORE: pyinstaller mancante in $VENV (usa release_mac.sh)"; exit 1; }
 command -v cargo >/dev/null || { echo "ERRORE: Rust/cargo non trovato"; exit 1; }
 command -v npm   >/dev/null || { echo "ERRORE: npm non trovato"; exit 1; }
+# il modello ONNX serve solo alla variante offline (release_mac.sh lo scarica da HF)
+if [ "$VARIANT" = offline ] && [ ! -f "$MODEL_DIR/onnx/model.onnx_data" ]; then
+  echo "ERRORE: manca $MODEL_DIR/onnx/model.onnx_data (lancia release_mac.sh, che lo scarica)"; exit 1
+fi
 
-# ---- 0b) modello in ONNX (fp32, stessi pesi): il sidecar non contiene torch --------
-[ -f "$MODEL_DIR/onnx/model.onnx_data" ] || "$VENV/bin/python" src/training/export_onnx.py --model-dir "$MODEL_DIR"
-
-# ---- 1) sidecar PyInstaller ------------------------------------------------
-# modelli OCR (PaddleOCR ONNX) per le scansioni: solo se mancano, vedi scripts/fetch_ocr_models.py
+# ---- 1) sidecar PyInstaller (lite: senza modello) ---------------------------
+# modelli OCR (PaddleOCR ONNX) per le scansioni: solo se mancano, vedi scripts/fetch_ocr_models.py.
+# Vanno in entrambe le varianti: sono piccoli e l'OCR deve funzionare offline.
 "$VENV/bin/python" -c "import cv2, pyclipper, yaml" 2>/dev/null \
   || "$VENV/bin/pip" install opencv-python-headless pyclipper pyyaml huggingface_hub
-"$VENV/bin/python" scripts/fetch_ocr_models.py --dest models/ocr
+"$VENV/bin/python" scripts/fetch_ocr_models.py --dest models/ocr || exit 1
 
-"$VENV/bin/pyinstaller" build_sidecar.spec --noconfirm \
+rm -rf tauri/src-tauri/backend
+PII_BUNDLE_MODEL="$BUNDLE_MODEL" "$VENV/bin/pyinstaller" build_sidecar.spec --noconfirm \
   --distpath tauri/src-tauri/backend --workpath build/sidecar_work_mac
 [ -f tauri/src-tauri/backend/pii-backend/pii-backend ] \
   || { echo "ERRORE: sidecar macOS non prodotto"; exit 1; }
@@ -76,7 +94,11 @@ cd "$ROOT"
 if [ "$MODE" != "NOTARIZE" ]; then
   ( cd "$ROOT/tauri" && APPLE_SIGNING_IDENTITY="$APPLE_SIGNING_IDENTITY" \
       npx tauri build --bundles $BUNDLES )
+  # stesso nome del percorso NOTARIZE, quello che si allega alla release
+  TDMG="$(ls -t "$ROOT"/tauri/src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null | grep -v 'Rizzo-PII-' | head -1 || true)"
+  [ -n "$TDMG" ] && mv -f "$TDMG" "$DMG_OUT"
   echo "FATTO ($MODE). Artefatti in tauri/src-tauri/target/release/bundle/{macos,dmg}/"
+  [ -f "$DMG_OUT" ] && echo "  $DMG_OUT"
   exit 0
 fi
 
@@ -88,8 +110,11 @@ sign() { codesign --force --options runtime --timestamp --sign "$ID" "$@"; }
 # ritorni-carrello e l'ultima riga puo' non finire nel file -> falso negativo.
 notarize_status() {
   xcrun notarytool submit "$1" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
-    --team-id "$APPLE_TEAM_ID" --wait --output-format json 2>/dev/null \
-    | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status","?"))'
+    --team-id "$APPLE_TEAM_ID" --wait --output-format json 2>"$ROOT/build/notarytool.err" \
+    | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status","?"))' 2>/dev/null
+  # stato vuoto = notarytool fallito prima di inviare (es. 403 accordo Apple scaduto): mostra perche'
+  [ -s "$ROOT/build/notarytool.err" ] && sed 's/^/    notarytool: /' "$ROOT/build/notarytool.err" >&2
+  return 0
 }
 
 echo ">>> [1/8] tauri build (firma Developer ID, SENZA notarize di Tauri)"
