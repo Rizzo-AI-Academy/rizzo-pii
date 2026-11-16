@@ -72,6 +72,14 @@ The hedgehog mascot does one job: it grabs your document, blacks out every ident
 </tr>
 </table>
 
+<div align="center">
+
+<img src="report/images/app_ocr_pdf_censurato.png" alt="The Rizzo PII desktop app: on the left the original PDF of a sample NDA, on the right the same document redacted, every personal data item replaced by a purple placeholder box such as [FULLNAME_1] or [CF_1]" width="900" />
+
+<sub>The app: the original document on the left, the redacted PDF on the right — text PDFs, scans and photos alike, all processed locally.</sub>
+
+</div>
+
 ---
 
 ## The problem: convenience is leaking your data
