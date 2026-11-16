@@ -127,11 +127,10 @@ def main() -> int:
     env["ENABLE_HEADLESS"] = "1"
     env["CMAKE_ARGS"] = " ".join(CMAKE_FLAGS + args.cmake_arg)
     env["CMAKE_BUILD_PARALLEL_LEVEL"] = str(args.jobs)
-    if os.name == "nt":
-        # senza, scikit-build prova i generatori uno per uno e puo' finire su un set di
-        # strumenti MSVC non installato; VS 2022 c'e' sui runner windows-latest.
-        # NB: MSBuild non regge percorsi lunghi, tieni --work corto (default: build/).
-        env.setdefault("CMAKE_GENERATOR", "Visual Studio 17 2022")
+    # Windows: il generatore lo sceglie scikit-build (>= 0.19 prova VS 2026, poi 2022 con
+    # i set di strumenti v144/v143): non forzarlo, i runner windows-latest hanno solo VS
+    # 2026 e una macchina di sviluppo puo' avere solo il 2022. MSBuild invece non regge i
+    # percorsi lunghi: tieni --work corto (default: build/ nella repo).
     for old in args.out.glob("opencv_python_headless-*.whl"):
         old.unlink()
     cmd = [sys.executable, "-m", "pip", "wheel", str(src), "--no-deps", "-w", str(args.out), "-v"]
