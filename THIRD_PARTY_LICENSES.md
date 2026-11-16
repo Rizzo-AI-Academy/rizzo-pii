@@ -72,7 +72,10 @@ Licences as declared on PyPI.
 | Werkzeug, Jinja2, Click, ItsDangerous, MarkupSafe | BSD-3-Clause | Flask's dependencies |
 | gunicorn | MIT | Docker image only |
 | filelock | MIT | |
-| PyYAML | MIT | |
+| PyYAML | MIT | OCR model configs |
+| opencv-python-headless (`cv2`) | Apache-2.0 (OpenCV) / MIT (wheel) | OCR pre/post-processing |
+| pyclipper | MIT (Clipper: Boost Software License) | OCR text-box expansion |
+| onnxruntime | MIT | NER model and OCR models |
 | tqdm | MPL-2.0 AND MIT | |
 | certifi | MPL-2.0 | |
 
@@ -99,6 +102,15 @@ not only with the weights published on Hugging Face.
 | [jhu-clsp/mmBERT-base](https://huggingface.co/jhu-clsp/mmBERT-base) (backbone) | MIT |
 | [ai4privacy/open-pii-masking-500k-ai4privacy](https://huggingface.co/datasets/ai4privacy/open-pii-masking-500k-ai4privacy) | card declares `license: other` with `license_name: cc-by-4.0` — attribution required |
 | [DeepMount00/pii-masking-ita](https://huggingface.co/datasets/DeepMount00/pii-masking-ita) | **no licence declared on the dataset card** |
+
+The OCR models bundled in `ocr_models/` (fetched by [`scripts/fetch_ocr_models.py`](scripts/fetch_ocr_models.py))
+are the official PaddleOCR models, unchanged, exported to ONNX:
+
+| Artefact | Licence as declared |
+| --- | --- |
+| PP-OCRv6 small/tiny det + rec, SLANet_plus, PP-DocLayout_plus-L ([PaddlePaddle on HF](https://huggingface.co/PaddlePaddle)) | Apache-2.0 |
+| PP-DocLayout-M (converted with paddle2onnx from the official weights, published at [rizzoaiacademy/rizzo-ocr](https://huggingface.co/rizzoaiacademy/rizzo-ocr)) | Apache-2.0 |
+| [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) (pre/post-processing reimplemented in `src/app/docmd/`) | Apache-2.0 |
 
 Two honest caveats:
 

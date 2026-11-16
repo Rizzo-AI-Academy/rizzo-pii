@@ -2,13 +2,13 @@
 """
 Test di regressione per reverse() (ripristino dei placeholder nel PDF anonimizzato).
 
-reverse() e' JS incorporato in `PAGE` (src/app/app.py): questa suite non e' un
+reverse() e' JS della UI (src/app/ui/index.html): questa suite non e' un
 unittest.TestCase apposta, cosi' come test_confini_parola.py -- `unittest
 discover` non ci trova nessuna TestCase e non installa Node, restando fedele
 al commento nel workflow ("nessun pip install, solo libreria standard"). E'
 un test manuale, allo stesso modo di test_confini_parola.py, ma eseguibile
 offline (nessun backend da avviare): estrae il blocco reverse()/dictFile
-letterale da app.py e lo esegue con `node`, stubando solo il DOM.
+letterale dalla UI e lo esegue con `node`, stubando solo il DOM.
 
 Copre due difetti gia' chiusi da questa funzione e cinque emersi in code
 review sulla stessa riga, per evitare che una futura modifica li riapra senza
@@ -42,7 +42,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-APP_PY = Path(__file__).resolve().parents[1] / "src" / "app" / "app.py"
+APP_PY = Path(__file__).resolve().parents[1] / "src" / "app" / "ui" / "index.html"
 START_MARK = "/* ---- reverse ---- */"
 END_MARK = "r.readAsText(f);};"
 

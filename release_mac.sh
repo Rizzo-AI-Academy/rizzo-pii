@@ -38,7 +38,8 @@ if ! "$VENV/bin/python" -c "import onnxruntime, tokenizers, flask, fitz, PyInsta
   echo ">>> creo/aggiorno il venv $VENV"
   [ -x "$VENV/bin/python" ] || "$PYTHON" -m venv "$VENV"
   "$VENV/bin/pip" install --upgrade pip
-  "$VENV/bin/pip" install tokenizers numpy onnxruntime flask pymupdf pyinstaller "huggingface_hub[cli]"
+  "$VENV/bin/pip" install tokenizers numpy onnxruntime flask pymupdf pyinstaller "huggingface_hub[cli]" \
+    opencv-python-headless pyclipper pyyaml
 fi
 
 # ---- 2) modello ONNX da Hugging Face (file elencati: --include ne prende uno solo) ----

@@ -74,7 +74,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install --no-cache-dir tokenizers numpy onnxruntime \
-            flask pymupdf pyinstaller "huggingface_hub[cli]"
+            flask pymupdf pyinstaller "huggingface_hub[cli]" \
+            pyclipper pyyaml
 
       # File elencati uno per uno (vedi build-windows.yml: --include con piu' valori salta onnx/).
       - name: Scarica il modello ONNX da Hugging Face
@@ -85,6 +86,30 @@ jobs:
           for f in onnx/model.onnx onnx/model.onnx_data tokenizer.json config.json; do
             [ -f "$MODEL_DIR/$f" ] || { echo "modello non scaricato: $MODEL_DIR/$f mancante"; exit 1; }
           done
+
+      # OpenCV MINIMA (solo core + imgproc, quelli che usa l'OCR) al posto della wheel
+      # ufficiale: quella si porta dietro video, OpenBLAS e OpenCL (~143 MB su Linux) e il
+      # modulo cv2 li carica tutti all'avvio, quindi non si possono togliere dopo.
+      # Si compila una volta (~5-10 min) e resta nella cache delle Actions.
+      - name: Cache OpenCV minima
+        id: cvmin
+        uses: actions/cache@v4
+        with:
+          path: build/opencv_min
+          key: opencv-min-${{ runner.os }}-py311-${{ hashFiles('scripts/build_opencv_min.py') }}
+
+      - name: Compila OpenCV minima
+        if: steps.cvmin.outputs.cache-hit != 'true'
+        run: python scripts/build_opencv_min.py
+
+      - name: Installa OpenCV minima
+        run: |
+          pip install --no-deps --force-reinstall build/opencv_min/opencv_python_headless-*.whl
+          python -c "import cv2; print('cv2', cv2.__version__); assert not hasattr(cv2, 'imencode'), 'non e la wheel minima'"
+
+      # Modelli OCR dentro il sidecar (vedi build-windows.yml)
+      - name: Scarica i modelli OCR
+        run: python scripts/fetch_ocr_models.py --dest models/ocr
 
       - name: Sidecar PyInstaller (senza modello)
         env:
@@ -100,7 +125,7 @@ jobs:
 
       # Il sidecar si avvia davvero col modello scaricato (PII_MODEL_DIR, come fa Tauri) e
       # anonimizza: una build che compila ma non parte non arriva alla release.
-      - name: Prova del sidecar (health + analyze)
+      - name: Prova del sidecar (health + analyze + OCR)
         run: |
           PII_MODEL_DIR="$PWD/$MODEL_DIR" PII_PORT=5099 \
             tauri/src-tauri/backend/pii-backend/pii-backend > sidecar.log 2>&1 &
@@ -109,11 +134,15 @@ jobs:
             sleep 1
           done
           cat health.json || { cat sidecar.log; exit 1; }
-          jq -e '.backend == "onnx" and .model_loaded' health.json
+          jq -e '.backend == "onnx" and .model_loaded and .ocr.available' health.json
           curl -sf -X POST http://127.0.0.1:5099/analyze -H 'Content-Type: application/json' \
             -d '{"text":"Il sig. Mario Rossi, IBAN IT60X0542811101000000123456"}' \
             | jq -r .anonymized_text | tee out.txt
           grep -q '\[FULLNAME_1\]' out.txt && grep -q '\[IBAN_1\]' out.txt
+          # scansione sintetica (solo immagine, niente layer di testo) -> /ocr
+          python src/app/make_scanned_pdf.py scan.pdf
+          curl -sf -F file=@scan.pdf http://127.0.0.1:5099/ocr | jq -r .text | tee ocr.txt
+          grep -q 'Mario Rossi' ocr.txt && grep -q 'IT60X0542811101000000123456' ocr.txt
           kill %1 || true
 
       # Due build dalla stessa compilazione Rust: prima senza modello, poi con i 6 file copiati

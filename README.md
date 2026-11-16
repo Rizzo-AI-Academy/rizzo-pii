@@ -470,10 +470,63 @@ The same process is a plain HTTP service, so you can use it as a sidecar in a fa
 curl localhost:5005/health                      # readiness, no inference: 200 = model loaded
 curl -X POST localhost:5005/analyze -H 'Content-Type: application/json' \
      -d '{"text": "Mario Rossi, IBAN IT60X0542811101000000123456"}'
-curl -F "file=@atto.pdf" localhost:5005/analyze  # .pdf, .md, .txt
+curl -F "file=@atto.pdf" localhost:5005/analyze  # .pdf, .md, .txt, scans and photos (.png/.jpg/.tiff)
 curl -F "file=@atto.pdf" localhost:5005/pdf -o atto_anonimizzato.pdf   # anonymized PDF back
-curl localhost:5005/settings                     # tag legend, excluded tags, dictionary state
+curl -F "file=@scansione.jpg" localhost:5005/ocr # OCR only: Markdown text, page by page
+curl localhost:5005/settings                     # tag legend, excluded tags, dictionary, OCR options
 ```
+
+### Scanned documents and photos: local OCR
+
+A scanned PDF has no text layer — just pictures of pages — and a phone photo of a contract is the
+same problem. The app reads them with a **local OCR pipeline** ([`src/app/ocr.py`](src/app/ocr.py) →
+[`src/app/docmd/`](src/app/docmd/)): PaddleOCR models exported to ONNX and run by ONNX Runtime on
+the CPU, no Paddle, no PyTorch, nothing leaves the machine.
+
+```
+page image ──► PP-DocLayout (layout: text, titles, tables, stamps…)
+                 ├── text / titles / lists ──► PP-OCRv6 detection + recognition (CTC) ──► Markdown
+                 ├── tables ──► SLANet_plus + OCR lines ──► Markdown table
+                 └── reading order (XY-cut, columns, key–value forms)
+```
+
+- **Only where it is needed.** With `ocr=auto` (default) only pages without a text layer go through
+  OCR; `force` reads every page (garbled text layers), `off` never runs it. Images (`.png`, `.jpg`,
+  `.tiff` multi-page, `.bmp`, `.webp`) always do. ~1 s per page on a 2017 quad-core with the
+  `balanced` preset, ~0.5 s with `fast`; crooked scans are deskewed automatically.
+- **Redaction on the pixels.** In the redacted PDF a scanned page is re-rendered, the pixels under
+  every PII (located character by character from the CTC time steps) are **overwritten**, the
+  original image is removed from the file and the page goes back as the covered image with the
+  placeholders written on top as real text. Stamps found by the layout model are covered too
+  (`ocr_redact_seals`, on by default) — they often carry names and registration numbers.
+- **One OCR per document.** Results are cached in memory by file hash: preview, `/ocr`, `/analyze`
+  and `/pdf` on the same file pay for the OCR once. In the UI the left column shows a progress bar
+  page by page and can overlay the recognized lines on the page images.
+
+```bash
+curl -F "file=@scansione.pdf" -F mode=force -F pages=1-3 localhost:5005/ocr     # JSON, page by page
+curl -F "file=@scansione.pdf" -F lines=1 localhost:5005/ocr     # + lines and per-character boxes
+curl -N -F "file=@scansione.pdf" -F stream=1 localhost:5005/ocr # NDJSON progress events
+curl -F "file=@foto.jpg" -F ocr_preset=fast localhost:5005/analyze
+curl -X POST localhost:5005/settings -H 'Content-Type: application/json' \
+     -d '{"ocr_mode": "auto", "ocr_preset": "balanced", "ocr_redact_seals": true}'
+```
+
+**The models.** All of them are the official [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)
+models by the PaddlePaddle team (Apache-2.0), **unchanged and not fine-tuned**: we only run them in
+ONNX and re-implemented the pre/post-processing for ONNX Runtime.
+
+| Stage | Model | Size | ONNX from |
+| --- | --- | --: | --- |
+| Layout (fast, default) | PP-DocLayout-M — PicoDet-L, 23 classes [[11]](#references) | 23 MB | converted with `paddle2onnx`, published at [rizzoaiacademy/rizzo-ocr](https://huggingface.co/rizzoaiacademy/rizzo-ocr) |
+| Layout (accurate) | PP-DocLayout_plus-L — RT-DETR-L [[11]](#references) | 124 MB | [PaddlePaddle/PP-DocLayout_plus-L_onnx](https://huggingface.co/PaddlePaddle/PP-DocLayout_plus-L_onnx) |
+| Text detection | PP-OCRv6 small / tiny det [[10]](#references) | 10 / 2 MB | [PaddlePaddle/PP-OCRv6_small_det_onnx](https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx) · [tiny](https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_det_onnx) |
+| Text recognition | PP-OCRv6 small / tiny rec (CTC, accented Italian letters included) [[10]](#references) | 21 / 5 MB | [PaddlePaddle/PP-OCRv6_small_rec_onnx](https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx) · [tiny](https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_rec_onnx) |
+| Table structure | SLANet_plus [[9]](#references) | 8 MB | [PaddlePaddle/SLANet_plus_onnx](https://huggingface.co/PaddlePaddle/SLANet_plus_onnx) |
+
+They are fetched once (~70 MB) with `python scripts/fetch_ocr_models.py` into `models/ocr/` and
+bundled inside the desktop app; see [docs/BUILD.md](docs/BUILD.md). OCR is not perfect: on a scan,
+always look at the `PDF censurato` view before sharing the file.
 
 ### Get the anonymized document back as a PDF
 
@@ -491,14 +544,14 @@ Two things can leave a value in clear, and both raise a warning in the UI (respo
 `X-PII-Residual` and `X-PII-Skipped`): a value still readable in the output at the final check, and
 values too short to search safely (under 2 alphanumeric characters, or 2 bare digits like `45`).
 Metadata, XMP, annotations, form-field values and bookmark titles are scrubbed too, and embedded
-attachments are dropped. Text baked into a raster image cannot be redacted at all — if **no**
-occurrence is found anywhere in the PDF the endpoint fails with `422` rather than handing you a file
-that only looks anonymized.
+attachments are dropped. Pages that are scans are read with the OCR and redacted on the pixels (see
+above). If **no** occurrence is found anywhere in the PDF the endpoint fails with `422` rather than
+handing you a file that only looks anonymized.
 
 ### See the document, not just its text
 
-Drop a PDF and the left column **renders it**, page by page, right there: two views, `Anteprima PDF`
-and `Testo`. Anonymize and the right column gains a third view next to the highlighted preview and
+Drop a PDF or an image and the left column **renders it**, page by page, right there: two views,
+`Pagine` and `Testo`. Anonymize and the right column gains a third view next to the highlighted preview and
 the raw text — **`PDF censurato`**, the same document redacted, so you can compare the two side by
 side before downloading anything.
 
@@ -783,6 +836,9 @@ installed on the org. Refresh it with <code>python scripts/plot_star_history.py<
 6. Microsoft. *Presidio: Data Protection and De-identification SDK*. Open source (MIT).
 7. Regulation (EU) 2016/679: General Data Protection Regulation (GDPR).
 8. Regulation (EU) 2024/1689: Artificial Intelligence Act (EU AI Act).
+9. Cui, C., Sun, T., Lin, M. et al. *PaddleOCR 3.0 Technical Report*, 2025. [arXiv:2507.05595](https://arxiv.org/abs/2507.05595). Code: [PaddlePaddle/PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) (Apache-2.0).
+10. Zhang, Y., Wang, X., Lin, M. et al. *PP-OCRv6: From 1.5M to 34.5M Parameters, Surpassing Billion-Scale VLMs on OCR Tasks*, 2026. [arXiv:2606.13108](https://arxiv.org/abs/2606.13108).
+11. Sun, T., Cui, C., Du, Y., Liu, Y. *PP-DocLayout: A Unified Document Layout Detection Model to Accelerate Large-Scale Data Construction*, 2025. [arXiv:2503.17213](https://arxiv.org/abs/2503.17213).
 
 ---
 

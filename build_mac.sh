@@ -61,6 +61,12 @@ if [ "$VARIANT" = offline ] && [ ! -f "$MODEL_DIR/onnx/model.onnx_data" ]; then
 fi
 
 # ---- 1) sidecar PyInstaller (lite: senza modello) ---------------------------
+# modelli OCR (PaddleOCR ONNX) per le scansioni: solo se mancano, vedi scripts/fetch_ocr_models.py.
+# Vanno in entrambe le varianti: sono piccoli e l'OCR deve funzionare offline.
+"$VENV/bin/python" -c "import cv2, pyclipper, yaml" 2>/dev/null \
+  || "$VENV/bin/pip" install opencv-python-headless pyclipper pyyaml huggingface_hub
+"$VENV/bin/python" scripts/fetch_ocr_models.py --dest models/ocr || exit 1
+
 rm -rf tauri/src-tauri/backend
 PII_BUNDLE_MODEL="$BUNDLE_MODEL" "$VENV/bin/pyinstaller" build_sidecar.spec --noconfirm \
   --distpath tauri/src-tauri/backend --workpath build/sidecar_work_mac
