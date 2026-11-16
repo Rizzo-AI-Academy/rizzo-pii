@@ -35,6 +35,18 @@ python src/training/export_onnx.py --model-dir models/rizzo-pii-0.3B-v1.5.0
 Crea `onnx/model.onnx` + `onnx/model.onnx_data` nella cartella del modello e verifica che le
 entità coincidano con PyTorch (esce con 1 se no). Senza questi file lo spec si ferma subito.
 
+### 0b. Modelli OCR (una volta)
+Le scansioni e le immagini si leggono con l'OCR locale (`src/app/ocr.py` → `src/app/docmd/`,
+PaddleOCR in ONNX). I modelli vanno in `models/ocr/` e lo spec li impacchetta in `_internal/ocr_models/`:
+```powershell
+build_env\Scripts\pip install opencv-python-headless pyclipper pyyaml   # una volta nel venv di build
+python scripts/fetch_ocr_models.py                                    # scarica da Hugging Face
+# oppure, se hai gia' la pipeline docmd con i modelli convertiti:
+python scripts/fetch_ocr_models.py --from-dir D:\percorso\ocr_pipeline\models
+```
+Vedi **[§ OCR delle scansioni](#ocr-delle-scansioni)**. Senza modelli lo spec si ferma; con
+`$env:PII_BUNDLE_OCR = "0"` esce una build senza OCR (le scansioni rispondono "modelli OCR non installati").
+
 ### 1. Costruire il sidecar (backend headless)
 Entry dedicato `src/app/serve.py` (solo Flask, niente browser); spec `build_sidecar.spec`.
 Si costruisce **dentro le risorse Tauri**:
@@ -144,6 +156,49 @@ PyTorch (pipeline HF `aggregation_strategy="simple"`) su 300 frasi della validat
   | RAM dopo l'uso | ~870 MB | ~670 MB |
 
   Sul testo lungo il throughput è pari: il guadagno è in installazione, avvio e memoria.
+
+---
+
+## OCR delle scansioni
+
+PDF scansionati, foto e immagini (`.png`, `.jpg`, `.tiff`, `.bmp`, `.webp`) passano da una pipeline
+OCR **locale e solo CPU**: `src/app/docmd/` (copia adattata della pipeline docmd: PaddleOCR esportato
+in ONNX, senza Paddle e senza PyTorch) orchestrata da `src/app/ocr.py`.
+
+| Modello | Ruolo | Peso | Origine |
+| --- | --- | --: | --- |
+| PP-DocLayout-M | layout (titoli, testo, tabelle, timbri) | 23 MB | convertito con paddle2onnx |
+| PP-DocLayout_plus-L | layout accurato (preset `accurate`, o al posto di M se manca) | 124 MB | ONNX ufficiale |
+| PP-OCRv6_small_det / _rec | detection + recognition (preset `balanced`) | 10 + 21 MB | ONNX ufficiale |
+| PP-OCRv6_tiny_det / _rec | detection + recognition (preset `fast`) | 2 + 5 MB | ONNX ufficiale |
+| SLANet_plus | struttura delle tabelle | 8 MB | ONNX ufficiale |
+
+Il modello delle formule (PP-FormulaNet, 321 MB) **non** si impacchetta: per atti e contratti non
+serve, e senza di lui i blocchi "formula" si leggono come testo.
+
+**Da dove arrivano i modelli** (`scripts/fetch_ocr_models.py`): i modelli ufficiali dai repo
+`PaddlePaddle/<nome>_onnx` su Hugging Face; PP-DocLayout-M non ha un ONNX ufficiale, quindi si
+prende da `--from-dir` (la cartella `models/` della pipeline docmd, gia' convertita) o dal repo
+pubblico [`rizzoaiacademy/rizzo-ocr`](https://huggingface.co/rizzoaiacademy/rizzo-ocr)
+(sottocartella `PP-DocLayout-M/`: convertito con paddle2onnx, pesi originali, Apache-2.0). E' la
+strada della CI: nessun token, ~69 MB in tutto. Solo se nessuno dei due e' raggiungibile si ripiega
+sul layout accurato ufficiale (+100 MB, ~2× piu' lento). Per aggiornare il modello pubblicato:
+```bash
+hf upload rizzoaiacademy/rizzo-ocr models/ocr/PP-DocLayout-M PP-DocLayout-M
+```
+
+**Peso nel sidecar**: ~66 MB di modelli (con il layout M) + ~82 MB di `cv2.pyd` (opencv-python-headless;
+il plugin ffmpeg per i video viene escluso dallo spec). Sidecar senza modello NER: ~155 → ~300 MB.
+
+**Come funziona la redazione sulle scansioni**: per le pagine lette con l'OCR `pdf_export.redact_pdf`
+riceve le righe con i box di ogni carattere (in punti PDF, gia' riportati sulla pagina originale anche
+quando l'OCR l'ha raddrizzata), cerca i valori con lo stesso matcher dei PDF testuali, sovrascrive i
+pixel, toglie dalla pagina tutto il contenuto originale (immagini comprese) e la rimette come immagine
+JPEG coperta con i placeholder scritti sopra. Prova rapida senza scanner:
+```powershell
+python src/app/make_scanned_pdf.py scansione_prova.pdf --png scansione_prova.png
+curl.exe -F "file=@scansione_prova.pdf" http://127.0.0.1:5005/pdf -o anonimizzato.pdf
+```
 
 ---
 

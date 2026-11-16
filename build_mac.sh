@@ -45,6 +45,11 @@ command -v npm   >/dev/null || { echo "ERRORE: npm non trovato"; exit 1; }
 [ -f "$MODEL_DIR/onnx/model.onnx_data" ] || "$VENV/bin/python" src/training/export_onnx.py --model-dir "$MODEL_DIR"
 
 # ---- 1) sidecar PyInstaller ------------------------------------------------
+# modelli OCR (PaddleOCR ONNX) per le scansioni: solo se mancano, vedi scripts/fetch_ocr_models.py
+"$VENV/bin/python" -c "import cv2, pyclipper, yaml" 2>/dev/null \
+  || "$VENV/bin/pip" install opencv-python-headless pyclipper pyyaml huggingface_hub
+"$VENV/bin/python" scripts/fetch_ocr_models.py --dest models/ocr
+
 "$VENV/bin/pyinstaller" build_sidecar.spec --noconfirm \
   --distpath tauri/src-tauri/backend --workpath build/sidecar_work_mac
 [ -f tauri/src-tauri/backend/pii-backend/pii-backend ] \

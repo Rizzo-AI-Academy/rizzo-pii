@@ -33,5 +33,11 @@ onnx
 onnxruntime
 tokenizers
 
+# OCR delle scansioni (src/app/ocr.py + src/app/docmd/, PaddleOCR in ONNX, solo CPU).
+# I modelli si scaricano con: python scripts/fetch_ocr_models.py
+opencv-python-headless
+pyclipper
+pyyaml
+
 # Loss / metric plots produced by the training script
 matplotlib

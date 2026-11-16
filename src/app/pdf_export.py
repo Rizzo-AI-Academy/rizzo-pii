@@ -36,11 +36,14 @@ Rete di sicurezza finale: `report["residual"]` elenca i placeholder il cui valor
 e' ANCORA leggibile nell'output (testo di pagina + annotazioni + widget + TOC).
 Deve essere vuota; l'UI avvisa se non lo e'.
 
-Limiti noti (= punti 2-4 della issue #7):
-  - testo dentro immagini raster (scansioni, loghi, blocchi firma): non esiste nel
-    layer testuale, quindi non puo' essere trovato ne' redatto (serve OCR). Se in
-    tutto il PDF non si trova NESSUNA occorrenza, il chiamante deve rifiutare:
-    meglio un errore che un PDF "anonimizzato" che non lo e';
+Scansioni: le pagine lette con l'OCR (ocr.py) arrivano in `ocr_pages` con righe e
+box per carattere; su quelle la redazione avviene SUI PIXEL (_redact_scanned_page).
+
+Limiti noti:
+  - testo dentro immagini raster su pagine che NON passano dall'OCR (es. un logo in
+    un PDF testuale con ocr=auto): non esiste nel layer testuale, quindi non puo'
+    essere trovato ne' redatto. Se in tutto il PDF non si trova NESSUNA occorrenza,
+    il chiamante deve rifiutare: meglio un errore che un PDF "anonimizzato" che non lo e';
   - valori troppo corti/ambigui (< 2 caratteri alfanumerici, o 2 sole cifre) NON
     vengono redatti: cercarli ovunque devasterebbe il documento. Finiscono in
     `report["skipped"]` e l'UI DEVE avvisare, perche' restano in chiaro.
@@ -349,10 +352,135 @@ REDACT_FILL = (0.486, 0.227, 0.620)
 REDACT_TEXT = (1.0, 1.0, 1.0)
 
 
-def redact_pdf(pdf_bytes, mapping, fill=REDACT_FILL, text_color=REDACT_TEXT):
+# --------------------------------------------------------------------------- #
+# Pagine scansionate (OCR): redazione sui PIXEL
+# --------------------------------------------------------------------------- #
+# Per una pagina letta con l'OCR il testo non sta nel content stream ma in
+# un'immagine: apply_redactions() da solo non ha niente da togliere. Qui:
+#   1. si ricostruisce l'indice char-preciso dalle righe OCR (box per carattere,
+#      gia' in punti PDF: li calcola ocr.py), cosi' lo STESSO matcher dei PDF
+#      testuali (_value_pattern, confini di parola, sillabazione) trova i valori;
+#   2. si renderizza la pagina e si SOVRASCRIVONO i pixel delle PII (e dei timbri);
+#   3. si toglie dalla pagina tutto il contenuto originale (immagini comprese) e
+#      si rimette solo l'immagine gia' coperta, con i placeholder scritti sopra.
+# Il risultato non contiene piu' i pixel originali sotto le caselle: non e' un
+# rettangolo disegnato sopra una scansione intatta.
+OCR_PAD_X = 0.18     # margine orizzontale della casella, in altezze di riga
+OCR_PAD_Y = 0.10     # margine verticale
+OCR_JPEG_QUALITY = 82
+SEAL_LABEL = "[TIMBRO]"
+
+
+def _ocr_char_index(ocr_page):
+    """(testo, [Rect per carattere]) dalle righe OCR di una pagina, nello stesso
+    formato di _page_char_index. Il primo e l'ultimo carattere di ogni riga si
+    allargano fino ai bordi della riga: la posizione CTC del primo glifo cade
+    spesso un po' dentro, e un bordo di lettera fuori dalla casella si legge."""
+    chars, boxes = [], []
+    for ln in ocr_page.get("lines") or ():
+        text = ln.get("text") or ""
+        if not text:
+            continue
+        lb = fitz.Rect(ln["box"])
+        cb = ln.get("chars")
+        if not cb or len(cb) != len(text):
+            cb = [ln["box"]] * len(text)
+        for k, (c, b) in enumerate(zip(text, cb)):
+            r = fitz.Rect(b)
+            if k == 0:
+                r.x0 = min(r.x0, lb.x0)
+            if k == len(text) - 1:
+                r.x1 = max(r.x1, lb.x1)
+            chars.append(c)
+            boxes.append(r)
+        chars.append("\n")
+        boxes.append(None)
+    return "".join(chars), boxes
+
+
+def _pad(rect, page_rect):
+    h = rect.height
+    r = fitz.Rect(rect.x0 - OCR_PAD_X * h, rect.y0 - OCR_PAD_Y * h,
+                  rect.x1 + OCR_PAD_X * h, rect.y1 + OCR_PAD_Y * h)
+    return r & page_rect
+
+
+def _redact_scanned_page(page, ocr_page, usable, fill, text_color, redact_seals):
+    """Redazione sui pixel di una pagina letta con l'OCR. Ritorna
+    ({placeholder: occorrenze}, n_timbri)."""
+    import numpy as np
+
+    page.remove_rotation()      # coordinate OCR = pagina com'e' vista (ocr.py)
+    prect = page.rect
+    text, boxes = _ocr_char_index(ocr_page)
+    hits, taken, labels = {}, [], []
+    if text.strip():
+        for ph, _val, pat in usable:
+            for m in pat.finditer(text):
+                placed = False
+                for r in _match_rects(boxes, m):
+                    r = _pad(r, prect)
+                    if r.is_empty or _covered(r, taken):
+                        continue
+                    taken.append(r)
+                    labels.append((r, ph))
+                    placed = True
+                if placed:
+                    hits[ph] = hits.get(ph, 0) + 1
+    n_seals = 0
+    if redact_seals:
+        for b in ocr_page.get("seals") or ():
+            r = fitz.Rect(b) & prect
+            if not r.is_empty:
+                taken.append(r)
+                labels.append((r, SEAL_LABEL))
+                n_seals += 1
+
+    dpi = int(ocr_page.get("dpi") or 200)
+    pix = page.get_pixmap(dpi=dpi, alpha=False, colorspace=fitz.csRGB)
+    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+        pix.height, pix.stride // 3, 3)[:, :pix.width].copy()
+    sx, sy = pix.width / prect.width, pix.height / prect.height
+    color = np.array([round(c * 255) for c in fill], dtype=np.uint8)
+    for r in taken:
+        x0, y0 = max(0, int(r.x0 * sx)), max(0, int(r.y0 * sy))
+        x1 = min(pix.width, int(np.ceil(r.x1 * sx)))
+        y1 = min(pix.height, int(np.ceil(r.y1 * sy)))
+        if x1 > x0 and y1 > y0:
+            img[y0:y1, x0:x1] = color      # i pixel originali spariscono QUI
+    out = fitz.Pixmap(fitz.csRGB, pix.width, pix.height, img.tobytes(), 0)
+    jpeg = out.tobytes("jpeg", jpg_quality=OCR_JPEG_QUALITY)
+
+    # via TUTTO il contenuto originale della pagina: testo, immagini, grafica
+    page.add_redact_annot(prect)
+    kw = dict(images=fitz.PDF_REDACT_IMAGE_REMOVE, text=fitz.PDF_REDACT_TEXT_REMOVE)
+    try:
+        page.apply_redactions(graphics=fitz.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED, **kw)
+    except (TypeError, AttributeError):
+        page.apply_redactions(**kw)
+    page.insert_image(prect, stream=jpeg)
+
+    # placeholder in bianco sopra le caselle (testo vero: si legge e si copia)
+    for r, ph in labels:
+        fs = _fit_fontsize(ph, r)
+        if not fs:
+            continue
+        w = fitz.get_text_length(ph, fontname="helv", fontsize=fs)
+        x = r.x0 + (r.width - w) / 2
+        y = r.y0 + r.height / 2 + fs * 0.35
+        page.insert_text((x, y), ph, fontname="helv", fontsize=fs, color=text_color)
+    return hits, n_seals
+
+
+def redact_pdf(pdf_bytes, mapping, fill=REDACT_FILL, text_color=REDACT_TEXT,
+               ocr_pages=None, redact_seals=True):
     """PDF originale -> PDF con redazione vera + placeholder al posto delle PII.
 
     mapping: {"[FULLNAME_1]": "Mario Rossi", ...} (il dizionario di analyze()).
+    ocr_pages: {indice pagina: risultato di ocr.ocr_page} per le pagine lette con
+        l'OCR (scansioni). Su quelle la redazione avviene sui PIXEL e la pagina
+        esce come immagine coperta + placeholder (vedi _redact_scanned_page).
+    redact_seals: sulle pagine OCR copre anche i timbri trovati dal layout.
     Ritorna (bytes, report) con report = {
         "occurrences":    occorrenze redatte nel testo di pagina,
         "by_placeholder": {placeholder: n_occorrenze},
@@ -364,8 +492,11 @@ def redact_pdf(pdf_bytes, mapping, fill=REDACT_FILL, text_color=REDACT_TEXT):
         "widgets":        sostituzioni nei campi modulo,
         "toc":            sostituzioni nei segnalibri,
         "embedded":       allegati rimossi,
+        "ocr_pages":      pagine redatte sui pixel (scansioni),
+        "seals":          timbri coperti sulle pagine OCR,
     }
     """
+    ocr_pages = ocr_pages or {}
     if not isinstance(mapping, dict) or not mapping:
         raise PdfError("Dizionario vuoto: anonimizza prima il documento.")
     items = [(ph, v) for ph, v in mapping.items()
@@ -398,9 +529,21 @@ def redact_pdf(pdf_bytes, mapping, fill=REDACT_FILL, text_color=REDACT_TEXT):
 
     by_ph = {ph: 0 for ph, _, _ in usable}
     patterns = [(pat, ph) for ph, _, pat in usable]   # per annot/widget/TOC
-    total = n_annots = n_widgets = 0
+    total = n_annots = n_widgets = n_seals = 0
+    raster_pages = []
 
-    for page in doc:
+    for pno, page in enumerate(doc):
+        if pno in ocr_pages:
+            hits, seals = _redact_scanned_page(page, ocr_pages[pno], usable,
+                                               fill, text_color, redact_seals)
+            for ph, n in hits.items():
+                by_ph[ph] += n
+                total += n
+            n_seals += seals
+            raster_pages.append(pno)
+            n_annots += _scrub_annots(page, patterns)
+            n_widgets += _scrub_widgets(page, patterns)
+            continue
         text, boxes = _page_char_index(page)
         taken = []
         if text.strip():
@@ -443,6 +586,8 @@ def redact_pdf(pdf_bytes, mapping, fill=REDACT_FILL, text_color=REDACT_TEXT):
         "widgets": n_widgets,
         "toc": n_toc,
         "embedded": n_emb,
+        "ocr_pages": raster_pages,
+        "seals": n_seals,
     }
 
 

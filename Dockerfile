@@ -35,7 +35,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # (NB: transformers 5.x qui, mentre Dockerfile.linux resta sul 4.57.3 di PyInstaller.)
 RUN pip install --upgrade pip \
  && pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.13.0" \
- && pip install "transformers==5.14.1" tokenizers safetensors flask pymupdf gunicorn huggingface_hub
+ && pip install "transformers==5.14.1" tokenizers safetensors flask pymupdf gunicorn huggingface_hub \
+      onnxruntime opencv-python-headless pyclipper pyyaml
 
 # --- modello -----------------------------------------------------------------
 # app.py con APP_MODEL_VERSION="1.5.0" cerca models/rizzo-pii-0.3B-v1.5.0/ a partire
@@ -46,6 +47,12 @@ RUN python -c "from huggingface_hub import snapshot_download; \
 snapshot_download('$MODEL_REPO', revision='$MODEL_REVISION', \
 local_dir='/app/models/rizzo-pii-0.3B-v1.5.0', \
 allow_patterns=['*.json','*.safetensors','*.txt','*.model'])"
+
+# --- modelli OCR (scansioni e immagini) ---------------------------------------
+# PaddleOCR in ONNX: det/rec/tabelle ufficiali PaddlePaddle + layout (vedi lo script).
+# ocr.py li cerca in /app/models/ocr (root della repo + models/ocr).
+COPY scripts/fetch_ocr_models.py /tmp/fetch_ocr_models.py
+RUN python /tmp/fetch_ocr_models.py --dest /app/models/ocr && rm /tmp/fetch_ocr_models.py
 
 # --- applicazione ------------------------------------------------------------
 # Solo src/app: il resto della repo (training, data pipeline, dataset) non serve

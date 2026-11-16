@@ -74,7 +74,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install --no-cache-dir tokenizers numpy onnxruntime `
-            flask pymupdf pyinstaller "huggingface_hub[cli]"
+            flask pymupdf pyinstaller "huggingface_hub[cli]" `
+            opencv-python-headless pyclipper pyyaml
 
       # Solo i file che finiscono nel sidecar: il grafo ONNX + i pesi (fp32, gli stessi del
       # model.safetensors, esportati e verificati con src/training/export_onnx.py) e il
@@ -89,6 +90,13 @@ jobs:
           foreach ($f in "onnx/model.onnx", "onnx/model.onnx_data", "tokenizer.json", "config.json") {
             if (-not (Test-Path "$env:MODEL_DIR/$f")) { throw "modello non scaricato: $env:MODEL_DIR/$f mancante" }
           }
+
+      # Modelli OCR (PaddleOCR ONNX, ~60-175 MB): det/rec/tabelle dai repo ufficiali
+      # PaddlePaddle su HF, il layout veloce dal repo del progetto se pubblicato, altrimenti
+      # il layout accurato ufficiale. Vanno DENTRO il sidecar (anche nell'installer leggero):
+      # sono piccoli e l'OCR deve funzionare offline.
+      - name: Scarica i modelli OCR
+        run: python scripts/fetch_ocr_models.py --dest models/ocr
 
       # Sidecar SENZA modello (PII_BUNDLE_MODEL=0): e' la base di entrambi gli installer.
       - name: Sidecar PyInstaller (senza modello)
