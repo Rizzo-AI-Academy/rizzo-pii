@@ -134,7 +134,7 @@ if not getattr(sys, "_MEIPASS", None) and not os.path.isdir(MODEL_DIR):
     sys.exit(2)
 
 ASSETS_DIR = _resource_path("assets")   # mascotte / icone (servite su /assets/<file>)
-APP_VERSION = "2.1.0"                    # versione mostrata nell'UI (allineata a tauri.conf.json)
+APP_VERSION = "2.2.0"                    # versione mostrata nell'UI (allineata a tauri.conf.json)
 MAX_WORDS = 120      # parole per chunk (~180 subword, sotto i 512 del training)
 OVERLAP = 20         # parole di sovrapposizione tra chunk consecutivi
 
