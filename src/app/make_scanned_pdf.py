@@ -47,11 +47,13 @@ def make(angle=0.6, dpi=200, seed=7):
     rng = np.random.default_rng(seed)
     noise = rng.normal(0, 9, img.shape)
     img = np.clip(img.astype(np.float32) * 0.97 + 6 + noise, 0, 255).astype(np.uint8)
-    ok, png = cv2.imencode(".png", img[:, :, ::-1])
+    # PNG con PyMuPDF, non cv2.imencode: la OpenCV minima dell'app non ha imgcodecs
+    img = np.ascontiguousarray(img)
+    png = fitz.Pixmap(fitz.csRGB, img.shape[1], img.shape[0], img.tobytes(), 0).tobytes("png")
     out = fitz.open()
     p2 = out.new_page(width=595, height=842)
-    p2.insert_image(p2.rect, stream=png.tobytes())
-    return out.tobytes(deflate=True), png.tobytes()
+    p2.insert_image(p2.rect, stream=png)
+    return out.tobytes(deflate=True), png
 
 
 if __name__ == "__main__":

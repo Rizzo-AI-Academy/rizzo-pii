@@ -182,7 +182,11 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   `%LOCALAPPDATA%\rizzo-pii\backend.log`. Pre-check porta + `sys.exit(76)` se occupata.
   `desktop_app.py` — entry PyInstaller legacy (apre il browser); stesso pre-check.
   Gli spec impacchettano anche `ui/` e i modelli di `models/ocr/` in `ocr_models/` (si ferma se
-  mancano; `PII_BUNDLE_OCR=0` per una build senza OCR) ed escludono il plugin ffmpeg di opencv.
+  mancano; `PII_BUNDLE_OCR=0` per una build senza OCR) ed escludono il plugin ffmpeg di opencv e
+  i classificatori Haar. **OpenCV minima**: `scripts/build_opencv_min.py` compila opencv-python-headless
+  con i soli `core` + `imgproc` (niente video/BLAS/OpenCL/IPP/imgcodecs, `cv2.pyd` 82 → 13 MB): la CI la
+  installa al posto della wheel ufficiale prima di PyInstaller. Quindi nel codice dell'app **niente
+  `cv2.imencode`/`imdecode`** (usare PyMuPDF) e niente funzioni fuori da core/imgproc.
   `assets/` — mascotte (il riccio) + icone. `smoke_app.py`, `make_test_pdf.py`.
 
 **App desktop Tauri — `tauri/`:** finestra nativa **Rizzo PII** (WebView2) che lancia il backend

@@ -79,6 +79,8 @@ a = Analysis(
 )
 # opencv-python-headless porta con se' ffmpeg (~25 MB) per i video: all'OCR non serve
 a.binaries = [b for b in a.binaries if "opencv_videoio_ffmpeg" not in b[0]]
+# e i classificatori Haar (riconoscimento volti, ~10 MB di XML): all'OCR non servono
+a.datas = [d for d in a.datas if not d[0].replace("\\", "/").startswith("cv2/data/")]
 pyz = PYZ(a.pure)
 
 exe = EXE(

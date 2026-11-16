@@ -35,6 +35,7 @@ tokenizers
 
 # OCR delle scansioni (src/app/ocr.py + src/app/docmd/, PaddleOCR in ONNX, solo CPU).
 # I modelli si scaricano con: python scripts/fetch_ocr_models.py
+# Nei pacchetti dell'app si usa una OpenCV minima (core + imgproc): scripts/build_opencv_min.py
 opencv-python-headless
 pyclipper
 pyyaml

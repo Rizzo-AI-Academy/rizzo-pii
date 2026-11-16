@@ -75,7 +75,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install --no-cache-dir tokenizers numpy onnxruntime \
             flask pymupdf pyinstaller "huggingface_hub[cli]" \
-            opencv-python-headless pyclipper pyyaml
+            pyclipper pyyaml
 
       # File elencati uno per uno (vedi build-windows.yml: --include con piu' valori salta onnx/).
       - name: Scarica il modello ONNX da Hugging Face
@@ -86,6 +86,26 @@ jobs:
           for f in onnx/model.onnx onnx/model.onnx_data tokenizer.json config.json; do
             [ -f "$MODEL_DIR/$f" ] || { echo "modello non scaricato: $MODEL_DIR/$f mancante"; exit 1; }
           done
+
+      # OpenCV MINIMA (solo core + imgproc, quelli che usa l'OCR) al posto della wheel
+      # ufficiale: quella si porta dietro video, OpenBLAS e OpenCL (~143 MB su Linux) e il
+      # modulo cv2 li carica tutti all'avvio, quindi non si possono togliere dopo.
+      # Si compila una volta (~5-10 min) e resta nella cache delle Actions.
+      - name: Cache OpenCV minima
+        id: cvmin
+        uses: actions/cache@v4
+        with:
+          path: build/opencv_min
+          key: opencv-min-${{ runner.os }}-py311-${{ hashFiles('scripts/build_opencv_min.py') }}
+
+      - name: Compila OpenCV minima
+        if: steps.cvmin.outputs.cache-hit != 'true'
+        run: python scripts/build_opencv_min.py
+
+      - name: Installa OpenCV minima
+        run: |
+          pip install --no-deps --force-reinstall build/opencv_min/opencv_python_headless-*.whl
+          python -c "import cv2; print('cv2', cv2.__version__); assert not hasattr(cv2, 'imencode'), 'non e la wheel minima'"
 
       # Modelli OCR dentro il sidecar (vedi build-windows.yml)
       - name: Scarica i modelli OCR

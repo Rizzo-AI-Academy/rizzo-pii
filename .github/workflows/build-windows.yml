@@ -75,7 +75,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install --no-cache-dir tokenizers numpy onnxruntime `
             flask pymupdf pyinstaller "huggingface_hub[cli]" `
-            opencv-python-headless pyclipper pyyaml
+            pyclipper pyyaml
 
       # Solo i file che finiscono nel sidecar: il grafo ONNX + i pesi (fp32, gli stessi del
       # model.safetensors, esportati e verificati con src/training/export_onnx.py) e il
@@ -90,6 +90,28 @@ jobs:
           foreach ($f in "onnx/model.onnx", "onnx/model.onnx_data", "tokenizer.json", "config.json") {
             if (-not (Test-Path "$env:MODEL_DIR/$f")) { throw "modello non scaricato: $env:MODEL_DIR/$f mancante" }
           }
+
+      # OpenCV MINIMA (solo core + imgproc, quelli che usa l'OCR) al posto della wheel
+      # ufficiale: quella si porta dietro video, OpenBLAS e OpenCL (~143 MB su Linux) e il
+      # modulo cv2 li carica tutti all'avvio, quindi non si possono togliere dopo.
+      # Si compila una volta (~5-10 min) e resta nella cache delle Actions.
+      - name: Cache OpenCV minima
+        id: cvmin
+        uses: actions/cache@v4
+        with:
+          path: build/opencv_min
+          key: opencv-min-${{ runner.os }}-py311-${{ hashFiles('scripts/build_opencv_min.py') }}
+
+      - name: Compila OpenCV minima
+        if: steps.cvmin.outputs.cache-hit != 'true'
+        run: python scripts/build_opencv_min.py
+
+      - name: Installa OpenCV minima
+        run: |
+          $whl = Get-ChildItem build/opencv_min/opencv_python_headless-*.whl | Select-Object -First 1
+          if (-not $whl) { throw "wheel OpenCV minima mancante" }
+          pip install --no-deps --force-reinstall $whl.FullName
+          python -c "import cv2; print('cv2', cv2.__version__); assert not hasattr(cv2, 'imencode'), 'non e la wheel minima'"
 
       # Modelli OCR (PaddleOCR ONNX, ~60-175 MB): det/rec/tabelle dai repo ufficiali
       # PaddlePaddle su HF, il layout veloce dal repo del progetto se pubblicato, altrimenti

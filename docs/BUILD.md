@@ -39,7 +39,9 @@ entità coincidano con PyTorch (esce con 1 se no). Senza questi file lo spec si 
 Le scansioni e le immagini si leggono con l'OCR locale (`src/app/ocr.py` → `src/app/docmd/`,
 PaddleOCR in ONNX). I modelli vanno in `models/ocr/` e lo spec li impacchetta in `_internal/ocr_models/`:
 ```powershell
-build_env\Scripts\pip install opencv-python-headless pyclipper pyyaml   # una volta nel venv di build
+build_env\Scripts\pip install pyclipper pyyaml                         # una volta nel venv di build
+python scripts/build_opencv_min.py                                    # OpenCV minima (~5-10 min, una volta)
+build_env\Scripts\pip install --force-reinstall --no-deps (Get-Item build\opencv_min\*.whl)
 python scripts/fetch_ocr_models.py                                    # scarica da Hugging Face
 # oppure, se hai gia' la pipeline docmd con i modelli convertiti:
 python scripts/fetch_ocr_models.py --from-dir D:\percorso\ocr_pipeline\models
@@ -187,8 +189,20 @@ sul layout accurato ufficiale (+100 MB, ~2× piu' lento). Per aggiornare il mode
 hf upload rizzoaiacademy/rizzo-ocr models/ocr/PP-DocLayout-M PP-DocLayout-M
 ```
 
-**Peso nel sidecar**: ~66 MB di modelli (con il layout M) + ~82 MB di `cv2.pyd` (opencv-python-headless;
-il plugin ffmpeg per i video viene escluso dallo spec). Sidecar senza modello NER: ~155 → ~300 MB.
+**OpenCV minima** (`scripts/build_opencv_min.py`): la wheel ufficiale `opencv-python-headless`
+si porta dietro video (ffmpeg, aom, vpx), OpenBLAS, OpenCL, IPP e una ventina di moduli: ~143 MB su
+Linux, ~82 MB di `cv2.pyd` su Windows, e il modulo li carica **tutti all'avvio** (su Linux sono
+dipendenze dirette del `.so`), quindi non si possono togliere dopo. L'OCR usa solo `core` + `imgproc`
+(resize, cvtColor, warpAffine/Perspective, findContours, minAreaRect, fillPoly…): lo script compila
+l'sdist ufficiale di PyPI (sha256 verificato) con i soli quei moduli, senza video/BLAS/OpenCL/IPP e
+senza codec di immagini (`cv2.imencode`/`imdecode` non esistono: l'app usa PyMuPDF). Su Windows
+`cv2.pyd` scende a **13 MB**; testo OCR identico byte per byte e stessa velocita' (misurato sulla
+scansione di prova, con e senza IPP). La CI la compila una volta e la tiene in cache (chiave = hash
+dello script); lo step "Installa OpenCV minima" verifica che `cv2.imencode` non ci sia, cioe' che
+non sia finita nel pacchetto la wheel completa. Lo spec esclude anche i classificatori Haar (`cv2/data`).
+
+**Peso nel sidecar**: ~66 MB di modelli (con il layout M) + ~13 MB di OpenCV minima. Sidecar Windows
+senza modello NER: ~155 MB senza OCR → ~300 MB con la OpenCV ufficiale → **~235 MB** con quella minima.
 
 **Come funziona la redazione sulle scansioni**: per le pagine lette con l'OCR `pdf_export.redact_pdf`
 riceve le righe con i box di ogni carattere (in punti PDF, gia' riportati sulla pagina originale anche
