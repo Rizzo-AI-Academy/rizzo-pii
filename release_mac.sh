@@ -34,13 +34,27 @@ OUT="$ROOT/build/mac_release"
 echo "=== Rizzo PII $VER — release macOS ==="
 
 # ---- 1) venv: solo cio' che serve al sidecar ONNX ---------------------------
-if ! "$VENV/bin/python" -c "import onnxruntime, tokenizers, flask, fitz, PyInstaller, huggingface_hub" 2>/dev/null; then
+if ! "$VENV/bin/python" -c "import onnxruntime, tokenizers, flask, fitz, PyInstaller, huggingface_hub, cv2, pyclipper, yaml" 2>/dev/null; then
   echo ">>> creo/aggiorno il venv $VENV"
   [ -x "$VENV/bin/python" ] || "$PYTHON" -m venv "$VENV"
   "$VENV/bin/pip" install --upgrade pip
   "$VENV/bin/pip" install tokenizers numpy onnxruntime flask pymupdf pyinstaller "huggingface_hub[cli]" \
     opencv-python-headless pyclipper pyyaml
 fi
+
+# ---- 1b) OpenCV minima (core + imgproc), come le build Windows/Linux in CI ----------
+# La wheel ufficiale porta video/BLAS/OpenCL/codec che l'OCR non usa (vedi
+# scripts/build_opencv_min.py). Si compila una volta (~5-10 min) e resta in build/opencv_min.
+if "$VENV/bin/python" -c "import cv2,sys; sys.exit(0 if hasattr(cv2,'imencode') else 1)" 2>/dev/null; then
+  if ! ls build/opencv_min/opencv_python_headless-*.whl >/dev/null 2>&1; then
+    echo ">>> compilo OpenCV minima (una volta sola)"
+    # stesso minimo di onnxruntime (macOS 14): senza, clang usa la versione del Mac che compila
+    MACOSX_DEPLOYMENT_TARGET=14.0 "$VENV/bin/python" scripts/build_opencv_min.py
+  fi
+  "$VENV/bin/pip" install --no-deps --force-reinstall build/opencv_min/opencv_python_headless-*.whl
+fi
+# nel pacchetto deve finire quella minima, non la wheel completa
+"$VENV/bin/python" -c "import cv2; assert not hasattr(cv2, 'imencode'), 'OpenCV completa nel venv'"
 
 # ---- 2) modello ONNX da Hugging Face (file elencati: --include ne prende uno solo) ----
 if [ ! -f "$MODEL_DIR/onnx/model.onnx_data" ]; then
