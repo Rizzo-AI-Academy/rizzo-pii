@@ -245,7 +245,7 @@ def gen_new_templates(per_type, boost):
                  "    export GEMINI_API_KEY=...        (PowerShell: $env:GEMINI_API_KEY=...)\n"
                  "  Oppure usa --offline per generare dai soli template built-in.")
 
-    slot_list = "\n".join(f"  {{{s}}}" for s in sorted(tb.ALLOWED_SLOTS))
+    slot_list = "\n".join(f"  {{{s}}}" for s in sorted(tb.PROMPT_SLOTS))
     # suggerimento mirato: i segnaposto dei tag potenziati, da usare spesso
     hint = ""
     boost_slots = sorted({s for tag in boost for s in COARSE_TO_SLOT.get(tag, [])})
