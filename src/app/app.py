@@ -67,6 +67,7 @@ import fitz  # PyMuPDF
 from flask import Flask, Response, jsonify, request, send_from_directory
 
 import ocr
+import csv_jobs
 import pdf_export
 import pdf_text
 import server_config
@@ -141,6 +142,8 @@ OVERLAP = 20         # parole di sovrapposizione tra chunk consecutivi
 # --------------------------------------------------------------------------- #
 # Caricamento modello (una sola volta all'avvio)
 # --------------------------------------------------------------------------- #
+MODEL_BATCH_SIZE = 32   # chunk per inferenza del modello, torch e ONNX (detect_spans_batch / detect_model)
+
 # Due backend con lo stesso risultato (verificato da src/training/export_onnx.py):
 #   onnx  -> onnxruntime + tokenizers, niente torch: e' quello dell'app impacchettata.
 #   torch -> pipeline di transformers (CPU o GPU): serve se il .onnx non c'e'.
@@ -337,16 +340,33 @@ def chunk_text(text, max_words=MAX_WORDS, overlap=OVERLAP):
     return chunks
 
 
-def detect_model(text):
-    """Entita' trovate dal modello mmBERT su tutti i chunk, su offset globali."""
-    chunks = chunk_text(text)
-    ents = []
-    if chunks:
-        results = nlp([c for c, _ in chunks])
+# Un'inferenza alla volta: le richieste Flask (threaded) e il worker dei job CSV
+# condividono la stessa pipeline, che non e' thread-safe.
+_NLP_LOCK = threading.Lock()
+
+
+def _run_nlp(inputs):
+    """nlp() su una lista di chunk, a batch esplicito e serializzato. Sia la pipeline torch
+    sia OnnxTokenClassifier raggruppano i chunk in inferenze da MODEL_BATCH_SIZE."""
+    with _NLP_LOCK:
+        return nlp(inputs, batch_size=MODEL_BATCH_SIZE)
+
+
+def detect_model_many(texts):
+    """Come detect_model, ma su tanti testi: tutti i chunk di tutti i testi vanno al
+    modello in UNA chiamata (batch). Ritorna [(ents, n_chunks), ...] nell'ordine di `texts`."""
+    per_text = [chunk_text(t) for t in texts]
+    flat = [c for chunks in per_text for c, _ in chunks]
+    results = []
+    if flat:
+        results = _run_nlp(flat)
         if isinstance(results, dict):                 # singolo chunk -> normalizza
             results = [results]
-        for (_, off), res in zip(chunks, results):
-            for e in res:
+    out, k = [], 0
+    for chunks in per_text:
+        ents = []
+        for _, off in chunks:
+            for e in results[k]:
                 ents.append({
                     "label": e["entity_group"],
                     "start": int(e["start"]) + off,
@@ -355,7 +375,14 @@ def detect_model(text):
                     "validated": False,
                     "source": "modello",
                 })
-    return ents, len(chunks)
+            k += 1
+        out.append((ents, len(chunks)))
+    return out
+
+
+def detect_model(text):
+    """Entita' trovate dal modello mmBERT su tutti i chunk, su offset globali."""
+    return detect_model_many([text])[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -442,12 +469,7 @@ def analyze(text, excluded=None, mapping_enabled=True):
     soggetto, ma da sola non fa risalire al valore."""
     excluded = set(excluded or ())
     model_ents, n_chunks = detect_model(text)
-    # il modello taglia i minuti delle ore: la regex dell'ora completa SOLO le sue span TIME
-    complete_time(model_ents, text)
-    cands = model_ents + detect_regex(text)
-    if excluded:
-        cands = [e for e in cands if e["label"] not in excluded]
-    kept = _merge(cands, text)
+    kept = _merge(_candidates(text, model_ents, excluded), text)
 
     # ID reversibili: stesso (label, valore-normalizzato) -> stesso placeholder.
     counters, seen, mapping = {}, {}, {}
@@ -500,6 +522,27 @@ def analyze(text, excluded=None, mapping_enabled=True):
         "by_source": by_source,
         "excluded_tags": sorted(excluded),
     }
+
+
+def _candidates(text, model_ents, excluded):
+    complete_time(model_ents, text)   # il modello taglia i minuti delle ore
+    cands = model_ents + detect_regex(text)
+    if excluded:
+        cands = [e for e in cands if e["label"] not in excluded]
+    return cands
+
+
+def detect_spans_batch(texts, excluded=()):
+    """Span (start, end, label) non sovrapposte per ciascun testo: stessa pipeline di
+    analyze() (modello + ora + regex, tag esclusi, _merge), ma il modello vede tutti i
+    chunk di tutti i testi in un'unica chiamata. Nessun placeholder: lo fa il chiamante."""
+    excluded = set(excluded or ())
+    model = [m for m, _ in detect_model_many(texts)]
+    out = []
+    for text, ments in zip(texts, model):
+        kept = _merge(_candidates(text, ments, excluded), text)
+        out.append([(e["start"], e["end"], e["label"]) for e in kept])
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -1187,6 +1230,13 @@ def port_check():
     except (ValueError, TypeError):
         return jsonify({"available": False})
     return jsonify({"available": server_config.port_available(host, port)})
+
+
+# Job CSV (upload a pezzi, coda, download in streaming): vedi csv_jobs.py
+app.register_blueprint(csv_jobs.create_blueprint(
+    _get_prefs, lambda: globals().get("detect_spans_batch"), valid_tags=TAG_NAMES,
+    # avviso "file grande" alla stessa soglia del limite di upload dell'app (oggi 50 MB)
+    large_threshold=lambda: app.config["MAX_CONTENT_LENGTH"]))
 
 
 # --------------------------------------------------------------------------- #

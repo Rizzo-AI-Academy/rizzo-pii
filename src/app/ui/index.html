@@ -343,6 +343,49 @@ try{const t=localStorage.getItem('pii_theme');if(t==='dark'||t==='light')documen
           border:1px solid var(--line-2);font-size:12.5px;color:var(--muted);margin-bottom:16px}
   .engine b{color:var(--ink)}
 
+  /* ============================ modalita' CSV ============================
+     sx: un riquadro per file con anteprima tabellare e la spunta "Anonimizza" per colonna;
+     dx: stato del job, avanzamento, anteprima dell'output e download. Le tabelle scorrono
+     in orizzontale dentro il riquadro, la pagina no. */
+  .csvview{padding:12px;display:flex;flex-direction:column;gap:12px}
+  .csvbar{display:flex;gap:8px 12px;align-items:center;flex-wrap:wrap;font-size:12.5px;color:var(--muted)}
+  .csvbar label{display:inline-flex;align-items:center;gap:7px;cursor:pointer;user-select:none}
+  .csvbar input{accent-color:var(--brand);margin:0;width:15px;height:15px;cursor:pointer}
+  .csvbar .cnt{font-weight:650;color:var(--ink)}
+  .csvfile{border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:hidden;flex:none}
+  .csvfile>.filebar{border:0;border-bottom:1px solid var(--line-2);border-radius:0;background:transparent}
+  .csvfile>.filebar:last-child{border-bottom:0}
+  .csvfile .msg{padding:10px 12px;font-size:12.5px;color:var(--muted)}
+  .csvfile .msg.err{color:var(--danger)}
+  .csvfile>.callout{margin:10px 11px;font-size:12.5px;padding:9px 12px}
+  .csvfile .sec{padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+  .csvfile .sub{font-size:12.3px;color:var(--muted)}
+  .csvfile .sub.err{color:var(--danger)}
+  .lnk{background:none;border:0;padding:0 1px;font:inherit;font-size:12px;font-weight:650;color:var(--brand);cursor:pointer}
+  .lnk:hover{text-decoration:underline}
+  .lnk:disabled{color:var(--soft);cursor:default;text-decoration:none}
+  .csvwrap{overflow:auto;max-height:340px}
+  .sec .csvwrap{border:1px solid var(--line-2);border-radius:10px;max-height:280px}
+  .csvtbl{width:max-content;min-width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px}
+  .csvtbl th,.csvtbl td{white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis;padding:6px 10px}
+  .csvtbl th{text-transform:none;letter-spacing:0;font-size:12px;color:var(--ink);font-family:var(--mono);background:var(--surface-2)}
+  .csvtbl tr.tog th{height:34px;padding:5px 8px;font-family:inherit;z-index:2;border-bottom:1px solid var(--line-2)}
+  .csvtbl tr.tog+tr th{top:34px;z-index:2}
+  .csvtbl .ctog{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:650;cursor:pointer;
+                user-select:none;color:var(--brand)}
+  .csvtbl .ctog input{accent-color:var(--brand);margin:0;width:14px;height:14px;cursor:pointer}
+  .csvtbl th.m-anonymize{background:var(--brand-soft)}
+  .csvtbl td.m-anonymize{background:color-mix(in srgb,var(--brand) 4%,transparent)}
+  .csvtbl .m-preserve,.csvtbl thead .m-preserve .ctog{color:var(--soft)}
+  .csvtbl thead .m-preserve .ctog{font-weight:600}
+  .csvtbl .ph{cursor:default;font-size:11.5px}
+  .progress.ok span{background:var(--ok)}
+  .progress.err span{background:var(--danger)}
+  .cjob .progress{height:6px;margin-top:0}
+  .badge.bad{color:var(--danger);background:var(--danger-soft);border-color:transparent}
+  .cjob{display:flex;flex-direction:column;gap:12px}
+  .cjob .acts{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+
   /* ============================ footer / toast ============================ */
   .credits{text-align:center;padding:14px 0 4px;font-size:11.5px;color:var(--soft)}
   .credits b{color:var(--muted);font-weight:700}
@@ -401,6 +444,8 @@ try{const t=localStorage.getItem('pii_theme');if(t==='dark'||t==='light')documen
     <symbol id="i-server" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></symbol>
     <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></symbol>
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></symbol>
+    <symbol id="i-table" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
   </defs>
 </svg>
 
@@ -445,7 +490,7 @@ try{const t=localStorage.getItem('pii_theme');if(t==='dark'||t==='light')documen
               <button id="sText" onclick="setSrcView('text')"><span data-i18n="v_raw">Testo</span></button>
             </div>
             <label class="btn quiet" id="pickBtn" data-i18n-title="t_pick" title="Carica un file"><svg class="i"><use href="#i-upload"/></svg><span data-i18n="pick">Carica</span>
-              <input type="file" id="pdf" hidden accept=".pdf,.png,.jpg,.jpeg,.jfif,.tif,.tiff,.bmp,.webp,.gif,.md,.markdown,.txt,application/pdf,image/*,text/markdown,text/plain"></label>
+              <input type="file" id="pdf" hidden multiple accept=".pdf,.png,.jpg,.jpeg,.jfif,.tif,.tiff,.bmp,.webp,.gif,.md,.markdown,.txt,.csv,.tsv,application/pdf,image/*,text/markdown,text/plain,text/csv,text/tab-separated-values"></label>
           </div>
         </div>
         <div class="bd">
@@ -460,13 +505,14 @@ try{const t=localStorage.getItem('pii_theme');if(t==='dark'||t==='light')documen
           </div>
           <div class="callout" id="ocrWarn" hidden><svg class="i"><use href="#i-alert"/></svg><div id="ocrWarnTxt"></div></div>
           <div class="view pdfview" id="pdfSrcView" hidden></div>
+          <div class="view csvview" id="csvSrcView" hidden></div>
           <div class="editor" id="editor">
             <textarea id="src" data-i18n-ph="src_ph" placeholder="Incolla qui il testo…" spellcheck="false"></textarea>
             <div class="dropzone" id="drop">
               <img src="/assets/mascot_doc.png" alt="" onerror="this.remove()">
               <div class="t1" data-i18n="dz_title">Trascina qui un documento</div>
-              <div class="t2" data-i18n="dz_sub">PDF, scansioni e foto vengono lette in locale, con l'OCR quando serve. Oppure incolla il testo.</div>
-              <div class="fmts"><span class="badge">PDF</span><span class="badge">PNG · JPG · TIFF</span><span class="badge">.md · .txt</span></div>
+              <div class="t2" data-i18n="dz_sub">PDF, scansioni e foto vengono lette in locale, con l'OCR quando serve; i CSV colonna per colonna. Oppure incolla il testo.</div>
+              <div class="fmts"><span class="badge">PDF</span><span class="badge">PNG · JPG · TIFF</span><span class="badge">.md · .txt</span><span class="badge">CSV</span></div>
               <label class="btn ghost" for="pdf"><svg class="i"><use href="#i-upload"/></svg><span data-i18n="choose">Scegli un file</span></label>
             </div>
           </div>
@@ -491,7 +537,7 @@ try{const t=localStorage.getItem('pii_theme');if(t==='dark'||t==='light')documen
         <div class="hd">
           <h2><span class="step">2</span><span data-i18n="out_title">Risultato</span></h2>
           <div class="right">
-            <div class="seg">
+            <div class="seg" id="outTabs">
               <button class="on" id="vPrev" onclick="setView('prev')"><span data-i18n="v_prev">Evidenziato</span></button>
               <button id="vText" onclick="setView('text')"><span data-i18n="v_text">Testo</span></button>
               <button id="vPdf" onclick="setView('pdf')"><span data-i18n="v_opdf">PDF censurato</span></button>
@@ -507,9 +553,10 @@ try{const t=localStorage.getItem('pii_theme');if(t==='dark'||t==='light')documen
             <div class="preview" id="prev" hidden></div>
           </div>
           <div class="view pdfview" id="pdfOutView" hidden></div>
+          <div class="view csvview" id="csvOutView" hidden></div>
           <textarea class="mono" id="anon" hidden readonly data-i18n-ph="anon_ph" placeholder="Il testo anonimizzato apparirà qui."></textarea>
         </div>
-        <div class="ft">
+        <div class="ft" id="outFt">
           <button class="btn primary" id="copy"><svg class="i"><use href="#i-copy"/></svg><span data-i18n="copy">Copia per ChatGPT</span></button>
           <button class="btn ghost" id="dlpdf"><svg class="i"><use href="#i-download"/></svg><span data-i18n="dlpdf">PDF anonimizzato</span></button>
           <button class="btn ghost" id="dl"><svg class="i"><use href="#i-book"/></svg><span data-i18n="dl">Dizionario</span></button>
@@ -672,7 +719,7 @@ const T = {
   src_ph:"Incolla qui il testo dell'atto, del contratto o della sentenza…",
   drop_here:"Rilascia per caricare",
   dz_title:"Trascina qui un documento",
-  dz_sub:"PDF, scansioni e foto vengono letti in locale, con l'OCR quando serve. Oppure incolla direttamente il testo.",
+  dz_sub:"PDF, scansioni e foto vengono letti in locale, con l'OCR quando serve; i CSV colonna per colonna. Oppure incolla direttamente il testo.",
   choose:"Scegli un file",
   go:"Anonimizza", clear:"Pulisci",
   v_pages:"Pagine", v_raw:"Testo", v_prev:"Evidenziato", v_text:"Testo", v_opdf:"PDF censurato",
@@ -704,8 +751,32 @@ const T = {
   t_no_dict:"Nessun dizionario: caricane uno .json", t_restored:"Valori ripristinati",
   t_nothing_copy:"Niente da copiare", t_restored_copied:"Testo ripristinato copiato",
   t_dict_loaded:"Dizionario caricato", t_json_invalid:"JSON non valido",
-  t_drag_pdf:"Formato non supportato: usa PDF, immagini (PNG, JPG, TIFF), .md o .txt",
+  t_drag_pdf:"Formato non supportato: usa PDF, immagini (PNG, JPG, TIFF), .md, .txt o .csv",
   t_text_loaded:"Testo caricato",
+  csv_files:n=>n+" file CSV",
+  csv_mixed:"Sono stati caricati solo i CSV: gli altri file vanno elaborati a parte",
+  csv_strict:"Fermati alla prima riga malformata",
+  csv_analyze:"Anonimizza", csv_all:"tutte", csv_none:"nessuna",
+  csv_col_on:"Colonna anonimizzata: le PII vengono sostituite da un placeholder",
+  csv_col_off:"Colonna lasciata in chiaro: non viene nemmeno analizzata",
+  csv_large:n=>"<b>File grande (oltre "+n+" MB)</b>: anonimizzare ogni colonna richiede tempo. Lascia in chiaro le colonne che non contengono dati personali per ridurre i tempi.",
+  csv_uploading:p=>"Caricamento… "+p+"%", csv_reading:"Lettura dell'intestazione…",
+  csv_cols:(c,d,e)=>c+" colonne · separatore "+d+" · "+e,
+  csv_preview_n:n=>"prime "+n+" righe",
+  csv_empty:"Scegli quali colonne anonimizzare e premi <b>Anonimizza</b>: l'avanzamento e i file da scaricare appariranno qui.",
+  csv_wait_upload:"Attendi la fine del caricamento", csv_none_ready:"Nessun CSV pronto",
+  csv_busy:"Un job CSV è già in corso", csv_running_go:"Avvio…",
+  csv_reading_out:"Anteprima del risultato…",
+  csv_out_preview:(n,c)=>"anteprima anonimizzata · prime "+n+" righe · "+c+" colonne",
+  st_queued:"in coda", st_running:"in corso", st_done:"completato", st_error:"errore", st_cancelled:"annullato",
+  csv_rows:(n,s)=>n+" righe"+(s?" · "+s+" saltate":""),
+  csv_skipped_at:l=>"righe saltate: "+l,
+  csv_dl:"Scarica CSV", csv_dl_dict:n=>"Dizionario ("+n+" ID)",
+  csv_cancel:"Annulla", csv_queue:n=>"posizione "+n,
+  csv_dict_off:"Dizionario disattivato: l'anonimizzazione di questi CSV è <b>definitiva</b>.",
+  csv_done_toast:n=>"CSV anonimizzati · "+n+" righe",
+  csv_dict_local:n=>"dizionario in memoria per il ripristino · "+n+" ID",
+  csv_dict_big:"Dizionario grande: scaricalo e caricalo nel ripristino",
   pii_found:(n,u)=>n+" PII trovate · "+u+" valori unici",
   dict_n:n=>n+" ID nel dizionario",
   dict_loaded_n:n=>"dizionario caricato · "+n+" ID",
@@ -765,7 +836,7 @@ const T = {
   src_ph:"Paste here the text of the deed, contract or judgment…",
   drop_here:"Drop to upload",
   dz_title:"Drop a document here",
-  dz_sub:"PDFs, scans and photos are read locally, with OCR when needed. Or just paste the text.",
+  dz_sub:"PDFs, scans and photos are read locally, with OCR when needed; CSV files column by column. Or just paste the text.",
   choose:"Choose a file",
   go:"Anonymize", clear:"Clear",
   v_pages:"Pages", v_raw:"Text", v_prev:"Highlighted", v_text:"Text", v_opdf:"Redacted PDF",
@@ -797,8 +868,32 @@ const T = {
   t_no_dict:"No dictionary: load a .json one", t_restored:"Values restored",
   t_nothing_copy:"Nothing to copy", t_restored_copied:"Restored text copied",
   t_dict_loaded:"Dictionary loaded", t_json_invalid:"Invalid JSON",
-  t_drag_pdf:"Unsupported format: use PDF, images (PNG, JPG, TIFF), .md or .txt",
+  t_drag_pdf:"Unsupported format: use PDF, images (PNG, JPG, TIFF), .md, .txt or .csv",
   t_text_loaded:"Text loaded",
+  csv_files:n=>n+" CSV file"+(n===1?"":"s"),
+  csv_mixed:"Only the CSV files were loaded: process the other files separately",
+  csv_strict:"Stop at the first malformed row",
+  csv_analyze:"Anonymize", csv_all:"all", csv_none:"none",
+  csv_col_on:"Anonymized column: PII is replaced by a placeholder",
+  csv_col_off:"Column left in clear text: not even analyzed",
+  csv_large:n=>"<b>Large file (over "+n+" MB)</b>: anonymizing every column takes time. Leave in clear text the columns that contain no personal data to speed it up.",
+  csv_uploading:p=>"Uploading… "+p+"%", csv_reading:"Reading the header…",
+  csv_cols:(c,d,e)=>c+" columns · delimiter "+d+" · "+e,
+  csv_preview_n:n=>"first "+n+" rows",
+  csv_empty:"Choose which columns to anonymize and press <b>Anonymize</b>: progress and the files to download will appear here.",
+  csv_wait_upload:"Wait for the upload to finish", csv_none_ready:"No CSV ready",
+  csv_busy:"A CSV job is already running", csv_running_go:"Starting…",
+  csv_reading_out:"Loading the result preview…",
+  csv_out_preview:(n,c)=>"anonymized preview · first "+n+" rows · "+c+" columns",
+  st_queued:"queued", st_running:"running", st_done:"done", st_error:"error", st_cancelled:"cancelled",
+  csv_rows:(n,s)=>n+" rows"+(s?" · "+s+" skipped":""),
+  csv_skipped_at:l=>"skipped rows: "+l,
+  csv_dl:"Download CSV", csv_dl_dict:n=>"Dictionary ("+n+" IDs)",
+  csv_cancel:"Cancel", csv_queue:n=>"position "+n,
+  csv_dict_off:"Dictionary off: anonymization of these CSVs is <b>irreversible</b>.",
+  csv_done_toast:n=>"CSVs anonymized · "+n+" rows",
+  csv_dict_local:n=>"dictionary kept for restoring · "+n+" IDs",
+  csv_dict_big:"Large dictionary: download it and load it in Restore",
   pii_found:(n,u)=>n+" PII found · "+u+" unique values",
   dict_n:n=>n+" IDs in the dictionary",
   dict_loaded_n:n=>"dictionary loaded · "+n+" IDs",
@@ -869,6 +964,7 @@ function applyLang(l){
   renderMapping();renderFileBar();renderOcrPill();
   if($('setOverlay').classList.contains('open')){renderTags();renderOcrSettings();}
   if(DATA) render(true);
+  if(CSV) csvRender();
 }
 
 /* ================================ tema ================================ */
@@ -881,9 +977,9 @@ function toggleTheme(){
   const t=isDark()?'light':'dark';
   document.documentElement.dataset.theme=t;
   try{localStorage.setItem('pii_theme',t);}catch(e){}
-  renderThemeBtn();if(DATA)render(true);
+  renderThemeBtn();if(DATA)render(true);if(CSV)csvRenderOut();
 }
-matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change',()=>{renderThemeBtn();if(DATA)render(true);});
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change',()=>{renderThemeBtn();if(DATA)render(true);if(CSV)csvRenderOut();});
 
 /* ================== scroll sincronizzato editor (sx) <-> anteprima (dx) ================== */
 let syncing=false;
@@ -1029,6 +1125,7 @@ function resetDoc(){
 async function onFile(f){
   const k=fileKind(f);
   if(!k){toast(tt('t_drag_pdf'),false,3500);return;}
+  if(CSV)csvExit();             // un documento nuovo chiude la modalita' CSV (e il suo job)
   resetDoc();
   if(k==='text'){
     $('src').value=await readTextFile(f);updateDrop();
@@ -1158,6 +1255,7 @@ function renderFileBar(){
 
 /* ================================ analyze ================================ */
 async function run(){
+  if(CSV){csvStart();return;}
   const text=$('src').value.trim();
   if(!FILE&&!text){toast(tt('t_need_input'),false);return;}
   const go=$('go');go.disabled=true;const old=go.innerHTML;
@@ -1391,6 +1489,7 @@ $('dictFile').onchange=e=>{const f=e.target.files[0];if(!f)return;
 /* ================================ input ================================ */
 $('go').onclick=run;
 function clearAll(){
+  if(CSV)csvExit();
   $('src').value='';resetDoc();
   DATA=null;show($('prev'),false);show($('emptyPrev'),true);
   $('anon').value='';$('meta').innerHTML='';$('legend').innerHTML='';
@@ -1404,7 +1503,14 @@ $('clear').onclick=clearAll;
 $('fileX').onclick=()=>{resetDoc();$('src').value='';updateDrop();};
 $('src').addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter')run();});
 ['input','focus','blur'].forEach(ev=>$('src').addEventListener(ev,updateDrop));
-$('pdf').onchange=e=>{const f=e.target.files[0];if(f)onFile(f);e.target.value='';};
+$('pdf').onchange=e=>{onFiles([...e.target.files]);e.target.value='';};
+/* uno o piu' CSV -> modalita' CSV; altrimenti il primo file segue il flusso documento */
+function onFiles(fs){
+  if(!fs.length)return;
+  const cs=fs.filter(isCsv);
+  if(cs.length){if(cs.length<fs.length)toast(tt('csv_mixed'),false,3500);csvAdd(cs);return;}
+  onFile(fs[0]);
+}
 
 /* drag & drop su tutta la card di input */
 (()=>{const card=$('inCard');let depth=0;
@@ -1412,11 +1518,336 @@ $('pdf').onchange=e=>{const f=e.target.files[0];if(f)onFile(f);e.target.value=''
   card.addEventListener('dragover',e=>{e.preventDefault();});
   card.addEventListener('dragleave',()=>{if(--depth<=0){depth=0;card.classList.remove('drag');}});
   card.addEventListener('drop',e=>{e.preventDefault();depth=0;card.classList.remove('drag');
-    const f=e.dataTransfer.files[0];if(f)onFile(f);});
+    onFiles([...e.dataTransfer.files]);});
   // un file lasciato fuori dalla card non deve far navigare la finestra verso il file
   window.addEventListener('dragover',e=>e.preventDefault());
   window.addEventListener('drop',e=>e.preventDefault());
 })();
+/* ================== CSV: upload a pezzi, piano per colonna, job sul server ==================
+   Un CSV puo' pesare GB: il browser lo manda a fette (File.slice, chunk_size dal server)
+   in un file temporaneo locale; il server ne legge solo l'inizio per l'anteprima e propone
+   un piano (tutte le colonne "anonymize"). Il job gira in un thread del server e si segue
+   col polling; i file anonimizzati si scaricano in streaming. Tutto resta su questa macchina. */
+let CSV=null;                     // {files:[...], strict, job, status, outPrev, dictNote}
+let CSV_SEQ=0;
+const CSV_DICT_LOCAL_MAX=20000;   // oltre: il dizionario non va in localStorage, si scarica
+const isCsv=f=>/\.(csv|tsv)$/i.test(f.name)||f.type==='text/csv'||f.type==='text/tab-separated-values';
+const jpost=(url,body)=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
+const nf=n=>(n||0).toLocaleString(L);
+function fmtBytes(n){const u=['B','KB','MB','GB'];let i=0;while(n>=1024&&i<3){n/=1024;i++;}
+  return (i?n.toFixed(1):n)+' '+u[i];}
+const csvActive=()=>!!(CSV&&CSV.status&&['queued','running'].includes(CSV.status.state));
+const ico=(id,cls)=>'<svg class="i'+(cls?' '+cls:'')+'"><use href="#i-'+id+'"/></svg>';
+
+/* in modalita' CSV le due colonne mostrano solo le viste CSV: niente editor, PDF o schede */
+function csvLayout(on){
+  show($('editor'),!on);show($('csvSrcView'),on);
+  show($('outTabs'),!on);show($('outFt'),!on);show($('csvOutView'),on);
+  show($('viewPrev'),!on);show($('anon'),false);show($('pdfOutView'),false);
+}
+function csvEnter(){
+  if(CSV)return;
+  CSV={files:[],strict:false,job:null,status:null,outPrev:{},dictNote:null};
+  // fuori la modalita' testo/documento; il dizionario della sessione (MAP) resta finche' il job non ne porta uno nuovo
+  resetDoc();$('src').value='';
+  DATA=null;show($('prev'),false);show($('emptyPrev'),true);$('anon').value='';
+  $('meta').innerHTML='';$('legend').innerHTML='';show($('dictCard'),false);$('ulock').textContent='';
+  setView('prev');csvLayout(true);
+}
+function csvExit(){
+  if(!CSV)return;
+  const c=CSV;CSV=null;
+  // via dal server tutto quel che e' temporaneo: job (input+output+registro) e upload sciolti
+  if(c.job)fetch('/csv/jobs/'+c.job,{method:'DELETE'}).catch(()=>{});
+  for(const it of c.files){it.gone=true;
+    if(it.uid&&!c.job)fetch('/csv/uploads/'+it.uid,{method:'DELETE'}).catch(()=>{});}
+  $('csvSrcView').innerHTML='';$('csvOutView').innerHTML='';
+  csvLayout(false);setSrcView('text');setView('prev');
+}
+
+async function csvAdd(files){
+  if(csvActive()){toast(tt('csv_busy'),false);return;}
+  if(CSV&&CSV.job)csvExit();          // job finito: nuovi file -> si riparte da zero
+  csvEnter();
+  const items=files.map(f=>({key:++CSV_SEQ,file:f,uid:null,fin:null,plan:null,state:'uploading',sent:0,error:null}));
+  CSV.files.push(...items);
+  csvRender();
+  for(const it of items)await csvUpload(it);   // uno alla volta: il disco ringrazia
+}
+
+async function csvUpload(it,keepPlan){
+  const mine=CSV;
+  it.state='uploading';it.sent=0;it.error=null;
+  try{
+    let r=await jpost('/csv/uploads',{name:it.file.name,size:it.file.size});
+    let d=await r.json();if(!r.ok)throw new Error(d.error||r.status);
+    it.uid=d.upload_id;const cs=d.chunk_size;let off=0;
+    while(off<it.file.size){
+      if(it.gone||CSV!==mine)return;
+      r=await fetch('/csv/uploads/'+it.uid+'?offset='+off,{method:'PUT',
+        headers:{'Content-Type':'application/octet-stream'},body:it.file.slice(off,off+cs)});
+      d=await r.json();if(!r.ok)throw new Error(d.error||r.status);
+      off=d.received;it.sent=off;csvProgress(it);
+    }
+    it.state='reading';csvProgress(it);
+    r=await jpost('/csv/uploads/'+it.uid+'/finalize',{});
+    d=await r.json();if(!r.ok)throw new Error(d.error||r.status);
+    if(it.gone||CSV!==mine)return;
+    it.fin=d;
+    if(!(keepPlan&&it.plan&&it.plan.length===d.header.length))it.plan=d.plan;
+    it.state='ready';
+  }catch(e){it.state='error';it.error=e.message;}
+  if(CSV===mine&&!keepPlan)csvRender();
+}
+
+function csvProgress(it){
+  const el=document.getElementById('csvmsg'+it.key);if(!el)return;
+  const pct=it.file.size?Math.floor(100*it.sent/it.file.size):100;
+  el.className='msg';
+  el.innerHTML=(it.state==='reading'?tt('csv_reading'):T[L].csv_uploading(pct))
+    +'<div class="progress'+(it.state==='reading'?' indet':'')+'"><span style="width:'+pct+'%"></span></div>';
+}
+
+function csvRemove(key){
+  if(!CSV||csvActive())return;
+  const it=CSV.files.find(f=>f.key===key);if(!it)return;
+  it.gone=true;CSV.files=CSV.files.filter(f=>f!==it);
+  if(it.uid&&!CSV.job)fetch('/csv/uploads/'+it.uid,{method:'DELETE'}).catch(()=>{});
+  if(!CSV.files.length){csvExit();return;}
+  csvRender();
+}
+
+/* ogni colonna: "anonymize" (stesso motore del testo: modello + regex/checksum) o
+   "preserve" (lasciata intatta, nemmeno analizzata). Nessun'altra modalita'. */
+function csvMode(it,c){return ((it.plan||[])[c]||{}).mode==='preserve'?'preserve':'anonymize';}
+function csvSetCol(key,col,on){
+  const it=CSV&&CSV.files.find(f=>f.key===key);if(!it)return;
+  const mode=on?'anonymize':'preserve';
+  it.plan[col]={mode};
+  // ricolora la colonna senza ridisegnare la tabella (non perde lo scroll)
+  document.querySelectorAll('#csvt'+key+' [data-c="'+col+'"]').forEach(el=>{
+    el.classList.remove('m-anonymize','m-preserve');el.classList.add('m-'+mode);});
+  const cb=document.getElementById('csvc'+key+'_'+col);
+  if(cb){cb.checked=on;cb.parentNode.title=tt(on?'csv_col_on':'csv_col_off');}
+}
+function csvSetAll(key,on){
+  const it=CSV&&CSV.files.find(f=>f.key===key);if(!it||!it.fin)return;
+  it.fin.header.forEach((_,c)=>csvSetCol(key,c,on));
+}
+
+function csvRender(){if(!CSV)return;csvRenderSrc();csvRenderOut();}
+
+function csvRenderSrc(){
+  const v=$('csvSrcView');const lock=csvActive();
+  let h='<div class="csvbar"><span class="cnt">'+T[L].csv_files(CSV.files.length)+'</span>'
+    +'<label style="margin-left:auto"><input type="checkbox" id="csvStrict"'+(CSV.strict?' checked':'')+(lock?' disabled':'')+'>'
+    +tt('csv_strict')+'</label></div>';
+  for(const it of CSV.files){
+    const f=it.fin,ready=it.state==='ready';
+    const meta=[fmtBytes(it.file.size)];
+    if(f)meta.push(T[L].csv_cols(f.header.length,
+        '<span class="kbd">'+escapeHtml(f.delimiter==='\t'?'TAB':f.delimiter||'?')+'</span>',escapeHtml(f.encoding||'')),
+      T[L].csv_preview_n(f.preview.length));
+    h+='<div class="csvfile"><div class="filebar">'
+      +'<div class="fic">'+ico('table')+'</div>'
+      +'<div class="ftxt"><div class="fname" title="'+escapeHtml(it.file.name)+'">'+escapeHtml(it.file.name)+'</div>'
+      +'<div class="fmeta"><span>'+meta.join(' · ')+'</span>'
+      +(ready?'<span>'+tt('csv_analyze')+': <button class="lnk"'+(lock?' disabled':'')+' onclick="csvSetAll('+it.key+',true)">'
+          +tt('csv_all')+'</button> · <button class="lnk"'+(lock?' disabled':'')+' onclick="csvSetAll('+it.key+',false)">'
+          +tt('csv_none')+'</button></span>':'')
+      +'</div></div>'
+      +(lock?'':'<button class="ib" title="'+escapeHtml(tt('t_remove'))+'" onclick="csvRemove('+it.key+')">'+ico('x','sm')+'</button>')
+      +'</div>';
+    if(it.state==='error'){
+      h+='<div class="msg err" id="csvmsg'+it.key+'">'+escapeHtml(String(it.error||tt('t_error')))+'</div>';
+    }else if(!ready){
+      h+='<div class="msg" id="csvmsg'+it.key+'"></div>';
+    }else{
+      if(f.large&&f.large_threshold)h+='<div class="callout">'+ico('clock')+'<div>'
+        +T[L].csv_large(Math.round(f.large_threshold/1048576))+'</div></div>';
+      h+='<div class="csvwrap"><table class="csvtbl" id="csvt'+it.key+'"><thead><tr class="tog">';
+      f.header.forEach((name,c)=>{const m=csvMode(it,c),on=m==='anonymize';
+        h+='<th data-c="'+c+'" class="m-'+m+'"><label class="ctog" title="'+tt(on?'csv_col_on':'csv_col_off')+'">'
+          +'<input type="checkbox" id="csvc'+it.key+'_'+c+'"'+(on?' checked':'')+(lock?' disabled':'')
+          +' onchange="csvSetCol('+it.key+','+c+',this.checked)" aria-label="'+escapeHtml(tt('csv_analyze')+': '+name)+'">'
+          +tt('csv_analyze')+'</label></th>';});
+      h+='</tr><tr>';
+      f.header.forEach((name,c)=>{
+        h+='<th data-c="'+c+'" class="m-'+csvMode(it,c)+'" title="'+escapeHtml(name)+'">'+escapeHtml(name)+'</th>';});
+      h+='</tr></thead><tbody>';
+      for(const row of f.preview){
+        h+='<tr>';
+        f.header.forEach((_,c)=>{const val=String(row[c]??'');
+          h+='<td data-c="'+c+'" class="m-'+csvMode(it,c)+'" title="'+escapeHtml(val)+'">'+escapeHtml(val)+'</td>';});
+        h+='</tr>';
+      }
+      h+='</tbody></table></div>';
+    }
+    h+='</div>';
+  }
+  v.innerHTML=h;
+  for(const it of CSV.files)if(it.state==='uploading'||it.state==='reading')csvProgress(it);
+  const st=$('csvStrict');if(st)st.onchange=e=>{CSV.strict=e.target.checked;};
+}
+
+const CSV_BADGE={queued:'brand',running:'brand',done:'ok',error:'bad',cancelled:'warn'};
+function csvBadge(state){
+  return '<span class="badge '+(CSV_BADGE[state]||'')+'">'
+    +(state==='queued'||state==='running'?'<span class="spin"></span>':state==='done'?ico('check','sm'):'')
+    +tt('st_'+state)+'</span>';
+}
+function csvBar(state,pct){
+  return '<div class="progress'+(state==='done'?' ok':state==='error'?' err':'')+'"><span style="width:'
+    +(state==='done'?100:pct)+'%"></span></div>';
+}
+
+function csvRenderOut(){
+  const v=$('csvOutView');const s=CSV.status;
+  if(!s){v.innerHTML='<div class="empty"><img src="/assets/mascot_doc.png" alt="" onerror="this.remove()"><div>'
+    +tt('csv_empty')+'</div></div>';return;}
+  const pct=s.bytes_total?Math.min(100,100*s.bytes_done/s.bytes_total):0;
+  let h='<div class="cjob"><div class="csvbar">'+csvBadge(s.state)
+    +'<span>'+T[L].csv_rows(nf(s.rows_done),s.rows_skipped?nf(s.rows_skipped):0)+'</span>'
+    +(s.state==='queued'&&s.position?'<span>'+T[L].csv_queue(s.position)+'</span>':'')
+    +(s.seconds?'<span class="hint" style="margin-left:auto">'+s.seconds.toLocaleString(L,{maximumFractionDigits:1})+' s</span>':'')
+    +'</div>'+csvBar(s.state,pct);
+  if(s.error)h+='<div class="callout">'+ico('alert')+'<div>'+escapeHtml(s.error)+'</div></div>';
+  (s.files||[]).forEach((f,i)=>{
+    const fp=f.bytes_total?100*f.bytes_done/f.bytes_total:0;
+    h+='<div class="csvfile"><div class="filebar">'
+      +'<div class="fic">'+ico('table')+'</div>'
+      +'<div class="ftxt"><div class="fname" title="'+escapeHtml(f.name+' → '+f.out_name)+'">'+escapeHtml(f.out_name)+'</div>'
+      +'<div class="fmeta"><span>'+T[L].csv_rows(nf(f.rows_done),f.rows_skipped?nf(f.rows_skipped):0)+'</span>'+csvBadge(f.state)+'</div>'
+      +(f.state==='done'?'':csvBar(f.state,fp))
+      +'</div>'
+      +(f.state==='done'?'<button class="btn ghost" title="'+escapeHtml(f.out_name)+'" onclick="csvDownload('+i+')">'
+          +ico('download','sm')+tt('csv_dl')+'</button>':'')
+      +'</div>';
+    let sec='';
+    if(f.skipped_lines&&f.skipped_lines.length)sec+='<div class="sub">'+T[L].csv_skipped_at(f.skipped_lines.join(', ')
+        +(f.rows_skipped>f.skipped_lines.length?'…':''))+'</div>';
+    if(f.error)sec+='<div class="sub err">'+escapeHtml(f.error)+'</div>';
+    const labs=Object.entries(f.by_label||{});
+    if(labs.length)sec+='<div class="legend">'+labs.map(([k,n])=>{const c=colors(k);
+      return '<span class="chip" style="cursor:default"><span class="sw" style="background:'+c.bd+'"></span>'
+        +escapeHtml(k)+'<span class="n">'+nf(n)+'</span></span>';}).join('')+'</div>';
+    if(f.state==='done')sec+=csvOutTable(i);
+    if(sec)h+='<div class="sec">'+sec+'</div>';
+    h+='</div>';
+  });
+  let acts='';
+  if(s.state==='done'&&s.mapping_enabled&&s.dictionary_size)
+    acts+='<button class="btn ghost" onclick="csvDownload(-1)">'+ico('book','sm')+T[L].csv_dl_dict(nf(s.dictionary_size))+'</button>';
+  if(['queued','running'].includes(s.state))
+    acts+='<button class="btn quiet" onclick="csvCancel()">'+ico('x','sm')+tt('csv_cancel')+'</button>';
+  // dictNote: 'big' o numero di ID messi in sessione; tradotto qui, cosi' segue il cambio lingua
+  if(s.state==='done'&&CSV.dictNote!=null)acts+='<span class="hint">'+(CSV.dictNote==='big'?tt('csv_dict_big'):T[L].csv_dict_local(nf(CSV.dictNote)))+'</span>';
+  if(acts)h+='<div class="acts">'+acts+'</div>';
+  if(!s.mapping_enabled)h+='<div class="callout">'+ico('lock')+'<div>'+tt('csv_dict_off')+'</div></div>';
+  v.innerHTML=h+'</div>';
+}
+
+/* anteprima dell'output: stessa tabella dell'input, placeholder colorati per tag come nell'Evidenziato */
+const PH_RX=/\[([A-Z][A-Z0-9_]*?)_(\d+)\]/g;
+function csvPhCell(v){
+  return escapeHtml(v).replace(PH_RX,(m,lab)=>{const c=colors(lab);
+    return '<span class="ph" style="background:'+c.bg+';border-color:'+c.bd+';color:'+c.tx+'">'+m.slice(1,-1)+'</span>';});
+}
+function csvOutTable(i){
+  const P=CSV.outPrev[i];
+  if(P===undefined){csvLoadOutPrev(i);return '<div class="sub">'+tt('csv_reading_out')+'</div>';}
+  if(!P)return '';
+  let h='<div class="sub">'+T[L].csv_out_preview(P.preview.length,P.header.length)+'</div>'
+    +'<div class="csvwrap"><table class="csvtbl"><thead><tr>';
+  P.header.forEach(n=>{h+='<th title="'+escapeHtml(n)+'">'+escapeHtml(n)+'</th>';});
+  h+='</tr></thead><tbody>';
+  for(const row of P.preview){h+='<tr>';
+    P.header.forEach((_,c)=>{const v=String(row[c]??'');h+='<td title="'+escapeHtml(v)+'">'+csvPhCell(v)+'</td>';});
+    h+='</tr>';}
+  return h+'</tbody></table></div>';
+}
+async function csvLoadOutPrev(i){
+  const jid=CSV&&CSV.job;if(!jid||i in CSV.outPrev)return;
+  CSV.outPrev[i]=null;                    // in corso: niente richieste doppie
+  try{const r=await fetch('/csv/jobs/'+jid+'/files/'+i+'/preview');
+    if(!CSV||CSV.job!==jid)return;
+    CSV.outPrev[i]=r.ok?await r.json():false;}catch(e){if(CSV&&CSV.job===jid)CSV.outPrev[i]=false;}
+  if(CSV&&CSV.job===jid)csvRenderOut();
+}
+
+async function csvStart(){
+  if(csvActive()){toast(tt('csv_busy'),false);return;}
+  if(CSV.files.some(f=>f.state==='uploading'||f.state==='reading')){toast(tt('csv_wait_upload'),false);return;}
+  const go=$('go');go.disabled=true;const old=go.innerHTML;
+  go.innerHTML='<span class="spin"></span> '+tt('csv_running_go');
+  try{
+    if(CSV.job){
+      // rilancio (es. colonne cambiate): gli input del job precedente sono consumati, si
+      // ricaricano dai File che il browser tiene ancora, mantenendo il piano scelto
+      await fetch('/csv/jobs/'+CSV.job,{method:'DELETE'}).catch(()=>{});
+      CSV.job=null;CSV.status=null;CSV.dictNote=null;CSV.outPrev={};
+      for(const it of CSV.files)await csvUpload(it,true);
+      csvRender();
+    }
+    const ready=CSV.files.filter(f=>f.state==='ready');
+    if(!ready.length){toast(tt('csv_none_ready'),false);return;}
+    const body={files:ready.map(f=>({upload_id:f.uid,plan:f.plan})),strict:CSV.strict};
+    // stessi override di /analyze: se /settings non ha risposto comanda il server
+    if(TAGS_LOADED){body.exclude_tags=[...EXCL];body.include_mapping=MAPPING;}
+    const r=await jpost('/csv/jobs',body);const d=await r.json();
+    if(!r.ok){toast(d.error||tt('t_error'),false,4500);return;}
+    // i file non pronti (errore) restano fuori dal job
+    CSV.files=ready;CSV.job=d.job_id;CSV.outPrev={};
+    CSV.status={state:'queued',position:d.position,files:[],rows_done:0,rows_skipped:0,bytes_done:0,bytes_total:1,
+      mapping_enabled:TAGS_LOADED?MAPPING:true};
+    csvRender();csvPoll(CSV.job);
+  }catch(e){toast(tt('t_error')+': '+e.message,false);}
+  finally{go.disabled=false;go.innerHTML=old;}
+}
+
+async function csvPoll(jid){
+  while(CSV&&CSV.job===jid){
+    try{
+      const r=await fetch('/csv/jobs/'+jid);if(!r.ok)return;
+      const s=await r.json();if(!CSV||CSV.job!==jid)return;
+      CSV.status=s;
+      if(!csvActive()){
+        if(s.state==='done'){toast(T[L].csv_done_toast(nf(s.rows_done)));await csvLocalDict(s);}
+        csvRender();return;          // ridisegna anche la colonna sinistra: le spunte si riaprono
+      }
+      csvRenderOut();
+    }catch(e){}
+    await new Promise(ok=>setTimeout(ok,500));
+  }
+}
+
+/* dizionario del job nella sessione (tab "Ripristina"), come fa /analyze, se e' piccolo;
+   altrimenti resta da scaricare. Con il dizionario disattivato non nasce nessuna chiave. */
+async function csvLocalDict(s){
+  CSV.dictNote=null;
+  if(!s.mapping_enabled||!s.dictionary_size)return;
+  if(s.dictionary_size>CSV_DICT_LOCAL_MAX){CSV.dictNote='big';return;}
+  try{
+    const r=await fetch('/csv/jobs/'+s.job_id+'/dictionary');if(!r.ok)return;
+    MAP=await r.json();try{localStorage.setItem('pii_map',JSON.stringify(MAP));}catch(e){}
+    CSV.dictNote=Object.keys(MAP).length;
+  }catch(e){}
+}
+
+function csvDownload(i){
+  if(!CSV||!CSV.job)return;
+  const a=document.createElement('a');
+  if(i<0){a.href='/csv/jobs/'+CSV.job+'/dictionary';a.download='dizionario_anonimizzazione.json';}
+  else{a.href='/csv/jobs/'+CSV.job+'/files/'+i;a.download=CSV.status.files[i].out_name;}
+  document.body.appendChild(a);a.click();a.remove();
+}
+
+async function csvCancel(){
+  if(!CSV||!CSV.job)return;
+  try{const r=await fetch('/csv/jobs/'+CSV.job+'/cancel',{method:'POST'});
+    if(r.ok){CSV.status=await r.json();csvRender();}}catch(e){}
+}
+
 /* incolla un'immagine (screenshot) direttamente nell'app */
 document.addEventListener('paste',e=>{
   if(!$('pane1').classList.contains('on'))return;

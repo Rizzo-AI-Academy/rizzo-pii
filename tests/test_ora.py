@@ -132,7 +132,7 @@ class OraInAnalyze(unittest.TestCase):
     """La pipeline completa: il modello (finto) taglia i minuti, l'output no."""
 
     def _modello(self, testo, pezzi):
-        def nlp(chunks):
+        def nlp(chunks, **kw):
             out = []
             for c in chunks:
                 res = []

@@ -41,7 +41,7 @@ def _png():
 @unittest.skipIf(APP is None, "app.py non importabile (flask/fitz assenti)")
 class Sorgenti(unittest.TestCase):
     def setUp(self):
-        self._p = patch.object(APP, "nlp", lambda chunks: [[] for _ in chunks])
+        self._p = patch.object(APP, "nlp", lambda chunks, **kw: [[] for _ in chunks])
         self._p.start()
         self.c = APP.app.test_client()
 
