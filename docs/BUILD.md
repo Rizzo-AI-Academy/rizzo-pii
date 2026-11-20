@@ -1,7 +1,8 @@
 # Build dell'app desktop (CPU — Windows, Linux e macOS)
 
 Crea un eseguibile/installer **standalone e offline** dell'anonimizzatore PII.
-Usa una build **CPU di PyTorch** (gira su qualsiasi PC, niente CUDA richiesta).
+Il modello gira con **ONNX Runtime su CPU** (qualsiasi PC, niente CUDA, **niente PyTorch** nel
+pacchetto): il `model.onnx` è lo stesso modello fp32, non quantizzato — vedi [§ Modello ONNX](#modello-onnx-niente-pytorch-nel-pacchetto).
 Windows: vedi sotto. **Linux** (.deb/.AppImage): vedi **[§ Build Linux](#build-linux-debappimage)**.
 **macOS** (.app/.dmg): vedi **[§ Build macOS](#build-macos-appdmg)**.
 
@@ -14,7 +15,7 @@ Esistono due modi di impacchettare, entrambi CPU/offline:
 
 ## Architettura (perché un "sidecar")
 
-Il motore dell'app è **Python + PyTorch + il modello mmBERT**: non gira dentro Rust/WebView.
+Il motore dell'app è **Python + ONNX Runtime + il modello mmBERT**: non gira dentro Rust/WebView.
 Per questo, sia con Tauri sia col build legacy, il backend è il **server Flask** (`src/app/app.py`)
 impacchettato con PyInstaller. Con Tauri la finestra nativa lo lancia come **processo figlio
 (sidecar)**, attende che risponda su `127.0.0.1:5005`, poi mostra l'UI; alla chiusura lo termina.
@@ -27,6 +28,27 @@ impacchettato con PyInstaller. Con Tauri la finestra nativa lo lancia come **pro
 - **Rust** (`rustup`), **Node.js** + **npm**, **WebView2 Runtime** (già presente su Win10/11 aggiornati).
 - Il **venv CPU** `build_env/` (vedi § PyInstaller, passo 1) per costruire il sidecar.
 
+### 0. Esportare il modello in ONNX (una volta per versione)
+```powershell
+python src/training/export_onnx.py --model-dir models/rizzo-pii-0.3B-v1.5.0
+```
+Crea `onnx/model.onnx` + `onnx/model.onnx_data` nella cartella del modello e verifica che le
+entità coincidano con PyTorch (esce con 1 se no). Senza questi file lo spec si ferma subito.
+
+### 0b. Modelli OCR (una volta)
+Le scansioni e le immagini si leggono con l'OCR locale (`src/app/ocr.py` → `src/app/docmd/`,
+PaddleOCR in ONNX). I modelli vanno in `models/ocr/` e lo spec li impacchetta in `_internal/ocr_models/`:
+```powershell
+build_env\Scripts\pip install pyclipper pyyaml                         # una volta nel venv di build
+python scripts/build_opencv_min.py                                    # OpenCV minima (~5-10 min, una volta)
+build_env\Scripts\pip install --force-reinstall --no-deps (Get-Item build\opencv_min\*.whl)
+python scripts/fetch_ocr_models.py                                    # scarica da Hugging Face
+# oppure, se hai gia' la pipeline docmd con i modelli convertiti:
+python scripts/fetch_ocr_models.py --from-dir D:\percorso\ocr_pipeline\models
+```
+Vedi **[§ OCR delle scansioni](#ocr-delle-scansioni)**. Senza modelli lo spec si ferma; con
+`$env:PII_BUNDLE_OCR = "0"` esce una build senza OCR (le scansioni rispondono "modelli OCR non installati").
+
 ### 1. Costruire il sidecar (backend headless)
 Entry dedicato `src/app/serve.py` (solo Flask, niente browser); spec `build_sidecar.spec`.
 Si costruisce **dentro le risorse Tauri**:
@@ -34,7 +56,15 @@ Si costruisce **dentro le risorse Tauri**:
 build_env\Scripts\pyinstaller.exe build_sidecar.spec --noconfirm `
   --distpath tauri\src-tauri\backend --workpath build\sidecar_work
 ```
-Output: `tauri\src-tauri\backend\pii-backend\pii-backend.exe` (+ `_internal\`, modello, asset) ≈ 1,8 GB.
+Output: `tauri\src-tauri\backend\pii-backend\pii-backend.exe` (+ `_internal\`, modello, asset) ≈ 1,4 GB
+(1,2 GB sono il modello; con torch erano 1,8 GB).
+
+Con **`$env:PII_BUNDLE_MODEL = "0"`** il sidecar esce **senza modello** (~155 MB) e l'installer
+pesa ~60-90 MB (59 MB in locale, ~90 MB dalla CI): l'app scarica il modello da Hugging Face al primo avvio — vedi
+[§ Modello al primo avvio](#modello-al-primo-avvio-installer-leggero-e-offline).
+Nota: `target\release\backend\` (usata lanciando `app.exe` direttamente) si aggiorna solo quando
+ricompila `build.rs`; dopo aver cambiato il sidecar, `rm -r target\release\backend` + tocca
+`src-tauri\build.rs`. L'installer NSIS invece prende sempre `src-tauri\backend\`.
 
 ### 2. Build dell'app + installer
 ```powershell
@@ -57,14 +87,17 @@ Installer **per-utente** (niente admin), in italiano, con shortcut e disinstalla
 ### Build Windows da macOS/Linux → GitHub Actions
 
 **Non si compila da un altro SO**, nemmeno con Docker: su macOS i container sono Linux, e
-PyInstaller non cross-compila (il sidecar è Python+torch, va costruito sul SO di destinazione).
+PyInstaller non cross-compila (il sidecar è Python + onnxruntime, va costruito sul SO di destinazione).
 La strada è un runner Windows di GitHub Actions: **[`.github/workflows/build-windows.yml`](../.github/workflows/build-windows.yml)**
 fa gli stessi passi 1 e 2 su `windows-latest` e allega l'installer alla release del tag.
 
 Il modello è gitignorato: il workflow lo scarica da Hugging Face, repo **pubblico**
 [`rizzoaiacademy/rizzo-pii-0.3B`](https://huggingface.co/rizzoaiacademy/rizzo-pii-0.3B)
-branch `v1.5.0` → nessun token, nessun secret. Per cambiare modello si aggiornano insieme
-`MODEL_REPO`/`MODEL_REV`/`MODEL_DIR` nel workflow e il path in `build_sidecar.spec`.
+branch `v1.5.0` → nessun token, nessun secret. Scarica **solo l'ONNX** (`onnx/model.onnx` +
+`model.onnx_data`) e il tokenizer. Per cambiare modello si aggiornano insieme
+`MODEL_REPO`/`MODEL_REV`/`MODEL_DIR` nel workflow e il path in `build_sidecar.spec`, e **prima**
+si pubblica l'ONNX sul nuovo ramo HF (export + verifica in locale, poi upload in `onnx/`):
+senza, il workflow si ferma con "modello non scaricato".
 
 Due modi di lanciarlo:
 ```bash
@@ -90,14 +123,152 @@ non sovrascrive un asset con lo stesso nome).
 Accortezze:
 - **Limite di 2 GiB per asset di release.** L'NSIS sta sui ~1,5-1,8 GB: passa, ma con poco
   margine. Se cresce, l'upload risponde 422.
-- **Disco del runner** ~25 GB liberi: per questo si usa l'indice `whl/cpu` di torch (il wheel
-  Windows di default tira dentro CUDA) e si cancella `build/sidecar_work` dopo PyInstaller.
+- **Disco del runner** ~25 GB liberi: il workflow non installa torch e scarica da HF solo
+  `onnx/` + tokenizer/config (niente `model.safetensors`); si cancella `build/sidecar_work` dopo PyInstaller.
 - **Tempi**: ~35 min il primo run, ~15 i successivi (cache di cargo su `src-tauri/target`).
 - L'installer **non è firmato** → SmartScreen avvisa al primo avvio, come per la build locale.
 
 ---
 
+## Modello ONNX (niente PyTorch nel pacchetto)
+
+L'app impacchettata non usa PyTorch: carica `model.onnx` con **onnxruntime**
+([`src/app/onnx_ner.py`](../src/app/onnx_ner.py), dipendenze: onnxruntime + tokenizers + numpy).
+È lo **stesso modello fp32**, senza quantizzazione: cambia il runtime, non i pesi.
+[`src/training/export_onnx.py`](../src/training/export_onnx.py) lo esporta e lo confronta con
+PyTorch (pipeline HF `aggregation_strategy="simple"`) su 300 frasi della validation:
+**0 entità diverse**, scarto massimo sui logits ~3e-4 (rumore numerico).
+
+- **Due file, sempre insieme**: `model.onnx` (grafo, 0,5 MB) + `model.onnx_data` (pesi).
+  I pesi separati vengono mappati in memoria: della tabella degli embedding (256k token, il 64%
+  del modello) entra in RAM solo ciò che serve.
+- **Selezione in `app.py`**: se nella cartella del modello c'è `onnx/model.onnx` (o `model.onnx`)
+  usa ONNX, altrimenti la pipeline transformers (CPU/GPU). `PII_BACKEND=onnx|torch` forza la scelta.
+  `/health` riporta `backend`.
+- **Nello spec** entrano solo `model.onnx`, `model.onnx_data`, `config.json` e i file del tokenizer:
+  il `model.safetensors` resta fuori, e così non si impacchetta il modello due volte.
+- **Misure sul sidecar Windows** (v1.5.0, stessa macchina):
+
+  | | torch (prima) | ONNX (ora) |
+  |---|---|---|
+  | cartella del sidecar | 1,8 GB | 1,4 GB |
+  | avvio fino a `/health` 200 | 7,6–9,5 s | 3,2–4,0 s |
+  | prima `/analyze` (frase breve) | 3,6 s (warm-up) | 0,09 s |
+  | `/analyze` ~800 parole | ~4,1 s | ~3,8–4,6 s (pari) |
+  | RAM dopo l'uso | ~870 MB | ~670 MB |
+
+  Sul testo lungo il throughput è pari: il guadagno è in installazione, avvio e memoria.
+
+---
+
+## OCR delle scansioni
+
+PDF scansionati, foto e immagini (`.png`, `.jpg`, `.tiff`, `.bmp`, `.webp`) passano da una pipeline
+OCR **locale e solo CPU**: `src/app/docmd/` (copia adattata della pipeline docmd: PaddleOCR esportato
+in ONNX, senza Paddle e senza PyTorch) orchestrata da `src/app/ocr.py`.
+
+| Modello | Ruolo | Peso | Origine |
+| --- | --- | --: | --- |
+| PP-DocLayout-M | layout (titoli, testo, tabelle, timbri) | 23 MB | convertito con paddle2onnx |
+| PP-DocLayout_plus-L | layout accurato (preset `accurate`, o al posto di M se manca) | 124 MB | ONNX ufficiale |
+| PP-OCRv6_small_det / _rec | detection + recognition (preset `balanced`) | 10 + 21 MB | ONNX ufficiale |
+| PP-OCRv6_tiny_det / _rec | detection + recognition (preset `fast`) | 2 + 5 MB | ONNX ufficiale |
+| SLANet_plus | struttura delle tabelle | 8 MB | ONNX ufficiale |
+
+Il modello delle formule (PP-FormulaNet, 321 MB) **non** si impacchetta: per atti e contratti non
+serve, e senza di lui i blocchi "formula" si leggono come testo.
+
+**Da dove arrivano i modelli** (`scripts/fetch_ocr_models.py`): i modelli ufficiali dai repo
+`PaddlePaddle/<nome>_onnx` su Hugging Face; PP-DocLayout-M non ha un ONNX ufficiale, quindi si
+prende da `--from-dir` (la cartella `models/` della pipeline docmd, gia' convertita) o dal repo
+pubblico [`rizzoaiacademy/rizzo-ocr`](https://huggingface.co/rizzoaiacademy/rizzo-ocr)
+(sottocartella `PP-DocLayout-M/`: convertito con paddle2onnx, pesi originali, Apache-2.0). E' la
+strada della CI: nessun token, ~69 MB in tutto. Solo se nessuno dei due e' raggiungibile si ripiega
+sul layout accurato ufficiale (+100 MB, ~2× piu' lento). Per aggiornare il modello pubblicato:
+```bash
+hf upload rizzoaiacademy/rizzo-ocr models/ocr/PP-DocLayout-M PP-DocLayout-M
+```
+
+**OpenCV minima** (`scripts/build_opencv_min.py`): la wheel ufficiale `opencv-python-headless`
+si porta dietro video (ffmpeg, aom, vpx), OpenBLAS, OpenCL, IPP e una ventina di moduli: ~143 MB su
+Linux, ~82 MB di `cv2.pyd` su Windows, e il modulo li carica **tutti all'avvio** (su Linux sono
+dipendenze dirette del `.so`), quindi non si possono togliere dopo. L'OCR usa solo `core` + `imgproc`
+(resize, cvtColor, warpAffine/Perspective, findContours, minAreaRect, fillPoly…): lo script compila
+l'sdist ufficiale di PyPI (sha256 verificato) con i soli quei moduli, senza video/BLAS/OpenCL/IPP e
+senza codec di immagini (`cv2.imencode`/`imdecode` non esistono: l'app usa PyMuPDF). Su Windows
+`cv2.pyd` scende a **13 MB**; testo OCR identico byte per byte e stessa velocita' (misurato sulla
+scansione di prova, con e senza IPP). La CI la compila una volta e la tiene in cache (chiave = hash
+dello script); lo step "Installa OpenCV minima" verifica che `cv2.imencode` non ci sia, cioe' che
+non sia finita nel pacchetto la wheel completa. Lo spec esclude anche i classificatori Haar (`cv2/data`).
+
+**Peso nel sidecar**: ~66 MB di modelli (con il layout M) + ~13 MB di OpenCV minima. Sidecar Windows
+senza modello NER: ~155 MB senza OCR → ~300 MB con la OpenCV ufficiale → **~235 MB** con quella minima.
+
+**Come funziona la redazione sulle scansioni**: per le pagine lette con l'OCR `pdf_export.redact_pdf`
+riceve le righe con i box di ogni carattere (in punti PDF, gia' riportati sulla pagina originale anche
+quando l'OCR l'ha raddrizzata), cerca i valori con lo stesso matcher dei PDF testuali, sovrascrive i
+pixel, toglie dalla pagina tutto il contenuto originale (immagini comprese) e la rimette come immagine
+JPEG coperta con i placeholder scritti sopra. Prova rapida senza scanner:
+```powershell
+python src/app/make_scanned_pdf.py scansione_prova.pdf --png scansione_prova.png
+curl.exe -F "file=@scansione_prova.pdf" http://127.0.0.1:5005/pdf -o anonimizzato.pdf
+```
+
+---
+
+## Modello al primo avvio (installer leggero e offline)
+
+La CI produce **due installer Windows** dalla stessa build:
+
+| installer | dimensione | modello |
+|---|---|---|
+| `Rizzo-PII-<ver>-Windows-Setup.exe` | ~90 MB | scaricato da Hugging Face al primo avvio |
+| `Rizzo-PII-<ver>-Windows-Setup-offline.exe` | ~1,15 GB | dentro l'installer, nessuna rete richiesta |
+
+Il leggero è quello linkato dalla landing. L'offline serve a PC senza internet o a reti
+aziendali che bloccano `huggingface.co`.
+
+**Come funziona** ([`tauri/src-tauri/src/model.rs`](../tauri/src-tauri/src/model.rs)):
+
+1. All'avvio Tauri guarda se il sidecar ha il modello dentro (`_internal/pii_model/`): se sì,
+   è l'offline e non scarica niente.
+2. Altrimenti cerca il modello in `%LOCALAPPDATA%\rizzo-pii\models\rizzo-pii-0.3B-v<ver>\`
+   (Linux `~/.local/share/rizzo-pii/…`, macOS `~/Library/Application Support/rizzo-pii/…`).
+   Il marcatore `.verified` dice che è già stato scaricato e verificato.
+3. Se manca, lo scarica da `huggingface.co/rizzoaiacademy/rizzo-pii-0.3B` a un **commit
+   fissato** (`MODEL_COMMIT`), solo i 6 file ONNX + tokenizer (1,18 GB). Ogni file è verificato
+   con **dimensione + sha256** (`MODEL_FILES`) prima di essere usato. Il download va in
+   `*.part` e **riprende** da dove si era fermato (chiusura dell'app, rete caduta), con 4
+   tentativi per file; il proxy si legge da `HTTPS_PROXY`/`HTTP_PROXY`.
+4. Lancia il sidecar con **`PII_MODEL_DIR`** puntato a quella cartella (in `app.py` vince sul
+   modello impacchettato).
+
+Lo splash mostra MB scaricati, percentuale, velocità e tempo stimato. In caso di errore mostra
+un motivo breve (il dettaglio è in `~/rizzo-pii/tauri.log`) con **Riprova** e **Apri cartella**,
+per copiare i file a mano.
+
+**Misure** (Windows, rete domestica): download completo ~55 s a ~22 MB/s; ripresa dopo
+chiusura verificata (560 MB già scaricati non vengono riscaricati); avvii successivi senza
+download, backend pronto in ~4 s.
+
+**Nuova versione del modello**: esporta e verifica l'ONNX
+(`src/training/export_onnx.py`), caricalo in `onnx/` sul nuovo ramo HF, poi aggiorna in
+`model.rs` `MODEL_VERSION`, `MODEL_COMMIT` (commit del ramo) e `MODEL_FILES` (dimensioni e
+sha256), e in CI `MODEL_REV`/`MODEL_DIR`. Se sha256 e file pubblicati non coincidono, il
+download fallisce di proposito.
+
+---
+
 ## Build Linux (.deb/.AppImage)
+
+**In CI (la strada per le release):** [`.github/workflows/build-linux.yml`](../.github/workflows/build-linux.yml)
+gira su `ubuntu-22.04` (glibc vecchia = AppImage compatibile con più distro) a ogni tag `v*`,
+come `build-windows.yml`, e allega alla release **quattro** pacchetti: `.AppImage` e `.deb`
+leggeri (modello scaricato al primo avvio) e `-offline` (modello dentro). Prima di impacchettare
+avvia il sidecar con il modello e controlla che `/health` e `/analyze` rispondano.
+A mano: `gh workflow run build-linux.yml` (artifact del run) o `-f release_tag=vX.Y.Z`.
+
+In locale (sotto) si ottiene la variante **offline**, con il modello dentro.
 
 **Non si compila da Windows** (PyInstaller e i bundle Tauri Linux/`webkit2gtk` vanno fatti su
 Linux). Usa una macchina Ubuntu/Debian o **WSL2**. Tutto è automatizzato in **`build_linux.sh`**
@@ -141,6 +312,17 @@ docker run --rm -e VENV=/opt/venv -e APPIMAGE_EXTRACT_AND_RUN=1 \
 ---
 
 ## Build macOS (.app/.dmg)
+
+**Release (firmata e notarizzata): `bash release_mac.sh` dal Mac.** Un solo comando che:
+- crea `.venv` con le sole dipendenze del sidecar ONNX, senza torch;
+- scarica il modello ONNX da HF;
+- costruisce con `build_mac.sh` le due varianti, `Rizzo-PII-<ver>-macOS-arm64.dmg` (leggera,
+  modello al primo avvio) e `…-offline.dmg`, firmandole e notarizzandole se c'è
+  `.env.notarize`;
+- le allega alla release `v<ver>` con `gh` (`UPLOAD=0` per saltare).
+
+Non è in CI perché la firma Developer ID usa il certificato nel portachiavi del Mac.
+`VARIANT=lite|offline bash build_mac.sh` costruisce una sola variante.
 
 Come per Linux, **non si compila da un altro SO**: PyInstaller e il bundle Tauri macOS vanno
 fatti su un Mac. Tutto automatizzato in **`build_macos.sh`** (root), speculare a `build_linux.sh`:
@@ -191,7 +373,7 @@ Note specifiche di macOS:
 python -m venv build_env
 build_env\Scripts\python.exe -m pip install --upgrade pip
 build_env\Scripts\python.exe -m pip install --index-url https://download.pytorch.org/whl/cpu torch
-build_env\Scripts\python.exe -m pip install "transformers==4.57.3" tokenizers safetensors flask pymupdf pyinstaller
+build_env\Scripts\python.exe -m pip install "transformers==4.57.3" tokenizers safetensors flask pymupdf pyinstaller onnx onnxruntime
 ```
 
 ### 2. Build dell'eseguibile
@@ -210,7 +392,8 @@ Output: `installer_out\AnonimizzatorePII-Setup.exe` — installer per-utente (ni
 con shortcut nel menu Start e disinstallazione.
 
 ## Note
-- **Dimensione**: la cartella/installer è di alcuni GB (PyTorch + modello incluso). Normale.
+- **Dimensione**: ~1,4 GB, quasi tutto modello (1,2 GB). torch serve solo nel venv per l'export
+  ONNX: gli spec lo escludono dal pacchetto.
 - **Rigenerare col modello definitivo**: il modello è impacchettato dalla cartella versionata
   `models\rizzo-pii-0.3B-v{VERSION}\` (vedi `datas` in `build.spec` / `build_sidecar.spec`; build
   attuale **v1.5.0**). Quando riaddestri una nuova versione, aggiorna quel path negli spec e rifai

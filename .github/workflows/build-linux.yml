@@ -1,0 +1,221 @@
+# Compila l'app desktop LINUX (sidecar PyInstaller + bundle Tauri .deb/.AppImage) e allega
+# alla release del tag DUE varianti, come per Windows (build-windows.yml):
+#
+#   Rizzo-PII-<ver>-Linux-x86_64.AppImage / -Linux-amd64.deb
+#       leggere: al primo avvio l'app scarica il modello da Hugging Face
+#       (tauri/src-tauri/src/model.rs);
+#   Rizzo-PII-<ver>-Linux-x86_64-offline.AppImage / -Linux-amd64-offline.deb
+#       complete: modello dentro, nessuna rete richiesta.
+#
+# Gira su ubuntu-22.04 e non su ubuntu-latest: un AppImage funziona sulle distro con una
+# glibc uguale o piu' recente di quella con cui e' compilato, quindi si compila sulla piu'
+# vecchia ragionevole. Stesse dipendenze di Dockerfile.linux (che resta per le build locali).
+#
+# Il sidecar NON contiene torch: inferenza con onnxruntime su onnx/model.onnx (fp32) scaricato
+# gia' pronto da Hugging Face, repo PUBBLICO -> nessun token.
+name: build-linux
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag di una release gia' esistente a cui allegare i pacchetti (vuoto = solo artifact del run)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  MODEL_REPO: rizzoaiacademy/rizzo-pii-0.3B
+  MODEL_REV: v1.5.0
+  MODEL_DIR: models/rizzo-pii-0.3B-v1.5.0 # deve combaciare con build_sidecar.spec
+  # linuxdeploy (usato per l'AppImage) e' esso stesso un AppImage: sul runner manca FUSE
+  APPIMAGE_EXTRACT_AND_RUN: "1"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dipendenze di sistema (Tauri v2 + PyInstaller)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential curl wget file patchelf \
+            libssl-dev libxdo-dev libwebkit2gtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cache di cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tauri/src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('tauri/src-tauri/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # Niente torch: il sidecar gira su onnxruntime e il modello ONNX e' gia' su HF.
+      - name: Dipendenze Python (CPU, senza torch)
+        run: |
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir tokenizers numpy onnxruntime \
+            flask pymupdf pyinstaller "huggingface_hub[cli]" \
+            pyclipper pyyaml
+
+      # File elencati uno per uno (vedi build-windows.yml: --include con piu' valori salta onnx/).
+      - name: Scarica il modello ONNX da Hugging Face
+        run: |
+          hf download "$MODEL_REPO" onnx/model.onnx onnx/model.onnx_data \
+            config.json tokenizer.json tokenizer_config.json special_tokens_map.json \
+            --revision "$MODEL_REV" --local-dir "$MODEL_DIR"
+          for f in onnx/model.onnx onnx/model.onnx_data tokenizer.json config.json; do
+            [ -f "$MODEL_DIR/$f" ] || { echo "modello non scaricato: $MODEL_DIR/$f mancante"; exit 1; }
+          done
+
+      # OpenCV MINIMA (solo core + imgproc, quelli che usa l'OCR) al posto della wheel
+      # ufficiale: quella si porta dietro video, OpenBLAS e OpenCL (~143 MB su Linux) e il
+      # modulo cv2 li carica tutti all'avvio, quindi non si possono togliere dopo.
+      # Si compila una volta (~5-10 min) e resta nella cache delle Actions.
+      - name: Cache OpenCV minima
+        id: cvmin
+        uses: actions/cache@v4
+        with:
+          path: build/opencv_min
+          key: opencv-min-${{ runner.os }}-py311-${{ hashFiles('scripts/build_opencv_min.py') }}
+
+      - name: Compila OpenCV minima
+        if: steps.cvmin.outputs.cache-hit != 'true'
+        run: python scripts/build_opencv_min.py
+
+      - name: Installa OpenCV minima
+        run: |
+          pip install --no-deps --force-reinstall build/opencv_min/opencv_python_headless-*.whl
+          python -c "import cv2; print('cv2', cv2.__version__); assert not hasattr(cv2, 'imencode'), 'non e la wheel minima'"
+
+      # Modelli OCR dentro il sidecar (vedi build-windows.yml)
+      - name: Scarica i modelli OCR
+        run: python scripts/fetch_ocr_models.py --dest models/ocr
+
+      - name: Sidecar PyInstaller (senza modello)
+        env:
+          PII_BUNDLE_MODEL: "0"
+        run: |
+          rm -rf tauri/src-tauri/backend
+          pyinstaller build_sidecar.spec --noconfirm \
+            --distpath tauri/src-tauri/backend --workpath build/sidecar_work
+          [ -x tauri/src-tauri/backend/pii-backend/pii-backend ] || { echo "sidecar non prodotto"; exit 1; }
+          [ ! -e tauri/src-tauri/backend/pii-backend/_internal/pii_model ] \
+            || { echo "il sidecar leggero non deve contenere il modello"; exit 1; }
+          rm -rf build/sidecar_work
+
+      # Il sidecar si avvia davvero col modello scaricato (PII_MODEL_DIR, come fa Tauri) e
+      # anonimizza: una build che compila ma non parte non arriva alla release.
+      - name: Prova del sidecar (health + analyze + OCR)
+        run: |
+          PII_MODEL_DIR="$PWD/$MODEL_DIR" PII_PORT=5099 \
+            tauri/src-tauri/backend/pii-backend/pii-backend > sidecar.log 2>&1 &
+          for i in $(seq 1 90); do
+            curl -sf http://127.0.0.1:5099/health > health.json && break
+            sleep 1
+          done
+          cat health.json || { cat sidecar.log; exit 1; }
+          jq -e '.backend == "onnx" and .model_loaded and .ocr.available' health.json
+          curl -sf -X POST http://127.0.0.1:5099/analyze -H 'Content-Type: application/json' \
+            -d '{"text":"Il sig. Mario Rossi, IBAN IT60X0542811101000000123456"}' \
+            | jq -r .anonymized_text | tee out.txt
+          grep -q '\[FULLNAME_1\]' out.txt && grep -q '\[IBAN_1\]' out.txt
+          # scansione sintetica (solo immagine, niente layer di testo) -> /ocr
+          python src/app/make_scanned_pdf.py scan.pdf
+          curl -sf -F file=@scan.pdf http://127.0.0.1:5099/ocr | jq -r .text | tee ocr.txt
+          grep -q 'Mario Rossi' ocr.txt && grep -q 'IT60X0542811101000000123456' ocr.txt
+          kill %1 || true
+
+      # Due build dalla stessa compilazione Rust: prima senza modello, poi con i 6 file copiati
+      # in _internal/pii_model (stesso layout di build_sidecar.spec con PII_BUNDLE_MODEL=1).
+      - name: Build Tauri .deb + .AppImage (leggero e offline)
+        id: pkg
+        run: |
+          set -euo pipefail
+          VER="$(jq -r .version tauri/src-tauri/tauri.conf.json)"
+          OUT="$PWD/installer_out"; mkdir -p "$OUT"
+          B=tauri/src-tauri/target/release/bundle
+
+          build() {   # $1 = suffisso del nome ("" o "-offline")
+            rm -rf "$B/deb" "$B/appimage"
+            (cd tauri && npx tauri build --bundles deb appimage)
+            mv "$(ls $B/deb/*.deb | head -1)"           "$OUT/Rizzo-PII-$VER-Linux-amd64$1.deb"
+            mv "$(ls $B/appimage/*.AppImage | head -1)" "$OUT/Rizzo-PII-$VER-Linux-x86_64$1.AppImage"
+          }
+
+          (cd tauri && npm install)
+          build ""
+
+          PM=tauri/src-tauri/backend/pii-backend/_internal/pii_model
+          mkdir -p "$PM"
+          cp "$MODEL_DIR"/onnx/model.onnx "$MODEL_DIR"/onnx/model.onnx_data "$PM"/
+          cp "$MODEL_DIR"/{config.json,tokenizer.json,tokenizer_config.json,special_tokens_map.json} "$PM"/
+          build "-offline"
+
+          ls -la "$OUT"
+          echo "dir=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Artifact del run
+        if: github.ref_type != 'tag' && !inputs.release_tag
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-linux
+          path: ${{ steps.pkg.outputs.dir }}/*
+          retention-days: 5
+          compression-level: 0
+
+      - name: Allega i pacchetti alla release
+        if: github.ref_type == 'tag' || inputs.release_tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.release_tag || github.ref_name }}
+          REPO: ${{ github.repository }}
+          OUT: ${{ steps.pkg.outputs.dir }}
+        run: |
+          set -euo pipefail
+          API="https://api.github.com/repos/$REPO"
+          auth=(-H "Authorization: Bearer $GH_TOKEN"
+                -H "Accept: application/vnd.github+json"
+                -H "X-GitHub-Api-Version: 2022-11-28")
+
+          # release.yml crea la release in parallelo: la si aspetta fino a 5 minuti.
+          ID=""
+          for _ in $(seq 1 30); do
+            ID="$(curl -sS "${auth[@]}" "$API/releases/tags/$TAG" | jq -r '.id // empty')"
+            [ -n "$ID" ] && break
+            echo "release $TAG non ancora pubblicata, riprovo..."
+            sleep 10
+          done
+          [ -n "$ID" ] || { echo "ERRORE: release $TAG inesistente"; exit 1; }
+
+          for ASSET in "$OUT"/*; do
+            NAME="$(basename "$ASSET")"
+            OLD="$(curl -sS "${auth[@]}" "$API/releases/$ID/assets" \
+                   | jq -r --arg n "$NAME" '.[] | select(.name == $n) | .id')"
+            [ -n "$OLD" ] && curl -fsS -X DELETE "${auth[@]}" "$API/releases/assets/$OLD"
+            curl -fsS -X POST "${auth[@]}" \
+              -H "Content-Type: application/octet-stream" \
+              -T "$ASSET" \
+              "https://uploads.github.com/repos/$REPO/releases/$ID/assets?name=$NAME" \
+              > upload.json
+            echo "Asset: $(jq -r .browser_download_url upload.json)"
+          done

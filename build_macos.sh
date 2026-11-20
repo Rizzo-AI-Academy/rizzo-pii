@@ -39,13 +39,23 @@ command -v npm   >/dev/null || { echo "ERRORE: npm non trovato (installa Node.js
 if [ ! -d "$VENV" ]; then
   python3 -m venv "$VENV"
   "$VENV/bin/pip" install --upgrade pip
-  "$VENV/bin/pip" install torch "transformers==4.57.3" tokenizers safetensors flask pymupdf pyinstaller
+  "$VENV/bin/pip" install torch "transformers==4.57.3" tokenizers safetensors flask pymupdf pyinstaller onnx onnxruntime \
+    opencv-python-headless pyclipper pyyaml
 fi
+"$VENV/bin/python" -c "import onnxruntime" 2>/dev/null || "$VENV/bin/pip" install onnx onnxruntime
 "$VENV/bin/python" -c "import PyInstaller" 2>/dev/null \
   || "$VENV/bin/pip" install pyinstaller
 
+# ---- 1b) modello in ONNX (fp32, stessi pesi): il sidecar non contiene torch --------
+[ -f "$MODEL_DIR/onnx/model.onnx_data" ] || "$VENV/bin/python" src/training/export_onnx.py --model-dir "$MODEL_DIR"
+
 # ---- 2) sidecar PyInstaller -> tauri/src-tauri/backend/pii-backend/pii-backend ----
 rm -rf tauri/src-tauri/backend
+# modelli OCR (PaddleOCR ONNX) per le scansioni: solo se mancano, vedi scripts/fetch_ocr_models.py
+"$VENV/bin/python" -c "import cv2, pyclipper, yaml" 2>/dev/null \
+  || "$VENV/bin/pip" install opencv-python-headless pyclipper pyyaml huggingface_hub
+"$VENV/bin/python" scripts/fetch_ocr_models.py --dest models/ocr
+
 "$VENV/bin/pyinstaller" build_sidecar.spec --noconfirm \
   --distpath tauri/src-tauri/backend --workpath build/sidecar_work_macos
 [ -f tauri/src-tauri/backend/pii-backend/pii-backend ] \

@@ -28,6 +28,17 @@ python-dotenv
 # Local anonymization app (Flask UI + PDF parsing)
 flask
 pymupdf
+# Inferenza dell'app senza torch (src/app/onnx_ner.py) + export (src/training/export_onnx.py)
+onnx
+onnxruntime
+tokenizers
+
+# OCR delle scansioni (src/app/ocr.py + src/app/docmd/, PaddleOCR in ONNX, solo CPU).
+# I modelli si scaricano con: python scripts/fetch_ocr_models.py
+# Nei pacchetti dell'app si usa una OpenCV minima (core + imgproc): scripts/build_opencv_min.py
+opencv-python-headless
+pyclipper
+pyyaml
 
 # Loss / metric plots produced by the training script
 matplotlib

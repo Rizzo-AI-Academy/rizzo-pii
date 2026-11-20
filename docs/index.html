@@ -97,6 +97,7 @@
   .dl h3{font-size:1.15rem;font-weight:800;margin-bottom:2px}
   .dl p{font-size:.85rem;color:var(--muted);min-height:34px}
   .dl .btn{margin-top:12px;width:100%;justify-content:center}
+  .dl p.dl-alt{min-height:0;margin-top:8px;font-size:.8rem;text-align:center}
 
   /* ---- fallback: install via coding agent ---- */
   .fallback{
@@ -232,36 +233,44 @@
   <div class="wrap">
     <h2><span class="it">Scarica l'app desktop</span><span class="en">Download the desktop app</span></h2>
     <p class="sub">
-      <span class="it">Pronta all'uso, 100% offline su CPU. Niente Python, niente setup, niente chiavi API.</span>
-      <span class="en">Ready to use, 100% offline on CPU. No Python, no setup, no API keys.</span>
+      <span class="it">Pronta all'uso, 100% offline su CPU. Niente Python, niente setup, niente chiavi API. Legge anche scansioni e foto con l'OCR locale.</span>
+      <span class="en">Ready to use, 100% offline on CPU. No Python, no setup, no API keys. Reads scans and photos too, with local OCR.</span>
     </p>
     <div class="dl-grid">
       <div class="dl">
         <div class="os"><img src="assets/windows.svg" alt="Windows logo" /></div>
         <h3>Windows</h3>
-        <p><span class="it">Installer per-utente (.exe), niente admin.</span><span class="en">Per-user installer (.exe), no admin.</span></p>
-        <a class="btn btn-primary" href="https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/download/v2.0.0/Rizzo-PII-2.0.0-Windows-Setup.exe">
+        <p><span class="it">Installer per-utente (.exe, ~150 MB), niente admin.</span><span class="en">Per-user installer (.exe, ~150 MB), no admin.</span></p>
+        <a class="btn btn-primary" href="https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/download/v2.2.0/Rizzo-PII-2.2.0-Windows-Setup.exe">
           <span class="it">Scarica .exe</span><span class="en">Download .exe</span>
         </a>
+        <p class="dl-alt"><a href="https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/download/v2.2.0/Rizzo-PII-2.2.0-Windows-Setup-offline.exe"><span class="it">Versione offline (1,21 GB, modello incluso)</span><span class="en">Offline version (1.21 GB, model included)</span></a></p>
       </div>
       <div class="dl">
         <div class="os"><img src="assets/apple.svg" alt="Apple logo" /></div>
         <h3>macOS</h3>
-        <p><span class="it">Apple Silicon (arm64). Firmato e notarizzato Apple.</span><span class="en">Apple Silicon (arm64). Apple signed &amp; notarized.</span></p>
-        <a class="btn btn-primary" href="https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/download/v2.0.0/Rizzo-PII-2.0.0-macOS-arm64.dmg">
+        <p><span class="it">Apple Silicon (arm64, ~200 MB), macOS 14+. Firmato e notarizzato Apple.</span><span class="en">Apple Silicon (arm64, ~200 MB), macOS 14+. Apple signed &amp; notarized.</span></p>
+        <a class="btn btn-primary" href="https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/download/v2.2.0/Rizzo-PII-2.2.0-macOS-arm64.dmg">
           <span class="it">Scarica .dmg</span><span class="en">Download .dmg</span>
         </a>
+        <p class="dl-alt"><a href="https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/download/v2.2.0/Rizzo-PII-2.2.0-macOS-arm64-offline.dmg"><span class="it">Versione offline (1,35 GB, modello incluso)</span><span class="en">Offline version (1.35 GB, model included)</span></a></p>
       </div>
       <div class="dl">
         <div class="os"><img src="assets/linux.svg" alt="Linux logo" /></div>
         <h3>Linux</h3>
         <p><span class="it">AppImage portabile x86_64 (chmod +x ed esegui).</span><span class="en">Portable x86_64 AppImage (chmod +x then run).</span></p>
-        <a class="btn btn-primary" href="https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/download/v2.0.0/Rizzo-PII-2.0.0-Linux-x86_64.AppImage">
+        <a class="btn btn-primary" href="https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/download/v2.2.0/Rizzo-PII-2.2.0-Linux-x86_64.AppImage">
           <span class="it">Scarica AppImage</span><span class="en">Download AppImage</span>
         </a>
+        <p class="dl-alt"><a href="https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/download/v2.2.0/Rizzo-PII-2.2.0-Linux-amd64.deb">.deb</a> ·
+          <a href="https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/download/v2.2.0/Rizzo-PII-2.2.0-Linux-x86_64-offline.AppImage"><span class="it">offline, modello incluso</span><span class="en">offline, model included</span></a></p>
       </div>
     </div>
     <p class="small" style="text-align:center;margin-top:18px">
+      <span class="it">Al primo avvio l'app scarica il modello (1,2 GB) da Hugging Face, una volta sola: i tuoi documenti non lasciano mai il computer. Senza internet, usa la versione offline.</span>
+      <span class="en">On first launch the app downloads the model (1.2 GB) from Hugging Face, once: your documents never leave your computer. No internet? Use the offline version.</span>
+    </p>
+    <p class="small" style="text-align:center;margin-top:6px">
       <span class="it">🍎 macOS: app <b>firmata e notarizzata da Apple</b>.</span>
       <span class="en">🍎 macOS: the app is <b>Apple signed &amp; notarized</b> — drag to Applications and open, no warnings.</span>
     </p>

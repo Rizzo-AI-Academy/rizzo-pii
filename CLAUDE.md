@@ -59,6 +59,10 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   metriche train/val, logga su **W&B** (run `rizzo-pii:0.3B-v{VERSION}`). **Modello versionato**:
   ogni run grande salva in `models/rizzo-pii-0.3B-v{VERSION}/` (storico, niente sovrascrittura;
   `MODEL_VERSION` in cima al file o `--version`; storia in `models/registry.json`). Vedi "Parametri".
+- `export_onnx.py` — esporta il modello in **ONNX fp32 (nessuna quantizzazione)** →
+  `models/<versione>/onnx/model.onnx` + `model.onnx_data` (pesi separati = mmap, RAM ~mezza) e
+  **verifica** contro la pipeline HF (logits + entità su 300 frasi di validation; exit 1 se divergono).
+  Va rilanciato per ogni nuova versione prima di buildare il sidecar.
 - `test_pii.py` — inferenza CLI sul modello salvato (entità + testo anonimizzato). Risolve in automatico
   l'**ultima** versione `rizzo-pii-0.3B-v*` (fallback al vecchio non versionato → legacy; override `PII_MODEL_DIR`).
 
@@ -77,19 +81,43 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   codice di uscita `EXIT_PORT_CONFLICT = 76`: i 3 entry point escono con 76 se la porta è occupata
   **prima di caricare il modello** (evita secondi sprecati). Tauri riconosce il codice 76 e mostra
   il form di configurazione nello splash screen.
-- `app.py` — server Flask + **UI**: testo, PDF o file `.md`/`.txt`, chunking con overlap, offset
+- `app.py` — server Flask (la **UI** sta in `ui/index.html`, servita cosi' com'e', riletta a ogni
+  richiesta in sviluppo): testo, PDF, **scansioni e immagini** (OCR) o file `.md`/`.txt`, chunking con overlap, offset
   globali + dedup. Anonimizzazione **reversibile** (ogni PII → `[FULLNAME_1]`/`[IBAN_1]`… +
   dizionario locale; tab "Ripristina"). Affianca al modello una **rete regex/checksum** (EMAIL/
   TELEFONO/IBAN/CF/PIVA/carta/importo/targa/**URL**; IBAN/CF/PIVA/carta validati con checksum, che ha
   priorità sul modello). `URL` è un **23° tag solo-regex**: il modello non lo conosce; matcha schema,
   `www.` e domini nudi solo su una **lista chiusa di TLD** (senza, `p.iva`/`S.r.l.` diventerebbero
-  domini). `APP_VERSION`. Endpoint: `GET /health` (readiness senza inference, 200/503),
-  `POST /analyze`, `POST /pdf`, `POST /preview`, `POST /pdf/preview`, `GET /doc/<id>/page/<n>.png`,
-  `GET /doc/<id>/file.pdf`, `GET/POST /settings` (alias storico `/tags`), `GET/POST /config`,
-  `GET /port-check`; CLI `--host`/`--port`/`--exclude-tags`/`--no-mapping`.
+  domini). `APP_VERSION`. Endpoint: `GET /health` (readiness senza inference, 200/503, + stato OCR),
+  `POST /analyze`, `POST /pdf`, `POST /preview`, `POST /pdf/preview`, **`POST /ocr`**,
+  `GET /doc/<id>/page/<n>.png`, `GET /doc/<id>/file.pdf`, `GET/POST /settings` (alias storico `/tags`),
+  `GET/POST /config`, `GET /port-check`; CLI `--host`/`--port`/`--exclude-tags`/`--no-mapping`.
+  Le sorgenti di una richiesta passano da `_read_source()`: file caricato (campo `file`/`pdf`) **oppure
+  `doc_id`** di un documento gia' caricato con `/preview` (niente secondo upload; `410` + `code:
+  doc_gone` se e' scaduto dalla LRU, l'UI lo ricarica da sola). Le immagini diventano subito un PDF
+  (`ocr.image_to_pdf`, una pagina per fotogramma) e da li' seguono la strada dei PDF scansionati.
+- **OCR delle scansioni** — `ocr.py` + `docmd/` (copia adattata della pipeline docmd: PaddleOCR in
+  ONNX, solo CPU, onnxruntime + opencv + pyclipper + pyyaml, niente Paddle/torch).
+  `ocr.ocr_pdf(pdf, mode, preset)`: `mode` = `auto` (solo pagine con < 20 caratteri alfanumerici nel
+  layer di testo) | `force` (tutte) | `off`; `preset` = `fast` | `balanced` | `accurate`. Risultati in
+  **cache LRU in memoria per hash del file**: `/preview` (che NON fa OCR, dice solo `ocr.needed`),
+  `/ocr`, `/analyze`, `/pdf` sullo stesso file pagano l'OCR una volta. Per ogni pagina: testo
+  Markdown + righe con **box per carattere** (dai passi temporali CTC, `docmd/text._char_spans`) gia'
+  in punti PDF della pagina originale (matrice affine che annulla anche il raddrizzamento). Il testo
+  OCR entra nell'analisi al posto del layer vuoto (`pdf_text.collect_readable_text(page_text=...)`).
+  Nel PDF censurato le pagine OCR si redigono **sui pixel** (`pdf_export._redact_scanned_page`: stesso
+  matcher dei PDF testuali, pixel sovrascritti, contenuto originale rimosso, pagina rimessa come JPEG
+  coperto + placeholder come testo vero; timbri coperti se `ocr_redact_seals`). `POST /ocr`: file o
+  `doc_id`, `mode`/`preset`/`pages`, `lines=1|boxes`, `stream=1` (NDJSON per l'avanzamento nell'UI).
+  Pipeline configurata per l'anonimizzazione: legge anche intestazioni, pie' di pagina, timbri e
+  loghi (`keep_page_furniture`, `read_figure_text`); ramo formule disattivato (modello non
+  impacchettato). Modelli: `PII_OCR_MODELS` > `_MEIPASS/ocr_models` > `models/ocr/`, procurati con
+  `scripts/fetch_ocr_models.py` (ufficiali da HF; PP-DocLayout-M non ha ONNX ufficiale → `--from-dir`
+  o repo `rizzoaiacademy/rizzo-ocr`, altrimenti ripiego sul layout L). Prova senza scanner:
+  `src/app/make_scanned_pdf.py`. Test: `tests/test_ocr_redazione.py`.
 - **Anteprima del PDF a video, prima e dopo** — le due colonne mostrano il documento *renderizzato*,
   non solo il testo. A sinistra, appena si carica un PDF: `POST /preview` lo tiene in memoria e
-  ritorna testo + numero di pagine, e la card offre due viste (**Anteprima PDF** default, **Testo**).
+  ritorna testo + numero di pagine, e la card offre due viste (**Pagine** default, **Testo**).
   A destra, dopo l'anonimizzazione, una **terza vista** accanto ad Anteprima/Testo: **PDF censurato**,
   cioè lo stesso documento redatto con i placeholder al posto delle PII.
   Il render è **server-side con PyMuPDF** (`page.get_pixmap` → PNG per pagina): dentro Tauri non c'è
@@ -102,7 +130,7 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   **la stessa copia**, quindi guardare il PDF e poi scaricarlo costa **una sola** anonimizzazione
   (il download passa da `/doc/<id>/file.pdf`). `/pdf` resta invariato per chi usa l'API.
 - **Preferenze di anonimizzazione** → `prefs.json` nella config dir (`EXCLUDED_TAGS`,
-  `MAPPING_ENABLED`). File **separato da `config.json`** perché Tauri riscrive quest'ultimo per
+  `MAPPING_ENABLED`, `OCR_MODE`, `OCR_PRESET`, `OCR_REDACT_SEALS`; env `PII_OCR`, `PII_OCR_PRESET`). File **separato da `config.json`** perché Tauri riscrive quest'ultimo per
   intero quando si cambia porta dallo splash. Precedenza: campo nella richiesta > CLI > env > file.
 - **Tag disattivabili**: i tag deselezionati vengono rilevati ma **non** sostituiti (restano in
   chiaro) — serve a confrontare gli importi o a tenere età/sesso in un caso clinico. Env
@@ -150,11 +178,25 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   `X-PII-Residual` e `X-PII-Skipped`): (a) *residui* = valore ancora leggibile nell'output alla
   verifica finale; (b) *saltati* = valori con < 2 caratteri alfanumerici o di 2 sole cifre (es. "45"),
   non cercabili senza devastare il documento. Se in tutto il PDF non si trova **nessuna** occorrenza
-  → `422`, non un PDF "anonimizzato" che non lo è (caso tipico: scansione, serve OCR → punti 2-4
-  della issue). Nessuna dipendenza dal modello: `pdf_export.py` è testabile in isolamento.
+  → `422`, non un PDF "anonimizzato" che non lo è. Le scansioni ora passano dall'OCR (vedi sopra).
+  Nessuna dipendenza dal modello: `pdf_export.py` è testabile in isolamento (riceve le pagine OCR
+  come dict).
+- `onnx_ner.py` — **backend di inferenza senza torch/transformers** (onnxruntime + tokenizers +
+  numpy): replica `pipeline("token-classification", aggregation_strategy="simple")`, stessa forma
+  di output. `app.py` lo usa se trova `onnx/model.onnx` (o `model.onnx`) nella cartella del modello,
+  altrimenti ricade sulla pipeline transformers; `PII_BACKEND=onnx|torch` forza; `/health` riporta
+  `backend`. Gli spec PyInstaller impacchettano **solo** il modello ONNX + tokenizer/config ed
+  **escludono torch/transformers** (sidecar 1,8 → 1,4 GB, avvio ~2× più rapido). Dettagli in
+  `docs/BUILD.md` § Modello ONNX.
 - `serve.py` — entry **headless** (solo Flask, niente browser): è il backend dell'app Tauri; log su
   `%LOCALAPPDATA%\rizzo-pii\backend.log`. Pre-check porta + `sys.exit(76)` se occupata.
   `desktop_app.py` — entry PyInstaller legacy (apre il browser); stesso pre-check.
+  Gli spec impacchettano anche `ui/` e i modelli di `models/ocr/` in `ocr_models/` (si ferma se
+  mancano; `PII_BUNDLE_OCR=0` per una build senza OCR) ed escludono il plugin ffmpeg di opencv e
+  i classificatori Haar. **OpenCV minima**: `scripts/build_opencv_min.py` compila opencv-python-headless
+  con i soli `core` + `imgproc` (niente video/BLAS/OpenCL/IPP/imgcodecs, `cv2.pyd` 82 → 13 MB): la CI la
+  installa al posto della wheel ufficiale prima di PyInstaller. Quindi nel codice dell'app **niente
+  `cv2.imencode`/`imdecode`** (usare PyMuPDF) e niente funzioni fuori da core/imgproc.
   `assets/` — mascotte (il riccio) + icone. `smoke_app.py`, `make_test_pdf.py`.
 
 **App desktop Tauri — `tauri/`:** finestra nativa **Rizzo PII** (WebView2) che lancia il backend
@@ -164,7 +206,18 @@ attende il server sulla porta configurata e mostra l'UI. Se il sidecar esce con 
 occupata), lo splash mostra un form di configurazione (host + porta) con "Salva e riprova": Tauri
 scrive `config.json`, rilancia il sidecar e riprova. Splash con badge UE/GDPR + versione. `npx tauri build`
 → installer NSIS per-utente. Dettagli e comandi in `docs/BUILD.md`. Comandi Tauri esposti allo splash:
-`save_config(host, port)` e `retry_backend`.
+`save_config(host, port)`, `retry_backend`, `retry_download`, `open_model_folder`, `splash_sync`.
+
+**Modello al primo avvio — `tauri/src-tauri/src/model.rs`:** due installer Windows dalla stessa build.
+Il **leggero** (`Rizzo-PII-<ver>-Windows-Setup.exe`, ~90 MB dalla CI, sidecar con `PII_BUNDLE_MODEL=0`) non ha i
+pesi: al primo avvio Tauri scarica da HF i 6 file ONNX (repo `rizzoaiacademy/rizzo-pii-0.3B`,
+**commit fissato** `MODEL_COMMIT` + **sha256 per file** in `MODEL_FILES`), con ripresa (`.part` +
+Range), 4 tentativi, proxy da `HTTPS_PROXY`, avanzamento nello splash. Li tiene in
+`<config dir>/models/rizzo-pii-0.3B-v<ver>/` (marcatore `.verified` = niente re-hash agli avvii
+successivi) e li passa al sidecar con **`PII_MODEL_DIR`**, che in `app.py` vince sul modello
+impacchettato. L'**offline** (`…-Setup-offline.exe`) ha i pesi in `_internal/pii_model/`: Tauri lo
+riconosce e non scarica nulla. **Nuova versione del modello** = pubblicare l'ONNX su HF, poi
+aggiornare `MODEL_VERSION`/`MODEL_COMMIT`/`MODEL_FILES` in `model.rs` (+ `MODEL_REV` in CI).
 
 **Config:** `.env` (segreti W&B, **gitignorato**), `.gitignore`, `build.spec`/`build_sidecar.spec`/
 `installer.iss` + `tauri/` (packaging).
