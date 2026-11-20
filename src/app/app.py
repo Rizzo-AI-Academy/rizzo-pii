@@ -431,9 +431,32 @@ def _norm(s):
     return re.sub(r"\s+", " ", s.strip()).casefold()
 
 
-def analyze(text, excluded=None, mapping_enabled=True):
+def parse_keep_values(raw):
+    """Valori da lasciare in chiaro: lista JSON (body JSON o campo form con una
+    stringa JSON). Non si usa la lista separata da virgole dei tag: un valore puo'
+    contenere virgole ("Via Roma, 10")."""
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raise ValueError("keep_values: serve una lista JSON di stringhe.")
+    if not isinstance(raw, list) or not all(isinstance(v, str) for v in raw):
+        raise ValueError("keep_values: serve una lista JSON di stringhe.")
+    return raw
+
+
+def analyze(text, excluded=None, mapping_enabled=True, keep_values=None):
     """excluded = tag da NON anonimizzare: le entita' di quel tipo vengono scartate
     prima della fusione, quindi il valore resta in chiaro nel testo di output.
+
+    keep_values = valori che l'utente ha giudicato NON personali ("Tribunale di
+    Milano" preso per un'ORG): ogni occorrenza di quel valore (confronto con _norm,
+    qualunque tag) resta in chiaro e non entra nel dizionario. Il filtro agisce
+    DOPO la numerazione: i placeholder rimasti hanno gli stessi numeri che avrebbero
+    senza keep_values, cosi' il PDF censurato coincide con l'anteprima dell'UI, che
+    applica lo stesso filtro lato client sul risultato completo.
 
     mapping_enabled=False -> anonimizzazione DEFINITIVA: nessun dizionario
     placeholder->valore, e i segmenti-entita' non riportano il testo originale
@@ -441,6 +464,7 @@ def analyze(text, excluded=None, mapping_enabled=True):
     La numerazione dei placeholder resta: dice che due occorrenze sono lo stesso
     soggetto, ma da sola non fa risalire al valore."""
     excluded = set(excluded or ())
+    keep = {k for k in (_norm(v) for v in keep_values or ()) if k}
     model_ents, n_chunks = detect_model(text)
     # il modello taglia i minuti delle ore: la regex dell'ora completa SOLO le sue span TIME
     complete_time(model_ents, text)
@@ -450,19 +474,27 @@ def analyze(text, excluded=None, mapping_enabled=True):
     kept = _merge(cands, text)
 
     # ID reversibili: stesso (label, valore-normalizzato) -> stesso placeholder.
-    counters, seen, mapping = {}, {}, {}
+    counters, seen = {}, {}
     for e in kept:
-        val = text[e["start"]:e["end"]]
-        key = (e["label"], _norm(val))
+        key = (e["label"], _norm(text[e["start"]:e["end"]]))
         if key in seen:
             e["ph"] = seen[key]
         else:
             counters[e["label"]] = counters.get(e["label"], 0) + 1
-            ph = f"[{e['label']}_{counters[e['label']]}]"
-            seen[key] = ph
-            if mapping_enabled:
-                mapping[ph] = val
-            e["ph"] = ph
+            seen[key] = e["ph"] = f"[{e['label']}_{counters[e['label']]}]"
+
+    n_kept = 0
+    if keep:
+        before = len(kept)
+        kept = [e for e in kept if _norm(text[e["start"]:e["end"]]) not in keep]
+        n_kept = before - len(kept)
+
+    # tutte le occorrenze di un placeholder hanno lo stesso valore normalizzato:
+    # il dizionario tiene la grafia della prima, come prima di keep_values
+    mapping = {}
+    if mapping_enabled:
+        for e in kept:
+            mapping.setdefault(e["ph"], text[e["start"]:e["end"]])
 
     # segmenti per la preview + testo anonimizzato + statistiche
     segments, anon, by_label, by_source, pos = [], [], {}, {}, 0
@@ -495,7 +527,8 @@ def analyze(text, excluded=None, mapping_enabled=True):
         "n_chunks": n_chunks,
         "n_chars": len(text),
         "n_entities": len(kept),
-        "n_unique": len(seen),
+        "n_unique": len({e["ph"] for e in kept}),
+        "n_kept": n_kept,
         "by_label": dict(sorted(by_label.items(), key=lambda x: -x[1])),
         "by_source": by_source,
         "excluded_tags": sorted(excluded),
@@ -769,7 +802,10 @@ def analyze_route():
         return e.response()
     raw_excl = _param("exclude_tags")
     raw_map = _param("include_mapping")
-
+    try:
+        keep_vals = parse_keep_values(_param("keep_values"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     # override per-richiesta; senza override vale la configurazione del server
     # (snapshot atomico: una POST /settings concorrente non deve far leggere
     # un tag escluso aggiornato insieme a un mapping_enabled non ancora aggiornato, o viceversa)
@@ -777,7 +813,7 @@ def analyze_route():
     excl = server_config.parse_tag_list(raw_excl) if raw_excl is not None else default_excl
     keep_map = (server_config.parse_bool(raw_map, default_map)
                 if raw_map is not None else default_map)
-    out = analyze(text, excl, keep_map)
+    out = analyze(text, excl, keep_map, keep_vals)
     out["ocr"] = _ocr_info(ocr_res)
     out["source_kind"] = src.kind if src is not None else "text"
     # Il testo originale torna solo col dizionario attivo (l'UI lo rimette nella casella
@@ -829,19 +865,22 @@ def _build_anonymized_pdf():
     """
     text, src, ocr_res = _load_text()
     raw_excl = _param("exclude_tags")
+    try:
+        keep_vals = parse_keep_values(_param("keep_values"))
+    except ValueError as e:
+        raise _ReqError(str(e))
     name = src.name if src is not None else ""
 
     text = (text or "").strip()
     if not text:
         raise _no_text_error(ocr_res, "anonimizzare")
-
     stem = os.path.splitext(_safe_name(name, "documento.pdf"))[0] or "documento"
     out_name = f"{stem}_anonimizzato.pdf"
 
     excl = (server_config.parse_tag_list(raw_excl) if raw_excl is not None
             else _get_prefs()[0])
     # mapping_enabled=True e' interno: il risultato non esce da questa funzione.
-    res = analyze(text, excl, mapping_enabled=True)
+    res = analyze(text, excl, mapping_enabled=True, keep_values=keep_vals)
     if not res["mapping"]:
         raise _ReqError("Nessuna PII trovata: non c'e' niente da "
                         "anonimizzare in questo documento.", 422)

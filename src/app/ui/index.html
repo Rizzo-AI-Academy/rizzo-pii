@@ -374,6 +374,7 @@ try{const t=localStorage.getItem('pii_theme');if(t==='dark'||t==='light')documen
     .opts.cols3{grid-template-columns:1fr}
     .mapsw .sub{display:none}
   }
+.kept{border-bottom:1px dashed #c2410c;background:#fff7ed;border-radius:3px}.keep-toggle{padding:5px 9px;font-size:12px}
 </style>
 </head>
 <body>
@@ -529,7 +530,7 @@ try{const t=localStorage.getItem('pii_theme');if(t==='dark'||t==='light')documen
         <div class="legend" id="legend"></div>
         <div class="callout" id="dictNone" hidden><svg class="i"><use href="#i-lock"/></svg><div data-i18n="dict_off">Nessun dizionario: l'anonimizzazione di questo testo è <b>definitiva</b>.</div></div>
         <div class="tablewrap" id="tablewrap">
-          <table><thead><tr><th data-i18n="th_id">ID</th><th data-i18n="th_val">Valore originale</th><th data-i18n="th_type">Tipo</th></tr></thead>
+          <table><thead><tr><th data-i18n="th_id">ID</th><th data-i18n="th_val">Valore originale</th><th data-i18n="th_type">Tipo</th><th>In chiaro</th></tr></thead>
           <tbody id="maprows"></tbody></table>
         </div>
       </div>
@@ -644,7 +645,9 @@ try{const t=localStorage.getItem('pii_theme');if(t==='dark'||t==='light')documen
 
 <script>
 const $ = id => document.getElementById(id);
-let DATA = null;            // ultimo risultato di /analyze
+let DATA = null;            // risultato completo di /analyze
+let RES = null;             // risultato visibile dopo KEEP
+const KEEP = new Map();     // valore normalizzato -> valore originale
 let MAP = {};               // {placeholder -> valore} della sessione corrente
 const off = new Set();      // tag nascosti nell'anteprima evidenziata
 let L = 'it';               // lingua dell'UI
@@ -688,7 +691,7 @@ const T = {
   t_pdf_err:"Errore nella creazione del PDF",
   t_pdf_warn:(r,s)=>"Attenzione: "+(r+s)+" valori sono rimasti in chiaro ("+r+" non redatti, "+s+" troppo corti per essere cercati). Controlla il file prima di condividerlo.",
   dict_title:"Riepilogo e dizionario", dict_hint:"resta solo qui, in locale",
-  th_id:"ID", th_val:"Valore originale", th_type:"Tipo",
+  th_id:"ID", th_val:"Valore originale", th_type:"Tipo", row_show:"👁️ Mostra", row_hide:"🛡️ Anonimizza",
   callout:"Incolla qui la <b>risposta dell'LLM</b> (con placeholder come <span class=\"kbd\">[FULLNAME_1]</span>): l'app rimette i valori veri usando il dizionario di questa sessione. Se hai chiuso e riaperto l'app, <b>carica il dizionario .json</b> che avevi salvato.",
   r_title1:"Risposta con i placeholder", loaddict:"Carica dizionario",
   rin_ph:"Incolla qui la risposta di ChatGPT…",
@@ -781,7 +784,7 @@ const T = {
   t_pdf_err:"Error while creating the PDF",
   t_pdf_warn:(r,s)=>"Warning: "+(r+s)+" values were left in clear ("+r+" not redacted, "+s+" too short to be searched safely). Check the file before sharing it.",
   dict_title:"Summary and dictionary", dict_hint:"stays here only, locally",
-  th_id:"ID", th_val:"Original value", th_type:"Type",
+  th_id:"ID", th_val:"Original value", th_type:"Type", row_show:"👁️ Show", row_hide:"🛡️ Anonymize",
   callout:"Paste here the <b>LLM's answer</b> (with placeholders like <span class=\"kbd\">[FULLNAME_1]</span>): the app puts the real values back using this session's dictionary. If you closed and reopened the app, <b>load the .json dictionary</b> you saved.",
   r_title1:"Answer with placeholders", loaddict:"Load dictionary",
   rin_ph:"Paste ChatGPT's answer here…",
@@ -1174,11 +1177,11 @@ async function run(){
     const d=await resp.json();
     if(!resp.ok){toast(d.error||tt('t_error'),false,4500);return;}
     if(d.source_text&&FILE)$('src').value=d.source_text;
-    DATA=d;off.clear();
+    DATA=d;KEEP.clear();off.clear();
     // senza dizionario non tocchiamo MAP ne' il localStorage: nessuna chiave nuova nasce
     if(d.mapping_enabled!==false){MAP=d.mapping;try{localStorage.setItem('pii_map',JSON.stringify(MAP));}catch(e){}}
     render();
-    toast(T[L].pii_found(d.n_entities,d.n_unique));
+    toast(T[L].pii_found(RES.n_entities,RES.n_unique));
   }catch(e){toast(tt('t_error')+': '+e.message,false);}
   finally{go.disabled=false;go.innerHTML=old;}
 }
@@ -1194,14 +1197,32 @@ async function postDoc(url,extra){
   return postForm(url,{file:FILE,...extra});
 }
 
+const nrm=s=>String(s).trim().replace(/\s+/g,' ').toLowerCase();
+function applyKeep(d){
+  const segments=[],anon=[],by_label={},by_source={},mapping={},unique=new Set();let n=0,kept=0;
+  for(const s of d.segments){
+    if(!s.label){segments.push(s);anon.push(s.t);continue;}
+    if(s.t!=null&&KEEP.has(nrm(s.t))){segments.push({...s,kept:true});anon.push(s.t);kept++;continue;}
+    segments.push(s);anon.push(s.ph);n++;unique.add(s.ph);
+    by_label[s.label]=(by_label[s.label]||0)+1;by_source[s.src]=(by_source[s.src]||0)+1;
+    if(d.mapping&&s.ph in d.mapping)mapping[s.ph]=d.mapping[s.ph];
+  }
+  return {...d,segments,anonymized_text:anon.join(''),mapping,n_entities:n,n_unique:unique.size,n_kept:kept,by_label,by_source};
+}
+function toggleKeep(value){
+  const key=nrm(value);KEEP.has(key)?KEEP.delete(key):KEEP.set(key,value);
+  render();
+  if(RES&&RES.mapping_enabled!==false){MAP=RES.mapping;try{localStorage.setItem('pii_map',JSON.stringify(MAP));}catch(e){}}
+}
 function render(keepPdf){
-  const d=DATA;
+  const d=RES=applyKeep(DATA);
   if(!keepPdf){OUT_DOC=null;$('pdfOutView').innerHTML='';}  // risultato nuovo -> PDF censurato da rifare
   show($('dictCard'),true);
   const prev=$('prev');prev.innerHTML='';show(prev,true);show($('emptyPrev'),false);
   const frag=document.createDocumentFragment();
   for(const s of d.segments){
-    if(s.label){
+    if(s.kept){const sp=document.createElement('span');sp.className='kept';sp.textContent=s.t;frag.appendChild(sp);}
+    else if(s.label){
       const c=colors(s.label);const sp=document.createElement('span');
       sp.className='ph'+(off.has(s.label)?' dim':'');
       sp.style.background=c.bg;sp.style.borderColor=c.bd;sp.style.color=c.tx;
@@ -1233,17 +1254,20 @@ function render(keepPdf){
   }
   const hasMap=d.mapping_enabled!==false;
   const rows=$('maprows');rows.innerHTML='';
-  const keys=hasMap?Object.keys(d.mapping):[];
+  const full=hasMap?(DATA.mapping||{}):{};
+  const keys=Object.keys(full);
   show($('tablewrap'),keys.length>0);show($('dictNone'),!hasMap);
   $('dictHint').innerHTML=hasMap?tt('dict_hint'):tt('dict_off_hint');
   show($('dl'),hasMap);
-  for(const ph of keys){const lab=ph.slice(1,ph.lastIndexOf('_'));const c=colors(lab);
+  for(const ph of keys){const lab=ph.slice(1,ph.lastIndexOf('_'));const c=colors(lab),value=full[ph],isKept=KEEP.has(nrm(value));
     const tr=document.createElement('tr');
     tr.innerHTML=`<td class="k" style="color:${c.tx}">${escapeHtml(ph)}</td>`+
-      `<td class="v">${escapeHtml(d.mapping[ph])}</td>`+
-      `<td><span class="chip" style="cursor:default"><span class="sw" style="background:${c.bd}"></span>${escapeHtml(lab)}</span></td>`;
-    rows.appendChild(tr);}
-  $('ulock').textContent=keys.length?T[L].dict_n(keys.length):'';
+      `<td class="v">${escapeHtml(value)}</td>`+
+      `<td><span class="chip" style="cursor:default"><span class="sw" style="background:${c.bd}"></span>${escapeHtml(lab)}</span></td>`+
+      `<td><button class="btn ghost keep-toggle">${isKept?tt('row_hide'):tt('row_show')}</button></td>`;
+    tr.querySelector('button').onclick=()=>toggleKeep(value);rows.appendChild(tr);}
+  const visibleKeys=Object.keys(d.mapping||{});
+  $('ulock').textContent=visibleKeys.length?T[L].dict_n(visibleKeys.length):'';
   if(!keepPdf&&VIEW==='pdf')setView('pdf');
 }
 
@@ -1278,8 +1302,8 @@ function buildOutPdf(){
     try{
       if(OCR_JOB)await OCR_JOB;
       let resp;
-      if(FILE)resp=await postDoc('/pdf/preview',excl?{exclude_tags:excl.join(',')}:{});
-      else{const body={text};if(excl)body.exclude_tags=excl;
+      if(FILE)resp=await postDoc('/pdf/preview',{...(excl?{exclude_tags:excl.join(',')}:{ }),keep_values:JSON.stringify([...KEEP.values()])});
+      else{const body={text,keep_values:[...KEEP.values()]};if(excl)body.exclude_tags=excl;
         resp=await fetch('/pdf/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});}
       const d=await resp.json();
       if(!resp.ok){toast(d.error||tt('t_pdf_err'),false,5000);return null;}
@@ -1291,8 +1315,8 @@ function buildOutPdf(){
 }
 
 /* ================================ copia / download ================================ */
-$('copy').onclick=()=>{if(!DATA){toast(tt('t_need_anon'),false);return;}
-  navigator.clipboard.writeText(DATA.anonymized_text).then(()=>toast(tt('t_copied')));};
+$('copy').onclick=()=>{if(!RES){toast(tt('t_need_anon'),false);return;}
+  navigator.clipboard.writeText(RES.anonymized_text).then(()=>toast(tt('t_copied')));};
 $('dl').onclick=()=>{if(!DATA||!Object.keys(MAP).length){toast(tt('t_nothing_dl'),false);return;}
   const blob=new Blob([JSON.stringify(MAP,null,2)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
@@ -1392,7 +1416,7 @@ $('dictFile').onchange=e=>{const f=e.target.files[0];if(!f)return;
 $('go').onclick=run;
 function clearAll(){
   $('src').value='';resetDoc();
-  DATA=null;show($('prev'),false);show($('emptyPrev'),true);
+  DATA=null;RES=null;KEEP.clear();show($('prev'),false);show($('emptyPrev'),true);
   $('anon').value='';$('meta').innerHTML='';$('legend').innerHTML='';
   show($('dictCard'),false);$('ulock').textContent='';
   // senza queste righe il dizionario resta in MAP e su disco, e al riavvio
