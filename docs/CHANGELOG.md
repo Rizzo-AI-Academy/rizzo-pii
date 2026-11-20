@@ -5,6 +5,20 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-11-10 — L'importo senza separatore di migliaia lasciava i centesimi in chiaro (`detectors.py`)
+
+`€ 12.500,00` era coperto per intero, `euro 1500,00` no: la regex si fermava a tre
+cifre (`euro 1500`) e la virgola, che non è un carattere di parola, impediva
+all'allargamento dello span di raggiungere i centesimi. Nel testo anonimizzato
+restava `,00` (o `,50`, `,75`) accanto al placeholder. Lo stesso schema trattava
+`euro`/`EUR` come sottoparola: `neuro 1500` diventava un importo e
+`12500,00 europeo` si portava via anche la parola. Ora la valuta è una parola
+intera (una cifra può restare attaccata, `EUR1500`) e il numero senza gruppi
+include i centesimi. I gruppi con punto o spazio (`€ 12.500,00`, `€ 1 250,00`)
+restano com'erano. Test in `tests/test_detector_formats.py`.
+
+---
+
 ## 2026-10-22 — Il PDF protetto da password si riconosce già al caricamento (`app.py`)
 
 Completa la voce del 2026-09-25: lì il server rispondeva già col messaggio chiaro, ma
