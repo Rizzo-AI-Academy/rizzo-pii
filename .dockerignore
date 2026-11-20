@@ -1,11 +1,15 @@
-# Contesto di build minimo. Dockerfile (webapp) copia solo src/app/ e scarica il
-# modello da HF; Dockerfile.linux non fa nessun COPY (sorgenti e modello si
-# montano con -v a runtime), quindi qui si taglia tutto il resto: senza queste
-# righe il daemon si porterebbe dietro modelli e dataset, GB per niente.
+# Contesto di build minimo. Dockerfile (webapp) copia src/app/ e lo script che
+# scarica i modelli OCR, e scarica il modello PII da HF; Dockerfile.linux non fa
+# nessun COPY (sorgenti e modello si montano con -v a runtime), quindi qui si
+# taglia tutto il resto: senza queste righe il daemon si porterebbe dietro
+# modelli e dataset, GB per niente.
 
 # tutto, poi si riammette a mano il minimo indispensabile
 *
 !src/app/
+!scripts/
+scripts/*
+!scripts/fetch_ocr_models.py
 
 # roba pesante o rigenerabile che NON deve rientrare nemmeno via src/app/
 **/__pycache__/
