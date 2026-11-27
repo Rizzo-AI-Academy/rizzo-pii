@@ -187,6 +187,30 @@ def _match_rects(boxes, m):
     return rects
 
 
+
+def _span_rects(boxes, start, end):
+    """Rettangoli di uno span gia' localizzato: nessuna ricerca per valore."""
+    rects, cur = [], None
+    for i in range(start, end):
+        b = boxes[i]
+        if b is None:
+            continue
+        b = fitz.Rect(b)
+        if b.is_empty:
+            continue
+        if cur is None:
+            cur = fitz.Rect(b)
+        elif (min(b.y1, cur.y1) - max(b.y0, cur.y0)
+              > min(b.height, cur.height) * 0.5):  # stessa riga, non bordi quasi coincidenti
+            cur |= b
+        else:                                       # riga nuova
+            rects.append(cur)
+            cur = fitz.Rect(b)
+    if cur is not None and not cur.is_empty:
+        rects.append(cur)
+    return rects
+
+
 def _too_noisy(value):
     """Valori non localizzabili in modo sicuro in un PDF: frammenti con meno di 2
     caratteri alfanumerici, o di 2 sole cifre (es. "1", "C", "05", prodotti a
@@ -405,7 +429,7 @@ def _pad(rect, page_rect):
     return r & page_rect
 
 
-def _redact_scanned_page(page, ocr_page, usable, fill, text_color, redact_seals):
+def _legacy_redact_scanned_page(page, ocr_page, usable, fill, text_color, redact_seals):
     """Redazione sui pixel di una pagina letta con l'OCR. Ritorna
     ({placeholder: occorrenze}, n_timbri)."""
     import numpy as np
@@ -427,6 +451,79 @@ def _redact_scanned_page(page, ocr_page, usable, fill, text_color, redact_seals)
                     placed = True
                 if placed:
                     hits[ph] = hits.get(ph, 0) + 1
+    n_seals = 0
+    if redact_seals:
+        for b in ocr_page.get("seals") or ():
+            r = fitz.Rect(b) & prect
+            if not r.is_empty:
+                taken.append(r)
+                labels.append((r, SEAL_LABEL))
+                n_seals += 1
+
+    dpi = int(ocr_page.get("dpi") or 200)
+    pix = page.get_pixmap(dpi=dpi, alpha=False, colorspace=fitz.csRGB)
+    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+        pix.height, pix.stride // 3, 3)[:, :pix.width].copy()
+    sx, sy = pix.width / prect.width, pix.height / prect.height
+    color = np.array([round(c * 255) for c in fill], dtype=np.uint8)
+    for r in taken:
+        x0, y0 = max(0, int(r.x0 * sx)), max(0, int(r.y0 * sy))
+        x1 = min(pix.width, int(np.ceil(r.x1 * sx)))
+        y1 = min(pix.height, int(np.ceil(r.y1 * sy)))
+        if x1 > x0 and y1 > y0:
+            img[y0:y1, x0:x1] = color      # i pixel originali spariscono QUI
+    out = fitz.Pixmap(fitz.csRGB, pix.width, pix.height, img.tobytes(), 0)
+    jpeg = out.tobytes("jpeg", jpg_quality=OCR_JPEG_QUALITY)
+
+    # via TUTTO il contenuto originale della pagina: testo, immagini, grafica
+    page.add_redact_annot(prect)
+    kw = dict(images=fitz.PDF_REDACT_IMAGE_REMOVE, text=fitz.PDF_REDACT_TEXT_REMOVE)
+    try:
+        page.apply_redactions(graphics=fitz.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED, **kw)
+    except (TypeError, AttributeError):
+        page.apply_redactions(**kw)
+    page.insert_image(prect, stream=jpeg)
+
+    # placeholder in bianco sopra le caselle (testo vero: si legge e si copia)
+    for r, ph in labels:
+        fs = _fit_fontsize(ph, r)
+        if not fs:
+            continue
+        w = fitz.get_text_length(ph, fontname="helv", fontsize=fs)
+        x = r.x0 + (r.width - w) / 2
+        y = r.y0 + r.height / 2 + fs * 0.35
+        page.insert_text((x, y), ph, fontname="helv", fontsize=fs, color=text_color)
+    return hits, n_seals
+
+
+
+def _redact_scanned_page(page, ocr_page, usable, fill, text_color, redact_seals,
+                         occurrence_ranges=None, occurrence_masks=None):
+    """Redazione sui pixel di una pagina letta con l'OCR. Ritorna
+    ({placeholder: occorrenze}, n_timbri)."""
+    if occurrence_ranges is None and occurrence_masks is None:
+        return _legacy_redact_scanned_page(page, ocr_page, usable, fill, text_color, redact_seals)
+    import numpy as np
+
+    page.remove_rotation()      # coordinate OCR = pagina com'e' vista (ocr.py)
+    prect = page.rect
+    text, boxes = _ocr_char_index(ocr_page)
+    hits, taken, labels = {}, [], []
+    matches = (occurrence_ranges if occurrence_ranges is not None else
+               ((ph, m.start(), m.end()) for ph, _val, pat in usable
+                for m in pat.finditer(text)))
+    for ph, start, end in matches:
+        placed = False
+        rects = (occurrence_masks[(start, end)] if occurrence_masks is not None else
+                 [_pad(r, prect) for r in _span_rects(boxes, start, end)])
+        for r in rects:
+            if r.is_empty or _covered(r, taken):
+                continue
+            taken.append(r)
+            labels.append((r, ph))
+            placed = True
+        if placed:
+            hits[ph] = hits.get(ph, 0) + 1
     n_seals = 0
     if redact_seals:
         for b in ocr_page.get("seals") or ():
@@ -600,6 +697,420 @@ def _add_redact_annot(page, rect, text, fontsize, fill, text_color):
         return page.add_redact_annot(rect, cross_out=False, **kw)
     except TypeError:
         return page.add_redact_annot(rect, **kw)
+
+
+def _source_key(source):
+    return source["kind"], source.get("page"), source["id"], source["field"]
+
+
+def _verification_key(source):
+    # La riscrittura garbage=4 puo' rinumerare gli xref, non l'ordine degli oggetti.
+    return source["kind"], source.get("page"), source.get("index", source["id"]), source["field"]
+
+
+def _replace_spans(text, spans):
+    """Sostituzioni locali gia' validate, da destra verso sinistra."""
+    for start, end, placeholder in sorted(spans, reverse=True):
+        text = text[:start] + placeholder + text[end:]
+    return text
+
+
+def _glyph_key(char, box):
+    return char, tuple(round(float(v), 3) for v in box)
+
+
+def _glyph_keys(page):
+    text, boxes = _page_char_index(page)
+    return {_glyph_key(char, box) for char, box in zip(text, boxes)
+            if box is not None and not char.isspace()}
+
+
+def _appearance_characters(snapshot, page, rect):
+    rect = fitz.Rect(rect)
+    value = snapshot["text"][page["start"]:page["end"]]
+    return [(i, char) for i, (char, box) in enumerate(zip(value, page.get("boxes") or ()))
+            if not char.isspace() and box is not None
+            and rect.contains(fitz.Rect(box).tl + (fitz.Rect(box).br - fitz.Rect(box).tl) / 2)]
+
+
+def align_occurrence_aliases(entities, source_document):
+    """Condivide il placeholder solo per due viste della STESSA superficie.
+
+    L'uguaglianza del valore non e' una prova: richiediamo il rettangolo del
+    campo, l'allineamento ordinato dei caratteri e identici confini e label.
+    Non modifica gli input e non apre file. Casi incerti restano senza alias e
+    vengono rifiutati dall'esportatore se le scelte/placeholder non coincidono.
+    """
+    result = [dict(entity) for entity in entities]
+    pages = {s["page"]: s for s in source_document.get("sources", [])
+             if s["kind"] == "page"}
+    assigned = {}
+    for field in source_document.get("sources", []):
+        if not (field["kind"] == "widget" or
+                (field["kind"] == "annotation" and field.get("annotation_type") == 2
+                 and field["field"] == "content")):
+            continue
+        page = pages.get(field["page"])
+        if page is None or field.get("rect") is None or page.get("boxes") is None:
+            continue
+        appearance = _appearance_characters(source_document, page, field["rect"])
+        page_value = source_document["text"][page["start"]:page["end"]]
+        value = source_document["text"][field["start"]:field["end"]]
+        chars = [(i, c) for i, c in enumerate(value) if not c.isspace()]
+        if not chars or "".join(c for _, c in appearance) != "".join(c for _, c in chars):
+            continue
+        positions = {fi: pi for (fi, _), (pi, _) in zip(chars, appearance)}
+        for canonical in result:
+            if not field["start"] <= canonical["start"] < canonical["end"] <= field["end"]:
+                continue
+            first, stop = canonical["start"] - field["start"], canonical["end"] - field["start"]
+            targets = {positions[i] for i in range(first, stop) if i in positions}
+            if not targets:
+                continue
+            group = ":".join(map(str, (*_source_key(field), first, stop)))
+            for index, entity in enumerate(result):
+                if (entity.get("label") != canonical.get("label") or not entity.get("label")
+                        or not page["start"] <= entity["start"] < entity["end"] <= page["end"]):
+                    continue
+                a, b = entity["start"] - page["start"], entity["end"] - page["start"]
+                indices = {i for i, _ in appearance if a <= i < b}
+                # Nessun carattere dell'entita' puo' cadere fuori dal campo.
+                actual = {i for i in range(a, b) if not page_value[i].isspace()}
+                if indices != targets or actual != targets:
+                    continue
+                if index in assigned and assigned[index] != group:
+                    raise PdfError("Apparenze di campi sovrapposte: associazione delle occorrenze ambigua.")
+                assigned[index] = group
+                entity["ph"] = canonical["ph"]
+                entity["alias_group"] = canonical["alias_group"] = group
+                entity["alias_of"] = canonical["occurrence_id"]
+    return result
+
+
+def _check_appearance_choices(snapshot, plans):
+    """Un campo e la sua apparenza non sono due superfici indipendenti.
+
+    Il collegamento usa soltanto la geometria del campo, mai il valore cercato
+    nell'intero PDF. Scelte contraddittorie o un allineamento dubbio bloccano.
+    """
+    aliases, fields = {}, set()
+    for widget in snapshot["sources"]:
+        if not (widget["kind"] == "widget" or
+                (widget["kind"] == "annotation" and widget.get("annotation_type") == 2
+                 and widget["field"] == "content")):
+            continue
+        page = next((s for s in snapshot["sources"]
+                     if s["kind"] == "page" and s["page"] == widget["page"]), None)
+        wp = plans.get(_source_key(widget), {}).get("spans", [])
+        pp = plans.get(_source_key(page), {}).get("spans", []) if page else []
+        if not wp and not pp:
+            continue
+        if page is None or widget.get("rect") is None or page.get("boxes") is None:
+            if wp:
+                raise PdfError("Impossibile verificare l'apparenza del campo modulo selezionato.")
+            continue
+        appearance = _appearance_characters(snapshot, page, widget["rect"])
+        selected_page = {i for a, b, _ in pp for i in range(a, b)}
+        if not wp and not any(i in selected_page for i, _ in appearance):
+            continue
+        if not appearance:  # campo senza layer di apparenza estraibile
+            continue
+        value = snapshot["text"][widget["start"]:widget["end"]]
+        chars = [(i, c) for i, c in enumerate(value) if not c.isspace()]
+        if "".join(c for _, c in appearance) != "".join(c for _, c in chars):
+            raise PdfError("Apparenza del campo modulo non localizzabile con certezza.")
+        selected_widget = {i for a, b, _ in wp for i in range(a, b)}
+        if any((wi in selected_widget) != (pi in selected_page)
+               for (wi, _), (pi, _) in zip(chars, appearance)):
+            raise PdfError("Scelte incompatibili: seleziona o mantieni sia il campo modulo "
+                           "sia la sua stessa apparenza nella pagina.")
+        field_markers = {i: ph for a, b, ph in wp for i in range(a, b)}
+        page_markers = {i: ph for a, b, ph in pp for i in range(a, b)}
+        if any(field_markers.get(wi) != page_markers.get(pi)
+               for (wi, _), (pi, _) in zip(chars, appearance)):
+            raise PdfError("Segnaposti incoerenti fra campo e apparenza: "
+                           "le occorrenze collegate richiedono la stessa classificazione.")
+        if wp:
+            if page.get("origin") == "ocr":
+                raise PdfError("Campo modulo sovrapposto a contenuti OCR non verificabili separatamente.")
+            aliases.setdefault(page["page"], set()).update(i for i, _ in appearance)
+            fields.add(_source_key(widget))
+    return aliases, fields
+
+
+def _unaliased_ranges(start, stop, aliases):
+    """Parti di uno span non gestite dall'aggiornamento del campo modulo."""
+    first = None
+    for i in range(start, stop):
+        if i in aliases:
+            if first is not None:
+                yield first, i
+                first = None
+        elif first is None:
+            first = i
+    if first is not None:
+        yield first, stop
+
+
+def _bounded_ocr_masks(text, boxes, ranges, page_rect):
+    """Aggiunge margine senza oltrepassare i caratteri mantenuti.
+
+    I box CTC adiacenti possono toccarsi: non sono glifi realmente sovrapposti.
+    Si ritaglia SOLO il padding. L'intero box selezionato resta coperto; se e'
+    proprio quel box a sovrapporsi a testo mantenuto, l'export resta bloccato.
+    Le occorrenze selezionate vengono considerate insieme, non l'una contro
+    l'altra (es. via, civico e comune appartenenti allo stesso indirizzo).
+    """
+    selected = {i for _, start, stop, _ in ranges for i in range(start, stop)}
+    protected = [fitz.Rect(box) for i, (char, box) in enumerate(zip(text, boxes))
+                 if i not in selected and not char.isspace() and box is not None]
+    masks = {}
+    for _, start, stop, rects in ranges:
+        result = []
+        for base in rects:
+            mask = _pad(base, page_rect)
+            for kept in protected:
+                if (base & kept).get_area() > 0:
+                    raise PdfError("La geometria OCR coinvolge testo non selezionato.")
+                if (mask & kept).get_area() <= 0:
+                    continue
+                if kept.x0 >= base.x1:
+                    mask.x1 = min(mask.x1, kept.x0)
+                elif kept.x1 <= base.x0:
+                    mask.x0 = max(mask.x0, kept.x1)
+                elif kept.y0 >= base.y1:
+                    mask.y1 = min(mask.y1, kept.y0)
+                elif kept.y1 <= base.y0:
+                    mask.y0 = max(mask.y0, kept.y1)
+            if mask.is_empty or any((mask & kept).get_area() > 0 for kept in protected):
+                raise PdfError("Margini OCR non verificabili senza coinvolgere testo mantenuto.")
+            result.append(mask)
+        masks[(start, stop)] = result
+    return masks
+
+
+def redact_occurrences(pdf_bytes, occurrences, source_document, ocr_pages=None,
+                       redact_seals=False):
+    """Applica SOLO gli span revisionati allo snapshot da cui provengono.
+
+    Il percorso legacy `redact_pdf` resta compatibile. Qui nessun valore viene
+    cercato nel documento: ID dello stream, offset e geometria sono obbligatori.
+    `errors` e `residual` sono bloccanti per il chiamante; `unverified` descrive
+    immagini/allegati che richiedono presa visione, senza attestazioni complete.
+    """
+    ocr_pages = ocr_pages or {}
+    if not isinstance(source_document, dict) or not isinstance(source_document.get("text"), str):
+        raise PdfError("Snapshot del documento non valido.")
+    selected = sorted((dict(e) for e in occurrences if e.get("selected", True)),
+                      key=lambda e: (e.get("start", -1), e.get("end", -1)))
+    seen, end = set(), 0
+    for entity in selected:
+        start, stop = entity.get("start"), entity.get("end")
+        oid, ph = entity.get("occurrence_id"), entity.get("ph")
+        if (type(start) is not int or type(stop) is not int or not 0 <= start < stop <= len(source_document["text"])
+                or start < end or not isinstance(oid, str) or oid in seen
+                or not isinstance(ph, str) or not re.fullmatch(r"\[[A-Z][A-Z0-9_]*\]", ph)):
+            raise PdfError("Piano di sostituzione non valido o sovrapposto.")
+        seen.add(oid)
+        end = stop
+
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        raise PdfError("File PDF non valido o danneggiato.")
+    try:
+        if doc.needs_pass:
+            raise PdfError("PDF protetto da password.")
+        current = pdf_text.collect_readable_document(doc, ocr_pages=ocr_pages)
+        # Geometria e locator devono provenire proprio dall'artefatto in ingresso.
+        if current["text"] != source_document["text"] or current["sources"] != source_document.get("sources"):
+            raise PdfError("Il documento e' cambiato: ripeti l'analisi.")
+        if current["errors"]:
+            raise PdfError("Alcuni contenuti del PDF non sono ispezionabili.")
+
+        plans, page_ranges = {}, {}
+        by_ph, occurrence_ids = {}, []
+        # Lo span puo' attraversare piu' righe o stream separati soltanto da whitespace.
+        for entity in selected:
+            covered = [False] * (entity["end"] - entity["start"])
+            for source in current["sources"]:
+                start = max(entity["start"], source["start"])
+                stop = min(entity["end"], source["end"])
+                if start >= stop:
+                    continue
+                value = current["text"][start:stop]
+                if not value.strip():
+                    continue
+                local_start, local_end = start - source["start"], stop - source["start"]
+                for i in range(start - entity["start"], stop - entity["start"]):
+                    covered[i] = True
+                key = _source_key(source)
+                plan = plans.setdefault(key, {"source": source, "spans": []})
+                plan["spans"].append((local_start, local_end, entity["ph"]))
+                if source["kind"] == "page":
+                    boxes = source.get("boxes")
+                    if source.get("mapping_error") or boxes is None:
+                        raise PdfError("Un'occorrenza non e' localizzabile con certezza nel PDF.")
+                    if any(not char.isspace() and boxes[i] is None
+                           for i, char in enumerate(current["text"][source["start"]:source["end"]])
+                           if local_start <= i < local_end):
+                        raise PdfError("Geometria incompleta per un'occorrenza selezionata.")
+                    rects = _span_rects(boxes, local_start, local_end)
+                    if not rects:
+                        raise PdfError("Nessuna geometria per un'occorrenza selezionata.")
+                    page_ranges.setdefault(source["page"], []).append(
+                        (entity["ph"], local_start, local_end, rects))
+            if any(not char.isspace() and not ok for char, ok in
+                   zip(current["text"][entity["start"]:entity["end"]], covered)):
+                raise PdfError("Occorrenza senza provenienza verificabile.")
+            by_ph[entity["ph"]] = by_ph.get(entity["ph"], 0) + 1
+            occurrence_ids.append(entity["occurrence_id"])
+
+        widget_aliases, appearance_fields = _check_appearance_choices(current, plans)
+        for page_number, aliases in widget_aliases.items():
+            source = next(s for s in current["sources"]
+                          if s["kind"] == "page" and s["page"] == page_number)
+            page_ranges[page_number] = [
+                (ph, a, b, _span_rects(source["boxes"], a, b))
+                for ph, start, stop, _ in page_ranges.get(page_number, [])
+                for a, b in _unaliased_ranges(start, stop, aliases)]
+
+        report = {"occurrences": len(selected), "by_placeholder": by_ph,
+                  "not_found": [], "skipped": [], "residual": [], "annots": 0,
+                  "widgets": 0, "toc": 0, "embedded": 0, "ocr_pages": [], "seals": 0,
+                  "errors": [], "unverified": current["unverified"],
+                  "occurrence_ids": occurrence_ids}
+        glyph_checks, field_checks = {}, {}
+        touched_pages = {plan["source"]["page"] for plan in plans.values()
+                         if plan["source"]["kind"] in {"page", "annotation", "widget"}}
+        for source in current["sources"]:
+            if source["kind"] == "page" and source["origin"] == "native" and source["page"] in touched_pages:
+                value = current["text"][source["start"]:source["end"]]
+                retained = {_glyph_key(char, box) for i, (char, box) in enumerate(zip(value, source["boxes"] or ()))
+                            if i not in widget_aliases.get(source["page"], ())
+                            and box is not None and not char.isspace()}
+                glyph_checks[source["page"]] = set(), retained
+        for key, plan in plans.items():
+            source, spans = plan["source"], plan["spans"]
+            original = current["text"][source["start"]:source["end"]]
+            if source["kind"] == "page":
+                if source["origin"] != "native":
+                    continue
+                selected_indices = {i for start, stop, _ in spans for i in range(start, stop)}
+                removed, retained = set(), set()
+                for i, (char, box) in enumerate(zip(original, source["boxes"])):
+                    if (i not in widget_aliases.get(source["page"], ())
+                            and box is not None and not char.isspace()):
+                        (removed if i in selected_indices else retained).add(_glyph_key(char, box))
+                if removed & retained:
+                    raise PdfError("Geometrie sovrapposte fra occorrenze selezionate e mantenute.")
+                glyph_checks[source["page"]] = removed, retained
+                continue
+            updated = _replace_spans(original, spans)
+            field_checks[key] = updated
+
+        toc = doc.get_toc(simple=True)
+        for key, updated in field_checks.items():
+            if key[0] == "toc":
+                toc[key[2]][1] = updated
+                report["toc"] += len(plans[key]["spans"])
+        if report["toc"]:
+            doc.set_toc(toc)
+
+        for page_number, ranges in page_ranges.items():
+            if not ranges:
+                continue
+            page = doc[page_number]
+            if page_number in ocr_pages:
+                source = next(s for s in current["sources"]
+                              if s["kind"] == "page" and s["page"] == page_number)
+                original = current["text"][source["start"]:source["end"]]
+                masks = _bounded_ocr_masks(original, source["boxes"], ranges, page.rect)
+                _, seals = _redact_scanned_page(
+                    page, ocr_pages[page_number], [], REDACT_FILL, REDACT_TEXT,
+                    redact_seals, occurrence_ranges=[(ph, a, b) for ph, a, b, _ in ranges],
+                    occurrence_masks=masks)
+                report["ocr_pages"].append(page_number)
+                report["seals"] += seals
+            else:
+                for ph, _, _, rects in ranges:
+                    labeled = False
+                    for rect in rects:
+                        fs = 0 if labeled else _fit_fontsize(ph, rect)
+                        _add_redact_annot(page, rect, ph if fs else None,
+                                          fs or 6, REDACT_FILL, REDACT_TEXT)
+                        labeled = labeled or bool(fs)
+                page.apply_redactions()
+
+        # Rigenera l'apparenza DOPO le redazioni di pagina: altrimenti una
+        # casella riferita ai vecchi glifi potrebbe troncare il nuovo placeholder.
+        for key, updated in field_checks.items():
+            if key[0] == "widget":
+                page = doc[key[1]]
+                widget = page.load_widget(key[2])
+                widget.field_value = updated
+                widget.update()
+                report["widgets"] += len(plans[key]["spans"])
+            elif key[0] == "annotation":
+                page = doc[key[1]]
+                annot = page.load_annot(key[2])
+                info = dict(annot.info)
+                info[key[3]] = updated
+                annot.set_info(info)
+                annot.update()
+                report["annots"] += len(plans[key]["spans"])
+
+        report["embedded"] = _strip_embedded(doc)
+        _scrub_metadata(doc)
+        if doc.embfile_names():
+            report["errors"].append("attachments_remain")
+        elif report["embedded"]:
+            report["unverified"] = [
+                {"code": "attachments_removed"} if item["code"] == "attachments" else item
+                for item in report["unverified"]]
+        if any(value for name, value in (doc.metadata or {}).items()
+               if name not in {"format", "encryption", "creator", "producer"}):
+            report["errors"].append("metadata_remain")
+        if getattr(doc, "get_xml_metadata", lambda: "")():
+            report["errors"].append("xmp_remains")
+        out = doc.tobytes(garbage=4, deflate=True)
+    except PdfError:
+        raise
+    except Exception:
+        raise PdfError("Impossibile applicare o verificare il piano di sostituzione PDF.")
+    finally:
+        doc.close()
+
+    # Riapertura del risultato: verifica geometrica dei glifi, non ricerca del
+    # valore in altre occorrenze che l'utente ha scelto di conservare.
+    with fitz.open(stream=out, filetype="pdf") as verified:
+        for page_number, (removed, retained) in glyph_checks.items():
+            actual = _glyph_keys(verified[page_number])
+            if removed & actual:
+                report["residual"].append(f"page:{page_number}")
+            if not retained.issubset(actual):
+                report["errors"].append(f"text_preservation:{page_number}")
+        after = pdf_text.collect_readable_document(verified)
+        fields = {_verification_key(s): after["text"][s["start"]:s["end"]]
+                  for s in after["sources"] if s["kind"] != "page"}
+        for key, expected in field_checks.items():
+            if fields.get(_verification_key(plans[key]["source"])) != expected:
+                report["errors"].append("field_verification")
+            if key in appearance_fields:
+                widget_source = next((s for s in after["sources"]
+                                      if _verification_key(s) == _verification_key(plans[key]["source"])), None)
+                page_source = next(s for s in after["sources"]
+                                   if s["kind"] == "page" and s["page"] == key[1])
+                if widget_source and page_source.get("boxes") is not None:
+                    appearance = "".join(c for _, c in
+                                         _appearance_characters(after, page_source, widget_source["rect"]))
+                    if appearance != "".join(expected.split()):
+                        report["errors"].append("field_appearance")
+                else:
+                    report["errors"].append("field_appearance")
+        if after["errors"]:
+            report["errors"].append("output_inspection")
+    return out, report
 
 
 def text_to_pdf(text, margin=56.0, fontsize=10.5, leading=15.5):

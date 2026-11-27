@@ -1,0 +1,1866 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="/notarial/assets/mascot_shield.png">
+<title>Rizzo PII · Modalità notarile</title>
+<script>
+/* tema prima del primo paint: niente lampo bianco in modalita' scura */
+try{const t=localStorage.getItem('pii_theme');if(t==='dark'||t==='light')document.documentElement.dataset.theme=t;}catch(e){}
+</script>
+<style>
+  /* ============================ token ============================ */
+  :root{
+    --bg:#f6f5f9; --surface:#ffffff; --surface-2:#fbfafd; --sunken:#f1eff6;
+    --ink:#1f1d26; --muted:#6b6578; --soft:#9a94a6; --line:#e8e5ef; --line-2:#f1eff5;
+    --brand:#7c3a9e; --brand-dk:#643183; --brand-soft:#f4edf9; --brand-ring:rgba(124,58,158,.16);
+    --on-brand:#ffffff;
+    --ok:#1f8a4c; --ok-soft:#eaf7ef; --ok-line:#cde8d8;
+    --warn:#a35208; --warn-soft:#fff6e9; --warn-line:#f8dfb8;
+    --danger:#b42318; --danger-soft:#fdeeee;
+    --pdf-bg:#e9e7ef;
+    --shadow-sm:0 1px 2px rgba(33,26,48,.05);
+    --shadow:0 1px 2px rgba(33,26,48,.04),0 8px 24px rgba(33,26,48,.06);
+    --shadow-lg:0 20px 50px rgba(33,26,48,.18);
+    --r:16px; --r-sm:10px;
+    --mono:ui-monospace,SFMono-Regular,"Cascadia Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#141218; --surface:#1c1a22; --surface-2:#211e28; --sunken:#18161d;
+      --ink:#ecebf0; --muted:#aaa4b6; --soft:#7e788b; --line:#2e2a37; --line-2:#26232e;
+      --brand:#b47ad8; --brand-dk:#9d60c4; --brand-soft:#2a2135; --brand-ring:rgba(180,122,216,.24);
+      --on-brand:#1a1020;
+      --ok:#5bd08d; --ok-soft:#14261c; --ok-line:#1f4430;
+      --warn:#f2b45f; --warn-soft:#2a2013; --warn-line:#4a3618;
+      --danger:#f58b8b; --danger-soft:#2e1818;
+      --pdf-bg:#100e14;
+      --shadow-sm:0 1px 2px rgba(0,0,0,.3);
+      --shadow:0 1px 2px rgba(0,0,0,.25),0 8px 24px rgba(0,0,0,.25);
+      --shadow-lg:0 20px 50px rgba(0,0,0,.5);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#141218; --surface:#1c1a22; --surface-2:#211e28; --sunken:#18161d;
+    --ink:#ecebf0; --muted:#aaa4b6; --soft:#7e788b; --line:#2e2a37; --line-2:#26232e;
+    --brand:#b47ad8; --brand-dk:#9d60c4; --brand-soft:#2a2135; --brand-ring:rgba(180,122,216,.24);
+    --on-brand:#1a1020;
+    --ok:#5bd08d; --ok-soft:#14261c; --ok-line:#1f4430;
+    --warn:#f2b45f; --warn-soft:#2a2013; --warn-line:#4a3618;
+    --danger:#f58b8b; --danger-soft:#2e1818;
+    --pdf-bg:#100e14;
+    --shadow-sm:0 1px 2px rgba(0,0,0,.3);
+    --shadow:0 1px 2px rgba(0,0,0,.25),0 8px 24px rgba(0,0,0,.25);
+    --shadow-lg:0 20px 50px rgba(0,0,0,.5);
+  }
+
+  /* ============================ base ============================ */
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg);color:var(--ink);overflow-x:hidden;
+       font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+       font-size:14.5px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  [hidden]{display:none!important}
+  .i{width:17px;height:17px;flex:none;stroke:currentColor;fill:none;stroke-width:1.9;
+     stroke-linecap:round;stroke-linejoin:round}
+  .i.sm{width:15px;height:15px}
+  .i.lg{width:22px;height:22px}
+  a{color:var(--brand)}
+  ::selection{background:var(--brand-ring)}
+
+  .app{max-width:1320px;margin:0 auto;padding:16px 22px 12px;display:flex;flex-direction:column;
+       min-height:100vh}
+
+  /* ============================ header ============================ */
+  .top{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:11px;min-width:0}
+  .brand img{width:42px;height:42px;object-fit:contain;filter:drop-shadow(0 2px 4px rgba(20,28,46,.18))}
+  .brand h1{font-size:17.5px;margin:0;font-weight:700;letter-spacing:-.01em;line-height:1.2}
+  .brand h1 .ver{font-size:11px;font-weight:600;color:var(--soft);margin-left:3px}
+  .brand .sub{font-size:12px;color:var(--muted)}
+  .nav{display:inline-flex;background:var(--sunken);border:1px solid var(--line);border-radius:12px;
+       padding:3px;margin-left:6px}
+  .nav button{border:0;background:transparent;color:var(--muted);font:inherit;font-weight:600;
+              font-size:13.5px;padding:7px 14px;border-radius:9px;cursor:pointer;display:flex;
+              align-items:center;gap:7px;transition:.15s}
+  .nav button:hover{color:var(--ink)}
+  .nav button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-sm)}
+  .nav .num{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:11px;
+            background:var(--line);color:var(--muted);font-weight:700}
+  .nav button.on .num{background:var(--brand);color:var(--on-brand)}
+  .tools{margin-left:auto;display:flex;align-items:center;gap:6px;position:relative}
+  .pill{display:inline-flex;align-items:center;gap:7px;background:var(--ok-soft);color:var(--ok);
+        border:1px solid var(--ok-line);border-radius:999px;padding:5px 11px;font-size:12px;font-weight:600;
+        white-space:nowrap;margin-right:4px}
+  .pill .dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+  .pill .sep{opacity:.45}
+  .ib{width:34px;height:34px;display:grid;place-items:center;border-radius:10px;border:1px solid var(--line);
+      background:var(--surface);color:var(--muted);cursor:pointer;transition:.15s;padding:0}
+  .ib:hover{color:var(--ink);border-color:var(--soft)}
+  .ib.on{color:var(--brand);border-color:var(--brand);background:var(--brand-soft)}
+  .ib.warn{color:var(--warn);background:var(--warn-soft);border-color:var(--warn-line)}
+  select.lang{height:34px;border:1px solid var(--line);border-radius:10px;background:var(--surface);
+              color:var(--ink);font:inherit;font-size:12.5px;font-weight:600;padding:0 8px;cursor:pointer}
+  .tip{position:absolute;top:calc(100% + 10px);right:0;width:320px;z-index:60;background:var(--surface);
+       border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-lg);padding:13px 15px;
+       font-size:12.8px;color:var(--muted);line-height:1.55;opacity:0;visibility:hidden;
+       transform:translateY(-4px);transition:.15s}
+  .tip.open{opacity:1;visibility:visible;transform:none}
+  .tip b{color:var(--ink)}
+
+  /* ============================ layout ============================ */
+  .pane{display:none;flex-direction:column;flex:1}
+  .pane.on{display:flex}
+  .workspace{display:grid;grid-template-columns:1fr 1fr;gap:16px;height:max(560px,calc(100vh - 150px))}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+        box-shadow:var(--shadow);display:flex;flex-direction:column;min-height:0;min-width:0;
+        overflow:hidden;position:relative}
+  .hd{display:flex;align-items:center;gap:10px;padding:12px 14px 12px 16px;border-bottom:1px solid var(--line-2);
+      min-height:54px}
+  .hd h2{font-size:13px;margin:0;font-weight:700;color:var(--ink);display:flex;align-items:center;gap:8px}
+  .hd h2 .step{width:20px;height:20px;border-radius:7px;background:var(--brand-soft);color:var(--brand);
+               display:grid;place-items:center;font-size:11.5px;font-weight:800}
+  .hd .right{margin-left:auto;display:flex;align-items:center;gap:8px}
+  .bd{flex:1;min-height:0;display:flex;flex-direction:column;padding:12px 14px;gap:10px}
+  .ft{display:flex;align-items:center;gap:9px;padding:11px 14px;border-top:1px solid var(--line-2);
+      flex-wrap:wrap;background:var(--surface-2)}
+  .grow{flex:1}
+  .actions{display:flex;gap:9px;align-items:center;margin-left:auto}
+
+  /* segmented */
+  .seg{display:inline-flex;background:var(--sunken);border:1px solid var(--line);border-radius:10px;padding:2px}
+  .seg button{border:0;background:transparent;color:var(--muted);font:inherit;font-size:12.5px;font-weight:600;
+              padding:5px 11px;border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:6px}
+  .seg button:hover{color:var(--ink)}
+  .seg button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-sm)}
+
+  /* buttons */
+  .btn{font:inherit;border:1px solid transparent;border-radius:var(--r-sm);padding:9px 15px;font-weight:650;
+       font-size:13.5px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;transition:.15s;
+       white-space:nowrap}
+  .btn.primary{background:var(--brand);color:var(--on-brand);box-shadow:0 1px 2px rgba(124,58,158,.25)}
+  .btn.primary:hover{background:var(--brand-dk)}
+  .btn.lg{padding:10px 18px;font-size:14px}
+  .btn.ghost{background:var(--surface);color:var(--ink);border-color:var(--line)}
+  .btn.ghost:hover{border-color:var(--soft)}
+  .btn.quiet{background:transparent;color:var(--muted)}
+  .btn.quiet:hover{color:var(--ink);background:var(--sunken)}
+  .btn:disabled{opacity:.55;cursor:default}
+  .spin{width:15px;height:15px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;
+        animation:sp .7s linear infinite;opacity:.8;flex:none}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .kbd{font-family:var(--mono);background:var(--sunken);border:1px solid var(--line);border-radius:5px;
+       padding:0 5px;font-size:11px;color:var(--muted)}
+  .hint{color:var(--soft);font-size:12px}
+
+  /* ============================ input card ============================ */
+  .filebar{display:flex;align-items:center;gap:11px;padding:9px 11px;border:1px solid var(--line);
+           border-radius:12px;background:var(--surface-2)}
+  .filebar .fic{width:34px;height:34px;border-radius:9px;background:var(--brand-soft);color:var(--brand);
+                display:grid;place-items:center;flex:none}
+  .filebar .fname{font-weight:650;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .filebar .fmeta{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .filebar .ftxt{min-width:0;flex:1}
+  .badge{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:1px 8px;font-size:11.5px;
+         font-weight:650;border:1px solid var(--line);color:var(--muted);background:var(--surface);white-space:nowrap}
+  .badge.ok{color:var(--ok);background:var(--ok-soft);border-color:var(--ok-line)}
+  .badge.brand{color:var(--brand);background:var(--brand-soft);border-color:transparent}
+  .badge.warn{color:var(--warn);background:var(--warn-soft);border-color:var(--warn-line)}
+  .badge .spin{width:10px;height:10px;border-width:1.6px}
+  .progress{height:4px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:6px}
+  .progress span{display:block;height:100%;width:0;background:var(--brand);border-radius:99px;transition:width .35s}
+  .progress.indet span{width:35%;animation:ind 1.1s ease-in-out infinite}
+  @keyframes ind{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}
+
+  .editor{position:relative;flex:1;min-height:0;display:flex}
+  textarea{width:100%;flex:1;min-height:0;resize:none;border:1px solid var(--line);border-radius:12px;
+           padding:13px 14px;font-size:14px;line-height:1.65;color:var(--ink);background:var(--surface-2);
+           font-family:inherit;transition:border-color .15s,box-shadow .15s}
+  textarea:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-ring)}
+  textarea::placeholder{color:var(--soft)}
+  textarea.mono{font-family:var(--mono);font-size:13px}
+  .dropzone{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+            gap:10px;text-align:center;pointer-events:none;padding:20px;color:var(--muted)}
+  .dropzone img{width:96px;opacity:.95}
+  .dropzone .t1{font-size:15px;font-weight:700;color:var(--ink)}
+  .dropzone .t2{font-size:12.8px;max-width:360px}
+  .dropzone .fmts{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
+  .dropzone .btn{pointer-events:auto}
+  .dropzone .or{font-size:12px;color:var(--soft)}
+  .dragmask{position:absolute;inset:0;z-index:20;background:color-mix(in srgb,var(--brand) 9%,var(--surface) 88%);
+            border:2px dashed var(--brand);border-radius:var(--r);display:none;align-items:center;justify-content:center;
+            flex-direction:column;gap:8px;color:var(--brand);font-weight:700;font-size:15px;pointer-events:none}
+  .card.drag .dragmask{display:flex}
+
+  /* switch "Dizionario reversibile" */
+  .mapsw{display:flex;align-items:center;gap:10px;min-width:0;flex:1 1 220px}
+  .tsw{position:relative;width:38px;height:22px;border-radius:999px;background:var(--brand);border:0;padding:0;
+       flex:none;cursor:pointer;transition:.18s}
+  .tsw:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+  .tsw .knob{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;
+             transition:.18s;box-shadow:0 1px 3px rgba(0,0,0,.28)}
+  .tsw.off{background:var(--warn)}
+  .tsw.off .knob{transform:translateX(16px)}
+  .mapsw .ttl{font-size:12.8px;font-weight:650;display:flex;align-items:center;gap:6px;white-space:nowrap}
+  .mapsw .st{font-size:10px;font-weight:800;letter-spacing:.05em;border-radius:999px;padding:1px 7px;
+             background:var(--brand-soft);color:var(--brand)}
+  .mapsw.off .st{background:var(--warn-soft);color:var(--warn)}
+  .mapsw .sub{font-size:11.8px;color:var(--muted);line-height:1.35;overflow:hidden;text-overflow:ellipsis;
+              display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .mapsw.off .sub{color:var(--warn)}
+
+  /* ============================ views ============================ */
+  .view{flex:1;min-height:0;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:14px 16px;
+        background:var(--surface-2)}
+  .preview{white-space:pre-wrap;word-wrap:break-word;font-size:14px;line-height:1.75}
+  .ph{border-radius:6px;padding:0 6px 1px;font-weight:650;font-size:12.2px;cursor:help;border:1px solid;
+      white-space:nowrap;display:inline-block;line-height:1.5;transition:.12s}
+  .ph .ck{font-size:10px;opacity:.8;margin-left:3px}
+  .ph.dim{opacity:.25;filter:grayscale(.6)}
+  .empty{color:var(--soft);display:flex;flex-direction:column;align-items:center;justify-content:center;
+         height:100%;gap:10px;text-align:center;font-size:13.5px;padding:18px}
+  .empty img{width:104px;opacity:.95}
+  .empty .big{font-size:34px;opacity:.6}
+
+  /* PDF renderizzato (pagine PNG dal server) */
+  .pdfview{padding:12px;background:var(--pdf-bg)}
+  .pdfview .pg{position:relative;width:calc(100% * var(--z,1));margin:0 auto 12px;background:#fff;border-radius:4px;
+               overflow:hidden;box-shadow:0 1px 3px rgba(20,16,30,.2),0 6px 18px rgba(20,16,30,.12)}
+  .pdfview .pg:last-child{margin-bottom:0}
+  .pdfview .pg img{display:block;width:100%;height:auto;min-height:24px}
+  .pdfview .pg[style*="aspect-ratio"] img{height:100%;object-fit:contain}
+  .pdfview .pgn{position:absolute;right:7px;bottom:7px;background:rgba(28,24,40,.66);color:#fff;font-size:11px;
+                font-weight:700;border-radius:6px;padding:2px 7px}
+  .pdfview .pgo{position:absolute;left:7px;bottom:7px;background:var(--brand);color:#fff;font-size:10.5px;
+                font-weight:700;border-radius:6px;padding:2px 7px;display:flex;align-items:center;gap:4px}
+  .ocrl{position:absolute;inset:0;pointer-events:none;display:none}
+  .pdfview.show-ocr .ocrl{display:block}
+  .ocrl i{position:absolute;border:1.5px solid rgba(124,58,158,.85);background:rgba(124,58,158,.10);
+          border-radius:2px;pointer-events:auto}
+  .ocrl i:hover{background:rgba(124,58,158,.25)}
+  .zoomctl{position:sticky;top:0;z-index:3;display:flex;justify-content:flex-end;pointer-events:none;margin-bottom:8px}
+  .zoomctl .zp{pointer-events:auto;display:flex;align-items:center;gap:1px;background:var(--surface);
+               border:1px solid var(--line);border-radius:999px;padding:3px;box-shadow:var(--shadow)}
+  .zoomctl button{min-width:25px;height:25px;border:none;background:transparent;border-radius:999px;color:var(--ink);
+                  cursor:pointer;display:grid;place-items:center;font:inherit;font-size:14px;font-weight:700;padding:0 5px}
+  .zoomctl button:hover{background:var(--sunken)}
+  .zoomctl button.on{background:var(--brand-soft);color:var(--brand)}
+  .zoomctl .zpct{font-size:11px;font-weight:700;color:var(--muted);min-width:40px;text-align:center;cursor:pointer}
+  .zoomctl .zsep{width:1px;height:16px;background:var(--line);margin:0 3px}
+  .pdfbusy{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;height:100%;
+           color:var(--muted);font-size:13px;font-weight:600;text-align:center}
+  .pdfbusy .spin{width:22px;height:22px;color:var(--brand)}
+
+  /* ============================ summary / dictionary ============================ */
+  .dict{margin-top:16px}
+  .dict .bd{gap:12px}
+  .stats{display:flex;gap:8px;flex-wrap:wrap}
+  .stat{background:var(--surface-2);border:1px solid var(--line-2);border-radius:10px;padding:6px 11px;
+        font-size:12.3px;color:var(--muted);display:flex;align-items:center;gap:6px}
+  .stat b{color:var(--ink);font-weight:700}
+  .legend{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:999px;
+        padding:3px 10px;font-size:12px;font-weight:650;color:var(--ink);cursor:pointer;background:var(--surface);
+        user-select:none;transition:.12s}
+  .chip:hover{border-color:var(--soft)}
+  .chip.off{opacity:.4;text-decoration:line-through}
+  .chip .sw{width:9px;height:9px;border-radius:3px}
+  .chip .n{color:var(--muted);font-weight:700}
+  .tablewrap{max-height:320px;overflow:auto;border:1px solid var(--line-2);border-radius:12px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{position:sticky;top:0;background:var(--surface);text-align:left;color:var(--soft);font-weight:650;font-size:11px;
+     text-transform:uppercase;letter-spacing:.05em;padding:9px 12px;border-bottom:1px solid var(--line)}
+  td{padding:8px 12px;border-bottom:1px solid var(--line-2);vertical-align:top}
+  tr:last-child td{border-bottom:0}
+  td.k{font-family:var(--mono);font-weight:650;white-space:nowrap;font-size:12.5px}
+  td.v{word-break:break-word}
+  tr:hover td{background:var(--surface-2)}
+  .callout{display:flex;gap:11px;align-items:flex-start;background:var(--warn-soft);border:1px solid var(--warn-line);
+           border-radius:12px;padding:11px 14px;font-size:13px;color:var(--warn)}
+  .callout.info{background:var(--brand-soft);border-color:transparent;color:var(--ink)}
+  .callout .i{margin-top:2px}
+  .callout b{font-weight:700}
+
+  /* ============================ restore pane ============================ */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;height:max(520px,calc(100vh - 230px));margin-top:14px}
+  label.btn input{display:none}
+
+  /* ============================ modal ============================ */
+  .overlay{position:fixed;inset:0;background:rgba(20,16,30,.42);z-index:100;display:flex;align-items:center;
+           justify-content:center;opacity:0;visibility:hidden;transition:.18s;padding:16px}
+  .overlay.open{opacity:1;visibility:visible}
+  .modal{background:var(--surface);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow-lg);
+         width:640px;max-width:100%;max-height:calc(100vh - 32px);display:flex;flex-direction:column;overflow:hidden}
+  .mhd{display:flex;align-items:center;gap:10px;padding:16px 18px 0}
+  .mhd h3{margin:0;font-size:16px;font-weight:700;display:flex;align-items:center;gap:9px}
+  .mhd .ib{margin-left:auto;border:0}
+  .mtabs{display:flex;gap:4px;padding:12px 18px 0;border-bottom:1px solid var(--line)}
+  .mtabs button{border:0;background:transparent;font:inherit;font-size:13px;font-weight:650;color:var(--muted);
+                padding:9px 12px;border-bottom:2px solid transparent;cursor:pointer;display:flex;align-items:center;gap:7px;
+                margin-bottom:-1px}
+  .mtabs button.on{color:var(--brand);border-bottom-color:var(--brand)}
+  .mbody{padding:16px 18px;overflow:auto;flex:1}
+  .mpane{display:none}
+  .mpane.on{display:block}
+  .mft{display:flex;gap:9px;align-items:center;margin-top:16px;flex-wrap:wrap}
+  .note{font-size:11.8px;color:var(--soft);margin-top:12px;line-height:1.5;word-break:break-word}
+  .msub{font-size:12.8px;color:var(--muted);margin:0 0 12px;line-height:1.5}
+  .tg-bar{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+  .tg-bar .count{margin-left:auto;font-size:12px;color:var(--soft);font-weight:600}
+  .tg-list{max-height:44vh;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:4px;background:var(--surface-2)}
+  .tg-row{display:flex;align-items:flex-start;gap:10px;padding:8px 9px;border-radius:9px;cursor:pointer;user-select:none}
+  .tg-row:hover{background:var(--sunken)}
+  .tg-row input{margin:3px 0 0;accent-color:var(--brand);width:15px;height:15px;flex:none;cursor:pointer}
+  .tg-row .sw{width:9px;height:9px;border-radius:3px;margin-top:6px;flex:none}
+  .tg-row .nm{font-family:var(--mono);font-size:12.3px;font-weight:700}
+  .tg-row .ds{font-size:12.5px;color:var(--muted);line-height:1.45}
+  .tg-row .ex{font-size:11.5px;color:var(--soft)}
+  .tg-row.off{opacity:.55}
+  .tg-row.off .nm{text-decoration:line-through}
+  .field{display:flex;flex-direction:column;gap:5px;margin-bottom:13px}
+  .field label{font-size:11.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+  .field input{border:1px solid var(--line);border-radius:10px;padding:9px 12px;font:inherit;font-size:14px;
+               color:var(--ink);background:var(--surface-2)}
+  .field input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-ring)}
+  .status{font-size:12.5px;font-weight:600;padding:7px 11px;border-radius:9px;margin-top:10px}
+  .status.ok{background:var(--ok-soft);color:var(--ok)}
+  .status.fail{background:var(--danger-soft);color:var(--danger)}
+  .group{margin-bottom:18px}
+  .group h4{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .opts{display:grid;gap:8px}
+  .opts.cols3{grid-template-columns:repeat(3,1fr)}
+  .opt{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;padding:10px 12px;
+       cursor:pointer;transition:.12s;background:var(--surface)}
+  .opt:hover{border-color:var(--soft)}
+  .opt.on{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-ring);background:var(--brand-soft)}
+  .opt.dis{opacity:.45;cursor:not-allowed}
+  .opt input{margin:3px 0 0;accent-color:var(--brand)}
+  .opt .ot{font-weight:650;font-size:13.2px}
+  .opt .od{font-size:12px;color:var(--muted);line-height:1.4}
+  .engine{display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:12px;background:var(--surface-2);
+          border:1px solid var(--line-2);font-size:12.5px;color:var(--muted);margin-bottom:16px}
+  .engine b{color:var(--ink)}
+
+  /* ============================ footer / toast ============================ */
+  .credits{text-align:center;padding:14px 0 4px;font-size:11.5px;color:var(--soft)}
+  .credits b{color:var(--muted);font-weight:700}
+  .credits .u{color:var(--brand);font-weight:600}
+  #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(16px);max-width:min(620px,92vw);
+         background:#1c1828;color:#fff;padding:11px 16px;border-radius:12px;font-size:13.2px;font-weight:600;
+         box-shadow:0 12px 32px rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:.22s;z-index:200;
+         display:flex;align-items:center;gap:9px}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  #toast.ok::before{content:"✓";color:#6ee7a8;font-weight:800}
+  #toast.bad::before{content:"!";color:#1c1828;background:#f2b45f;border-radius:50%;width:17px;height:17px;
+                     display:grid;place-items:center;font-size:12px;font-weight:900;flex:none}
+  .review-grid{display:grid;grid-template-columns:minmax(230px,1fr) minmax(0,3fr);gap:18px}
+  .review-controls{border:0;padding:0;margin:0;min-width:0}
+  .review-controls:disabled{opacity:.65}
+  .category-tree{max-height:430px;overflow:auto;padding-right:8px}
+  .category-tree details{padding:7px 0;border-bottom:1px solid var(--line)}
+  .category-tree summary{cursor:pointer;font-weight:700}
+  .category-tree label{display:block;padding:5px 0;font-size:12px}
+  .category-tree .category-leaf{padding-left:19px;font-weight:400}
+  .review-occurrences{max-height:430px;overflow:auto}
+  .review-occurrence{display:grid;grid-template-columns:auto minmax(100px,1fr) minmax(150px,1fr);gap:10px;
+    padding:12px 4px;border-bottom:1px solid var(--line);align-items:start;font-size:12px}
+  .review-occurrence:focus-within{background:var(--brand-soft)}
+  .review-occurrence .occ-value{white-space:pre-wrap;overflow-wrap:anywhere;font-weight:600}
+  .review-occurrence select{max-width:100%;width:100%;font:inherit;background:var(--surface);color:var(--ink);
+    border:1px solid var(--line);border-radius:6px;padding:6px}
+  .review-occurrence .occ-reason{grid-column:2 / -1;color:var(--muted)}
+  .review-occurrence .pending{color:var(--warn);font-weight:700}
+  .review-filters{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:0 0 10px}
+  .review-filters select{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:5px}
+  .review-occurrence .occ-context{grid-column:2 / -1;white-space:pre-wrap;overflow-wrap:anywhere;
+    margin:0;padding:7px 9px;border-left:2px solid var(--line);color:var(--muted);font-weight:400}
+  #reviewWarnings{white-space:pre-line;font-size:12px;line-height:1.6;color:var(--warn);margin:0 0 12px}
+  .review-note{font-size:12px;color:var(--muted);margin:0 0 14px}
+  @media(max-width:760px){.review-grid{grid-template-columns:1fr}.category-tree{max-height:220px}}
+
+  /* ============================ responsive ============================ */
+  @media(max-width:1180px){
+    .brand .sub{display:none}
+    .pill .sep,.pill #ocrPill{display:none}
+  }
+  @media(max-width:960px){
+    .workspace,.grid2{grid-template-columns:1fr;height:auto}
+    .workspace .card,.grid2 .card{height:78vh;min-height:480px}
+    .nav{margin-left:0;order:3;width:100%}
+    .nav button{flex:1;justify-content:center}
+    .pill{display:none}
+  }
+  @media(max-width:560px){
+    .app{padding:12px 12px 8px}
+    .brand .sub{display:none}
+    .opts.cols3{grid-template-columns:1fr}
+    .mapsw .sub{display:none}
+  }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></symbol>
+    <symbol id="i-scan" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8h8"/><path d="M7 12h10"/><path d="M7 16h6"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></symbol>
+    <symbol id="i-tag" viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></symbol>
+  </defs>
+</svg>
+
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <img src="/notarial/assets/mascot_shield.png" alt="" onerror="this.style.display='none'">
+      <div>
+        <h1>Rizzo PII · Modalità notarile <span class="ver">v__VERSION__</span></h1>
+        <div class="sub" data-i18n="tagline">anonimizzazione locale su CPU · GDPR</div>
+      </div>
+    </div>
+    <nav class="nav" aria-label="Sezioni">
+      <button class="on" id="tab1" onclick="showTab(1)"><span class="num">1</span><span data-i18n="tab1">Anonimizza</span></button>
+      <button id="tab2" onclick="showTab(2)"><span class="num">2</span><span data-i18n="tab2">Ripristina</span></button>
+    </nav>
+    <div class="tools">
+      <a class="btn ghost" href="/">Rizzo PII standard</a>
+      <span class="pill" id="statusPill"><span class="dot"></span><span class="lbl" data-i18n="badge">100% in locale</span><span class="sep">·</span><span id="ocrPill">OCR</span></span>
+      <button class="ib" id="tagsBtn" onclick="openSettings('tags')" data-i18n-title="t_tags" title="Tag da anonimizzare"><svg class="i"><use href="#i-tag"/></svg></button>
+      <button class="ib" id="gearBtn" onclick="openSettings('ocr')" data-i18n-title="t_settings" title="Impostazioni"><svg class="i"><use href="#i-sliders"/></svg></button>
+      <button class="ib" id="themeBtn" onclick="toggleTheme()" data-i18n-title="t_theme" title="Tema chiaro / scuro"><svg class="i"><use href="#i-moon"/></svg></button>
+      <select id="lang" class="lang" title="Lingua / Language" aria-label="Lingua / Language">
+        <option value="it">IT</option>
+        <option value="en">EN</option>
+      </select>
+      <button class="ib warn" id="infoBtn" aria-label="Info"><svg class="i"><use href="#i-alert"/></svg></button>
+      <div class="tip" id="infoTip" data-i18n="notice"></div>
+    </div>
+  </header>
+
+  <div class="callout" id="backendWarning" role="alert" hidden>
+    <svg class="i"><use href="#i-alert"/></svg>
+    <div><strong id="backendWarningTitle">Applicazione locale non collegata</strong>
+      <div id="backendWarningText"></div>
+      <a class="btn ghost" id="backendOpen" href="http://127.0.0.1:5005/notarial/" hidden>Apri applicazione locale</a>
+      <button class="btn ghost" id="backendRetry" type="button" onclick="loadSettings()" hidden>Riprova collegamento</button>
+    </div>
+  </div>
+
+  <!-- ============ PANE 1: ANONIMIZZA ============ -->
+  <section class="pane on" id="pane1">
+    <div class="workspace">
+      <!-- input -->
+      <article class="card" id="inCard">
+        <div class="dragmask"><svg class="i lg"><use href="#i-upload"/></svg><span data-i18n="drop_here">Rilascia per caricare</span></div>
+        <div class="hd">
+          <h2><span class="step">1</span><span data-i18n="in_title">Documento</span></h2>
+          <div class="right">
+            <div class="seg" id="srcTabs" hidden>
+              <button class="on" id="sPdf" onclick="setSrcView('pdf')"><svg class="i sm"><use href="#i-file"/></svg><span data-i18n="v_pages">Pagine</span></button>
+              <button id="sText" onclick="setSrcView('text')"><span data-i18n="v_raw">Testo</span></button>
+            </div>
+            <label class="btn quiet" id="pickBtn" data-i18n-title="t_pick" title="Carica un file"><svg class="i"><use href="#i-upload"/></svg><span data-i18n="pick">Carica</span>
+              <input type="file" id="pdf" hidden accept=".pdf,.png,.jpg,.jpeg,.jfif,.tif,.tiff,.bmp,.webp,.gif,.md,.markdown,.txt,application/pdf,image/*,text/markdown,text/plain"></label>
+          </div>
+        </div>
+        <div class="bd">
+          <div class="filebar" id="fileBar" hidden>
+            <div class="fic"><svg class="i" id="fileIcon"><use href="#i-file"/></svg></div>
+            <div class="ftxt">
+              <div class="fname" id="fileName"></div>
+              <div class="fmeta"><span id="fileMeta"></span><span id="ocrBadge"></span></div>
+              <div class="progress" id="ocrProg" hidden><span></span></div>
+            </div>
+            <button class="ib" id="fileX" data-i18n-title="t_remove" title="Rimuovi il file"><svg class="i sm"><use href="#i-x"/></svg></button>
+          </div>
+          <div class="callout" id="ocrWarn" hidden><svg class="i"><use href="#i-alert"/></svg><div id="ocrWarnTxt"></div></div>
+          <div class="view pdfview" id="pdfSrcView" hidden></div>
+          <div class="editor" id="editor">
+            <textarea id="src" data-i18n-ph="src_ph" placeholder="Incolla qui il testo…" spellcheck="false"></textarea>
+            <div class="dropzone" id="drop">
+              <img src="/notarial/assets/mascot_doc.png" alt="" onerror="this.remove()">
+              <div class="t1" data-i18n="dz_title">Trascina qui un documento</div>
+              <div class="t2" data-i18n="dz_sub">PDF, scansioni e foto vengono lette in locale, con l'OCR quando serve. Oppure incolla il testo.</div>
+              <div class="fmts"><span class="badge">PDF</span><span class="badge">PNG · JPG · TIFF</span><span class="badge">.md · .txt</span></div>
+              <label class="btn ghost" for="pdf"><svg class="i"><use href="#i-upload"/></svg><span data-i18n="choose">Scegli un file</span></label>
+            </div>
+          </div>
+        </div>
+        <div class="ft">
+          <div class="mapsw" id="mapSw">
+            <button class="tsw off" id="mapToggle" role="switch" aria-checked="false" aria-labelledby="mapTtl" onclick="toggleMapping()"><span class="knob"></span></button>
+            <div style="min-width:0">
+              <div class="ttl" id="mapTtl"><span data-i18n="map_ttl">Dizionario reversibile</span><span class="st" id="mapState">DISATTIVO</span></div>
+              <div class="sub" id="mapSub"></div>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn quiet" id="clear"><svg class="i sm"><use href="#i-trash"/></svg><span data-i18n="clear">Pulisci</span></button>
+            <button class="btn primary lg" id="go" title="Ctrl+Enter"><svg class="i"><use href="#i-shield"/></svg><span data-i18n="go">Anonimizza</span></button>
+          </div>
+        </div>
+      </article>
+
+      <!-- output -->
+      <article class="card" id="outCard">
+        <div class="hd">
+          <h2><span class="step">2</span><span data-i18n="out_title">Risultato</span></h2>
+          <div class="right">
+            <div class="seg">
+              <button class="on" id="vPrev" onclick="setView('prev')"><span data-i18n="v_prev">Evidenziato</span></button>
+              <button id="vText" onclick="setView('text')"><span data-i18n="v_text">Testo</span></button>
+              <button id="vPdf" onclick="setView('pdf')"><span data-i18n="v_opdf">PDF censurato</span></button>
+            </div>
+          </div>
+        </div>
+        <div class="bd">
+          <div class="view" id="viewPrev">
+            <div class="empty" id="emptyPrev">
+              <img src="/notarial/assets/mascot_doc.png" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'big',textContent:'🕵️'}))">
+              <div data-i18n="empty_prev">L'anteprima con le PII evidenziate apparirà qui.</div>
+            </div>
+            <div class="preview" id="prev" hidden></div>
+          </div>
+          <div class="view pdfview" id="pdfOutView" hidden></div>
+          <textarea class="mono" id="anon" hidden readonly data-i18n-ph="anon_ph" placeholder="Il testo anonimizzato apparirà qui."></textarea>
+        </div>
+        <div class="ft">
+          <button class="btn primary" id="copy"><svg class="i"><use href="#i-copy"/></svg><span data-i18n="copy">Copia per ChatGPT</span></button>
+          <button class="btn ghost" id="dlpdf"><svg class="i"><use href="#i-download"/></svg><span data-i18n="dlpdf">PDF anonimizzato</span></button>
+          <button class="btn ghost" id="dl"><svg class="i"><use href="#i-book"/></svg><span data-i18n="dl">Dizionario</span></button>
+          <span class="hint grow" id="ulock" style="text-align:right"></span>
+        </div>
+      </article>
+    </div>
+
+    <section class="card dict" id="reviewCard" hidden>
+      <div class="hd"><h2>Selezione e revisione</h2><span class="hint" id="reviewCount" aria-live="polite"></span></div>
+      <div class="bd">
+        <p class="review-note">Scegli i dati da oscurare. Le scelte sulle singole occorrenze prevalgono sulle categorie.
+          Gli originali sono visibili durante questa revisione locale; non vengono salvati automaticamente.</p>
+        <p id="reviewWarnings" role="status" aria-live="polite"></p>
+        <p class="review-note" id="ambiguitySummary" aria-live="polite"></p>
+        <fieldset class="review-controls" id="reviewControls">
+          <legend class="hint">Categorie e singole occorrenze</legend>
+          <div class="review-grid"><div class="category-tree" id="categoryTree"></div>
+            <div><div class="review-filters"><label class="hint"><input type="checkbox" id="onlyAmbiguous"> Solo da revisionare</label>
+              <label class="hint" for="reviewType">Tipo di dato <select id="reviewType"><option value="">Tutti i tipi</option></select></label></div>
+              <div class="review-occurrences" id="occurrenceList"></div></div></div>
+        </fieldset>
+      </div>
+    </section>
+
+    <!-- riepilogo + dizionario: sotto le due colonne, a tutta larghezza -->
+    <section class="card dict" id="dictCard" hidden>
+      <div class="hd">
+        <h2><svg class="i sm"><use href="#i-book"/></svg><span data-i18n="dict_title">Riepilogo e dizionario</span></h2>
+        <div class="right hint" id="dictHint" data-i18n="dict_hint">resta solo qui, in locale</div>
+      </div>
+      <div class="bd">
+        <div class="stats" id="meta"></div>
+        <div class="legend" id="legend"></div>
+        <div class="callout" id="dictNone" hidden><svg class="i"><use href="#i-lock"/></svg><div data-i18n="dict_off">Nessun dizionario: l'anonimizzazione di questo testo è <b>definitiva</b>.</div></div>
+        <div class="tablewrap" id="tablewrap">
+          <table><thead><tr><th data-i18n="th_id">ID</th><th data-i18n="th_val">Valore originale</th><th data-i18n="th_type">Tipo</th></tr></thead>
+          <tbody id="maprows"></tbody></table>
+        </div>
+      </div>
+    </section>
+  </section>
+
+  <!-- ============ PANE 2: RIPRISTINA ============ -->
+  <section class="pane" id="pane2">
+    <div class="callout" id="rOff" hidden><svg class="i"><use href="#i-lock"/></svg>
+      <div data-i18n="r_off">Lo switch <b>Dizionario reversibile</b> è su DISATTIVO: le nuove anonimizzazioni non producono chiavi. Qui puoi comunque ripristinare con un dizionario <b>.json salvato in precedenza</b>.</div>
+    </div>
+    <div class="callout info" style="margin-top:0"><svg class="i"><use href="#i-info"/></svg>
+      <div data-i18n="callout">Incolla qui la <b>risposta dell'LLM</b>: l'app rimette i valori veri al posto dei placeholder.</div>
+    </div>
+    <div class="grid2">
+      <article class="card">
+        <div class="hd"><h2><span class="step">1</span><span data-i18n="r_title1">Risposta con i placeholder</span></h2>
+          <div class="right">
+            <label class="btn ghost"><svg class="i sm"><use href="#i-book"/></svg><span data-i18n="loaddict">Carica dizionario</span>
+              <input type="file" id="dictFile" accept="application/json,.json"></label>
+          </div></div>
+        <div class="bd">
+          <textarea id="rin" data-i18n-ph="rin_ph" placeholder="Incolla qui la risposta di ChatGPT…"></textarea>
+        </div>
+        <div class="ft">
+          <span class="hint grow" id="dictInfo"></span>
+          <button class="btn quiet" id="rclear"><svg class="i sm"><use href="#i-trash"/></svg><span data-i18n="clear">Pulisci</span></button>
+          <button class="btn primary lg" id="rev"><svg class="i"><use href="#i-undo"/></svg><span data-i18n="rev">Ripristina valori</span></button>
+        </div>
+      </article>
+      <article class="card">
+        <div class="hd"><h2><span class="step">2</span><span data-i18n="r_title2">Testo ripristinato</span></h2></div>
+        <div class="bd">
+          <div class="view"><div class="preview" id="rout"></div></div>
+        </div>
+        <div class="ft"><button class="btn primary" id="rcopy"><svg class="i"><use href="#i-copy"/></svg><span data-i18n="rcopy">Copia testo ripristinato</span></button></div>
+      </article>
+    </div>
+  </section>
+
+  <div class="credits">Realizzato da <b>Simone Rizzo</b> · sponsorizzato da <b>Rizzo AI Academy</b> · <span class="u">www.rizzoaiacademy.com</span><br>Adattamento per l’ambito notarile: <b>Nader Deghaili</b></div>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<!-- ============ IMPOSTAZIONI: tag, OCR, server ============ -->
+<div class="overlay" id="setOverlay">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="setTitle">
+    <div class="mhd">
+      <h3 id="setTitle"><svg class="i"><use href="#i-sliders"/></svg><span data-i18n="set_title">Impostazioni</span></h3>
+      <button class="ib" onclick="closeSettings()" aria-label="Chiudi"><svg class="i"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="mtabs">
+      <button id="mtTags" onclick="settingsTab('tags')"><svg class="i sm"><use href="#i-tag"/></svg><span data-i18n="mt_tags">Tag PII</span></button>
+      <button id="mtOcr" onclick="settingsTab('ocr')"><svg class="i sm"><use href="#i-scan"/></svg><span>OCR</span></button>
+      <button id="mtServer" onclick="settingsTab('server')" hidden><svg class="i sm"><use href="#i-server"/></svg><span data-i18n="mt_server">Server</span></button>
+    </div>
+    <div class="mbody">
+      <div class="note">Per impostare host e porta, torna alla modalità standard.</div>
+      <!-- tag -->
+      <div class="mpane" id="mpTags">
+        <p class="msub" data-i18n="tg_sub">Deseleziona i tipi che vuoi <b>lasciare in chiaro</b>: verranno comunque rilevati, ma non sostituiti da un placeholder.</p>
+        <div class="tg-bar">
+          <button class="btn ghost" onclick="setAllTags(true)" data-i18n="tg_all">Seleziona tutti</button>
+          <button class="btn ghost" onclick="setAllTags(false)" data-i18n="tg_none">Nessuno</button>
+          <span class="count" id="tgCount"></span>
+        </div>
+        <div class="tg-list" id="tgList"></div>
+        <div class="status" id="tgStatus" hidden></div>
+        <div class="mft">
+          <button class="btn primary" onclick="saveTags()"><svg class="i sm"><use href="#i-check"/></svg><span data-i18n="cfg_save">Salva</span></button>
+          <button class="btn ghost" onclick="closeSettings()" data-i18n="cfg_cancel">Annulla</button>
+        </div>
+        <div class="note" id="tgNote"></div>
+      </div>
+      <!-- ocr -->
+      <div class="mpane" id="mpOcr">
+        <div class="engine"><svg class="i"><use href="#i-cpu"/></svg><div id="ocrEngine"></div></div>
+        <div class="group">
+          <h4 data-i18n="ocr_mode_h">Quando usare l'OCR</h4>
+          <div class="opts" id="ocrModes"></div>
+        </div>
+        <div class="group">
+          <h4 data-i18n="ocr_q_h">Qualità</h4>
+          <div class="opts cols3" id="ocrPresets"></div>
+        </div>
+        <div class="group" id="legacySeals" style="margin-bottom:0" hidden>
+          <h4 data-i18n="ocr_more_h">Scansioni</h4>
+          <div class="mapsw" id="sealSw" style="align-items:flex-start">
+            <button class="tsw" id="sealToggle" role="switch" aria-checked="true" onclick="toggleSeals()"><span class="knob"></span></button>
+            <div>
+              <div class="ttl" data-i18n="seal_t">Copri anche i timbri</div>
+              <div class="sub" style="-webkit-line-clamp:3" data-i18n="seal_s">Nel PDF censurato i timbri trovati sulle pagine scansionate vengono coperti per intero: spesso contengono nomi, studi o numeri di iscrizione.</div>
+            </div>
+          </div>
+        </div>
+        <div class="note" data-i18n="ocr_note">Le preferenze valgono anche per l'API (/analyze, /pdf, /ocr) e sono salvate in locale.</div>
+      </div>
+      <!-- server -->
+      <div class="mpane" id="mpServer">
+        <div class="field"><label data-i18n="cfg_host">Indirizzo</label><input id="cfgHost" type="text" value="127.0.0.1" spellcheck="false"></div>
+        <div class="field"><label data-i18n="cfg_port">Porta</label><input id="cfgPort" type="number" min="1024" max="65535" value="5005"></div>
+        <div class="status" id="cfgStatus" hidden></div>
+        <div class="mft">
+          <button class="btn primary" onclick="saveConfig()"><svg class="i sm"><use href="#i-check"/></svg><span data-i18n="cfg_save">Salva</span></button>
+          <button class="btn ghost" onclick="checkPort()" data-i18n="cfg_check">Verifica porta</button>
+        </div>
+        <div class="note" data-i18n="cfg_restart_note">Le modifiche avranno effetto al prossimo avvio.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* Le API e le risorse documentali appartengono alla sola modalità notarile. */
+const NOTARIAL_BASE=window.PII_BASE||'/notarial';
+function notarialURL(path){
+  if(typeof path!=='string'||!path.startsWith('/')||path.startsWith('//')
+      ||path===NOTARIAL_BASE||path.startsWith(NOTARIAL_BASE+'/')
+      ||path.startsWith(NOTARIAL_BASE+'?')||path.startsWith(NOTARIAL_BASE+'#'))return path;
+  return NOTARIAL_BASE+path;
+}
+/* Il token resta in memoria e viene aggiunto anche alle richieste multipart. */
+const nativeFetch=window.fetch.bind(window);
+window.fetch=(input,options={})=>{
+  if(window.location.protocol==='file:')return Promise.reject(new Error('Avvia Rizzo PII e apri la modalità notarile dall’applicazione locale. Il file HTML da solo non può analizzare i documenti.'));
+  const target=notarialURL(input);
+  const url=new URL(typeof target==='string'?target:target.url,window.location.href);
+  if(url.origin!==window.location.origin)return Promise.reject(new Error('Connessioni esterne disabilitate.'));
+  const headers=new Headers(options.headers||(typeof Request!=='undefined'&&input instanceof Request?input.headers:undefined));
+  headers.set('X-PII-Token',window.PII_TOKEN||'');
+  return nativeFetch(target,{...options,headers,cache:'no-store'});
+};
+const $ = id => document.getElementById(id);
+let DATA = null;            // ultimo risultato di /analyze
+let MAP = {};               // {placeholder -> valore} della sessione corrente
+const off = new Set();      // tag nascosti nell'anteprima evidenziata
+let L = 'it';               // lingua dell'UI
+let TAGS = [];              // legenda dei tag (da /settings)
+let EXCL = new Set();       // tag da NON anonimizzare
+let TAGS_LOADED = false;    // /settings ha risposto -> si possono mandare gli override
+let MAPPING = false;        // irreversibile per impostazione predefinita
+let SETTINGS = {};          // ultima risposta di /settings (opzioni OCR comprese)
+let FILE = null;            // file PDF/immagine scelto (per ricaricarlo se il server lo ha scartato)
+let DOC = null;             // documento caricato e tenuto dal server (/preview): {doc_id, n_pages, kind, ocr...}
+let OUT_DOC = null;         // PDF anonimizzato (colonna destra), generato una volta sola
+let VIEW = 'prev';          // vista attiva a destra: prev | text | pdf
+let OCR_JOB = null;         // promessa dell'OCR in corso
+let OCR_BOXES = {};         // pagina (0-based) -> {size, lines:[{box,text}]} per l'overlay
+let GENERATION=0, ANALYSIS_CONTROLLER=null, OCR_CONTROLLER=null, PREVIEW_CONTROLLER=null, PDF_CONTROLLER=null;
+let RELEASE_JOB=Promise.resolve(), REVIEW_BUSY=false, ACK_REVISION=null;
+let REVIEW_CATEGORIES=null, REVIEW_OVERRIDES={}, REVIEW_CLASSIFICATIONS={};
+let BACKEND_ERROR='';
+// Il dizionario notarile vive soltanto nella sessione di questa pagina.
+
+/* ================================ i18n ================================ */
+const T = {
+ it:{
+  tagline:"anonimizzazione selettiva locale su CPU", badge:"100% in locale",
+  notice:"<b>Versione in sviluppo.</b> Il modello AI e l'OCR non sono perfetti e possono sbagliare: verifica sempre il risultato prima di usarlo. Il progetto è <b>open source</b>: se ti è utile <b>lascia una ⭐ alla repo</b> e aiutaci a migliorarlo. <a href=\"https://github.com/Rizzo-AI-Academy/rizzo-pii\" target=\"_blank\" rel=\"noopener\">Apri su GitHub ↗</a>",
+  tab1:"Anonimizza", tab2:"Ripristina",
+  t_tags:"Tag da anonimizzare", t_settings:"Impostazioni", t_theme:"Tema chiaro / scuro",
+  t_pick:"Carica un file", pick:"Carica", t_remove:"Rimuovi il file",
+  in_title:"Documento", out_title:"Risultato",
+  src_ph:"Incolla qui il testo dell'atto, del contratto o della sentenza…",
+  drop_here:"Rilascia per caricare",
+  dz_title:"Trascina qui un documento",
+  dz_sub:"PDF, scansioni e foto vengono letti in locale, con l'OCR quando serve. Oppure incolla direttamente il testo.",
+  choose:"Scegli un file",
+  go:"Analizza e rivedi", clear:"Pulisci",
+  v_pages:"Pagine", v_raw:"Testo", v_prev:"Evidenziato", v_text:"Testo", v_opdf:"PDF censurato",
+  t_prev_loading:"Preparo l'anteprima…", t_prev_err:"Anteprima non disponibile",
+  t_pdf_render:"Genero il PDF anonimizzato…",
+  t_pdf_locked:"PDF protetto da password: rimuovi la protezione e riprova",
+  t_zoom_out:"Riduci zoom", t_zoom_in:"Aumenta zoom", t_zoom_reset:"Reimposta zoom",
+  t_ocr_boxes:"Mostra il testo riconosciuto dall'OCR",
+  empty_prev:"L'anteprima con le PII evidenziate apparirà qui.",
+  anon_ph:"Il testo anonimizzato apparirà qui.",
+  copy:"Copia risultato", dl:"Dizionario", dlpdf:"Esporta PDF",
+  t_pdf_making:"Genero il PDF…", t_pdf_ok:"PDF anonimizzato scaricato",
+  t_pdf_err:"Errore nella creazione del PDF",
+  t_pdf_warn:(r,s)=>"Attenzione: "+(r+s)+" valori sono rimasti in chiaro ("+r+" non redatti, "+s+" troppo corti per essere cercati). Controlla il file prima di condividerlo.",
+  dict_title:"Riepilogo e dizionario", dict_hint:"resta solo qui, in locale",
+  th_id:"ID", th_val:"Valore originale", th_type:"Tipo",
+  callout:"Incolla qui la <b>risposta dell'LLM</b> (con placeholder come <span class=\"kbd\">[FULLNAME_1]</span>): l'app rimette i valori veri usando il dizionario di questa sessione. Se hai chiuso e riaperto l'app, <b>carica il dizionario .json</b> che avevi salvato.",
+  r_title1:"Risposta con i placeholder", loaddict:"Carica dizionario",
+  rin_ph:"Incolla qui la risposta di ChatGPT…",
+  rev:"Ripristina valori", r_title2:"Testo ripristinato",
+  empty_rout:"Il testo con i valori reali apparirà qui.", rcopy:"Copia testo ripristinato",
+  st_ent:"entità", st_uniq:"valori unici", st_model:"dal modello",
+  st_regex:"da regex/checksum", st_chars:"caratteri", st_ocr:"pagine lette con OCR",
+  analyzing:"Analizzo…", ocr_wait:"Attendo l'OCR…",
+  t_need_input:"Inserisci del testo o carica un documento", t_error:"Errore",
+  t_copied:"Testo anonimizzato copiato", t_need_anon:"Prima anonimizza un testo",
+  t_nothing_dl:"Niente da scaricare", t_dl_ok:"Dizionario scaricato",
+  t_paste_restore:"Incolla la risposta da ripristinare",
+  t_no_dict:"Nessun dizionario: caricane uno .json", t_restored:"Valori ripristinati",
+  t_nothing_copy:"Niente da copiare", t_restored_copied:"Testo ripristinato copiato",
+  t_dict_loaded:"Dizionario caricato", t_json_invalid:"JSON non valido",
+  t_drag_pdf:"Formato non supportato: usa PDF, immagini (PNG, JPG, TIFF), .md o .txt",
+  t_text_loaded:"Testo caricato",
+  pii_found:(n,u)=>n+" PII trovate · "+u+" valori unici",
+  dict_n:n=>n+" ID nel dizionario",
+  dict_loaded_n:n=>"dizionario caricato · "+n+" ID",
+  dict_session:n=>"dizionario sessione · "+n+" ID",
+  chars:n=>n.toLocaleString('it'),
+  pages:n=>n+(n===1?" pagina":" pagine"),
+  k_pdf:"PDF", k_image:"Immagine", k_text:"Testo",
+  ocr_native:"testo nativo", ocr_running:(d,t)=>"OCR "+d+"/"+t+"…", ocr_starting:"avvio OCR…",
+  ocr_done:(n,s)=>"OCR · "+n+(n===1?" pagina":" pagine")+" · "+s+" s",
+  ocr_err:"OCR non riuscito", ocr_missing_b:"OCR non disponibile",
+  ocr_missing:"Questo documento è una <b>scansione</b>, ma i modelli OCR non sono installati: senza OCR non c'è testo da anonimizzare.",
+  ocr_off_warn:"Il documento contiene pagine scansionate ma l'OCR è <b>disattivato</b> nelle impostazioni: quelle pagine non verranno lette.",
+  ocr_pill_ok:"OCR pronto", ocr_pill_off:"OCR assente",
+  t_ocr_done:n=>"Testo riconosciuto su "+n+(n===1?" pagina":" pagine"),
+  set_title:"Impostazioni", mt_tags:"Tag PII", mt_server:"Server",
+  cfg_host:"Indirizzo", cfg_port:"Porta",
+  cfg_check:"Verifica porta", cfg_save:"Salva", cfg_cancel:"Annulla",
+  cfg_available:"Porta disponibile ✓", cfg_in_use:"Porta occupata ✗",
+  cfg_saved:"Configurazione salvata (riavvia per applicare)",
+  cfg_restart_note:"Le modifiche avranno effetto al prossimo avvio.",
+  tg_sub:"Deseleziona i tipi che vuoi <b>lasciare in chiaro</b>: verranno comunque rilevati, ma non sostituiti da un placeholder.",
+  tg_all:"Seleziona tutti", tg_none:"Nessuno",
+  tg_saved:"Selezione salvata", tg_err:"Salvataggio non riuscito",
+  tg_note:p=>"Salvato in "+p+" · vale anche per l'API /analyze.",
+  tg_env:"⚠️ La variabile d'ambiente PII_EXCLUDE_TAGS ha la precedenza al prossimo avvio.",
+  tg_count:(on,tot)=>on+" di "+tot+" tag anonimizzati",
+  st_excl:"tag esclusi",
+  map_ttl:"Dizionario reversibile", map_on:"ATTIVO", map_off:"DISATTIVO",
+  map_sub_on:"Potrai rimettere i valori veri nella risposta dell'LLM.",
+  map_sub_off:"Modalità <b>irreversibile</b>: nessun dizionario di ripristino. Verifica le scelte prima di esportare.",
+  t_map_on:"Dizionario reversibile attivo", t_map_off:"Dizionario disattivato: anonimizzazione definitiva",
+  dict_off:"Modalità <b>irreversibile</b>: nessun dizionario di ripristino. I dati mantenuti restano visibili.",
+  dict_off_hint:"lo switch è su DISATTIVO",
+  r_off:"Lo switch <b>Dizionario reversibile</b> è su DISATTIVO: le nuove anonimizzazioni non producono chiavi. Qui puoi comunque ripristinare con un dizionario <b>.json salvato in precedenza</b>.",
+  ocr_mode_h:"Quando usare l'OCR", ocr_q_h:"Qualità", ocr_more_h:"Scansioni",
+  m_auto:"Automatico", m_auto_d:"Solo le pagine senza testo: scansioni e foto. Consigliato.",
+  m_force:"Tutte le pagine", m_force_d:"Anche i PDF con testo, se il testo copiato è illeggibile. Nel PDF censurato quelle pagine diventano immagini.",
+  m_off:"Disattivato", m_off_d:"Usa solo il testo contenuto nel PDF. Le immagini vengono comunque lette.",
+  p_fast:"Veloce", p_fast_d:"~0,5 s/pagina, modelli tiny",
+  p_balanced:"Bilanciata", p_balanced_d:"~1 s/pagina. Consigliata.",
+  p_accurate:"Accurata", p_accurate_d:"layout più preciso, ~2 s/pagina",
+  p_na:"modelli non installati",
+  seal_t:"Copri anche i timbri",
+  seal_s:"Nel PDF censurato i timbri trovati sulle pagine scansionate vengono coperti per intero: spesso contengono nomi, studi o numeri di iscrizione.",
+  ocr_note:"Le preferenze valgono anche per l'API (/analyze, /pdf, /ocr) e sono salvate in locale.",
+  eng_ok:(e,d)=>"<b>"+e+"</b><br>Tutto in locale, solo CPU · modelli in "+d,
+  eng_missing:d=>"<b>Modelli OCR non trovati.</b> Le scansioni non potranno essere lette. Cartella attesa: "+d,
+  t_saved:"Impostazioni salvate",
+ },
+ en:{
+  tagline:"local anonymization on CPU · GDPR", badge:"100% local",
+  notice:"<b>Work in progress.</b> The AI model and the OCR aren't perfect and can make mistakes: always check the result before relying on it. The project is <b>open source</b>: if it helps you, <b>leave a ⭐ on the repo</b> and help us improve it. <a href=\"https://github.com/Rizzo-AI-Academy/rizzo-pii\" target=\"_blank\" rel=\"noopener\">Open on GitHub ↗</a>",
+  tab1:"Anonymize", tab2:"Restore",
+  t_tags:"Tags to anonymize", t_settings:"Settings", t_theme:"Light / dark theme",
+  t_pick:"Upload a file", pick:"Upload", t_remove:"Remove the file",
+  in_title:"Document", out_title:"Result",
+  src_ph:"Paste here the text of the deed, contract or judgment…",
+  drop_here:"Drop to upload",
+  dz_title:"Drop a document here",
+  dz_sub:"PDFs, scans and photos are read locally, with OCR when needed. Or just paste the text.",
+  choose:"Choose a file",
+  go:"Anonymize", clear:"Clear",
+  v_pages:"Pages", v_raw:"Text", v_prev:"Highlighted", v_text:"Text", v_opdf:"Redacted PDF",
+  t_prev_loading:"Preparing the preview…", t_prev_err:"Preview not available",
+  t_pdf_render:"Building the anonymized PDF…",
+  t_pdf_locked:"Password-protected PDF: remove the protection and try again",
+  t_zoom_out:"Zoom out", t_zoom_in:"Zoom in", t_zoom_reset:"Reset zoom",
+  t_ocr_boxes:"Show the text recognized by OCR",
+  empty_prev:"The preview with highlighted PII will appear here.",
+  anon_ph:"The anonymized text will appear here.",
+  copy:"Copy for ChatGPT", dl:"Dictionary", dlpdf:"Anonymized PDF",
+  t_pdf_making:"Building the PDF…", t_pdf_ok:"Anonymized PDF downloaded",
+  t_pdf_err:"Error while creating the PDF",
+  t_pdf_warn:(r,s)=>"Warning: "+(r+s)+" values were left in clear ("+r+" not redacted, "+s+" too short to be searched safely). Check the file before sharing it.",
+  dict_title:"Summary and dictionary", dict_hint:"stays here only, locally",
+  th_id:"ID", th_val:"Original value", th_type:"Type",
+  callout:"Paste here the <b>LLM's answer</b> (with placeholders like <span class=\"kbd\">[FULLNAME_1]</span>): the app puts the real values back using this session's dictionary. If you closed and reopened the app, <b>load the .json dictionary</b> you saved.",
+  r_title1:"Answer with placeholders", loaddict:"Load dictionary",
+  rin_ph:"Paste ChatGPT's answer here…",
+  rev:"Restore values", r_title2:"Restored text",
+  empty_rout:"The text with the real values will appear here.", rcopy:"Copy restored text",
+  st_ent:"entities", st_uniq:"unique values", st_model:"from the model",
+  st_regex:"from regex/checksum", st_chars:"characters", st_ocr:"pages read with OCR",
+  analyzing:"Analyzing…", ocr_wait:"Waiting for OCR…",
+  t_need_input:"Enter some text or upload a document", t_error:"Error",
+  t_copied:"Anonymized text copied", t_need_anon:"Anonymize a text first",
+  t_nothing_dl:"Nothing to download", t_dl_ok:"Dictionary downloaded",
+  t_paste_restore:"Paste the answer to restore",
+  t_no_dict:"No dictionary: load a .json one", t_restored:"Values restored",
+  t_nothing_copy:"Nothing to copy", t_restored_copied:"Restored text copied",
+  t_dict_loaded:"Dictionary loaded", t_json_invalid:"Invalid JSON",
+  t_drag_pdf:"Unsupported format: use PDF, images (PNG, JPG, TIFF), .md or .txt",
+  t_text_loaded:"Text loaded",
+  pii_found:(n,u)=>n+" PII found · "+u+" unique values",
+  dict_n:n=>n+" IDs in the dictionary",
+  dict_loaded_n:n=>"dictionary loaded · "+n+" IDs",
+  dict_session:n=>"session dictionary · "+n+" IDs",
+  chars:n=>n.toLocaleString('en'),
+  pages:n=>n+(n===1?" page":" pages"),
+  k_pdf:"PDF", k_image:"Image", k_text:"Text",
+  ocr_native:"native text", ocr_running:(d,t)=>"OCR "+d+"/"+t+"…", ocr_starting:"starting OCR…",
+  ocr_done:(n,s)=>"OCR · "+n+(n===1?" page":" pages")+" · "+s+" s",
+  ocr_err:"OCR failed", ocr_missing_b:"OCR not available",
+  ocr_missing:"This document is a <b>scan</b>, but the OCR models are not installed: without OCR there is no text to anonymize.",
+  ocr_off_warn:"The document has scanned pages but OCR is <b>turned off</b> in the settings: those pages won't be read.",
+  ocr_pill_ok:"OCR ready", ocr_pill_off:"no OCR",
+  t_ocr_done:n=>"Text recognized on "+n+(n===1?" page":" pages"),
+  set_title:"Settings", mt_tags:"PII tags", mt_server:"Server",
+  cfg_host:"Host", cfg_port:"Port",
+  cfg_check:"Check port", cfg_save:"Save", cfg_cancel:"Cancel",
+  cfg_available:"Port available ✓", cfg_in_use:"Port in use ✗",
+  cfg_saved:"Config saved (restart to apply)",
+  cfg_restart_note:"Changes take effect on next startup.",
+  tg_sub:"Untick the types you want to <b>leave in clear text</b>: they are still detected, but not replaced by a placeholder.",
+  tg_all:"Select all", tg_none:"None",
+  tg_saved:"Selection saved", tg_err:"Could not save",
+  tg_note:p=>"Saved to "+p+" · also applies to the /analyze API.",
+  tg_env:"⚠️ The PII_EXCLUDE_TAGS environment variable takes precedence on next startup.",
+  tg_count:(on,tot)=>on+" of "+tot+" tags anonymized",
+  st_excl:"excluded tags",
+  map_ttl:"Reversible dictionary", map_on:"ON", map_off:"OFF",
+  map_sub_on:"You'll be able to put the real values back into the LLM's answer.",
+  map_sub_off:"<b>Irreversible</b> anonymization: no key is created.",
+  t_map_on:"Reversible dictionary on", t_map_off:"Dictionary off: anonymization is irreversible",
+  dict_off:"No dictionary: anonymization of this text is <b>irreversible</b>.",
+  dict_off_hint:"the switch is OFF",
+  r_off:"The <b>Reversible dictionary</b> switch is OFF: new anonymizations produce no keys. You can still restore here using a <b>.json dictionary saved earlier</b>.",
+  ocr_mode_h:"When to use OCR", ocr_q_h:"Quality", ocr_more_h:"Scans",
+  m_auto:"Automatic", m_auto_d:"Only pages without text: scans and photos. Recommended.",
+  m_force:"All pages", m_force_d:"Also PDFs with text, when the copied text is garbled. In the redacted PDF those pages become images.",
+  m_off:"Off", m_off_d:"Use only the text inside the PDF. Images are still read.",
+  p_fast:"Fast", p_fast_d:"~0.5 s/page, tiny models",
+  p_balanced:"Balanced", p_balanced_d:"~1 s/page. Recommended.",
+  p_accurate:"Accurate", p_accurate_d:"sharper layout, ~2 s/page",
+  p_na:"models not installed",
+  seal_t:"Also cover stamps",
+  seal_s:"In the redacted PDF, stamps found on scanned pages are fully covered: they often contain names, firms or registration numbers.",
+  ocr_note:"Preferences also apply to the API (/analyze, /pdf, /ocr) and are stored locally.",
+  eng_ok:(e,d)=>"<b>"+e+"</b><br>Fully local, CPU only · models in "+d,
+  eng_missing:d=>"<b>OCR models not found.</b> Scans can't be read. Expected folder: "+d,
+  t_saved:"Settings saved",
+ }
+};
+const tt=k=>T[L][k];
+
+function routEmpty(){
+  return '<div class="empty"><img src="/notarial/assets/mascot_doc.png" alt="" onerror="this.replaceWith(Object.assign(document.createElement(\'div\'),{className:\'big\',textContent:\'🔓\'}))"><div>'+tt('empty_rout')+'</div></div>';
+}
+
+function applyLang(l){
+  L=(l==='en')?'en':'it';
+  try{localStorage.setItem('pii_lang',L);}catch(e){}
+  document.documentElement.lang=L;$('lang').value=L;
+  document.querySelectorAll('[data-i18n]').forEach(el=>{
+    const v=T[L][el.getAttribute('data-i18n')]; if(typeof v==='string') el.innerHTML=v;});
+  document.querySelectorAll('[data-i18n-ph]').forEach(el=>{
+    const v=T[L][el.getAttribute('data-i18n-ph')]; if(v!=null) el.placeholder=v;});
+  document.querySelectorAll('[data-i18n-title]').forEach(el=>{
+    const v=T[L][el.getAttribute('data-i18n-title')]; if(v!=null) el.title=v;});
+  if(!$('rout')._raw) $('rout').innerHTML=routEmpty();
+  renderMapping();renderFileBar();renderOcrPill();
+  if($('setOverlay').classList.contains('open')){renderTags();renderOcrSettings();}
+  if(DATA) render(true);
+}
+
+/* ================================ tema ================================ */
+function isDark(){
+  const t=document.documentElement.dataset.theme;
+  return t==='dark'||(t!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches);
+}
+function renderThemeBtn(){$('themeBtn').querySelector('use').setAttribute('href',isDark()?'#i-sun':'#i-moon');}
+function toggleTheme(){
+  const t=isDark()?'light':'dark';
+  document.documentElement.dataset.theme=t;
+  try{localStorage.setItem('pii_theme',t);}catch(e){}
+  renderThemeBtn();if(DATA)render(true);
+}
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change',()=>{renderThemeBtn();if(DATA)render(true);});
+
+/* ================== scroll sincronizzato editor (sx) <-> anteprima (dx) ================== */
+let syncing=false;
+function matchScroll(target,from){
+  const rf=from.scrollHeight-from.clientHeight, rt=target.scrollHeight-target.clientHeight;
+  target.scrollTop = rf>0 ? (from.scrollTop/rf)*rt : 0;
+}
+function linkScroll(a,b){
+  a.addEventListener('scroll',()=>{
+    if(syncing)return; syncing=true; matchScroll(b,a);
+    setTimeout(()=>syncing=false,0);});
+}
+
+/* ================== colore deterministico per tipo di tag ================== */
+function hue(s){let h=0;for(const c of s)h=(h*31+c.charCodeAt(0))%360;return h;}
+function colors(label){const h=hue(label);
+  return isDark()
+    ? {bg:`hsl(${h} 26% 20%)`,bd:`hsl(${h} 28% 36%)`,tx:`hsl(${h} 62% 82%)`}
+    : {bg:`hsl(${h} 56% 96%)`,bd:`hsl(${h} 42% 81%)`,tx:`hsl(${h} 40% 36%)`};}
+
+function toast(msg,ok=true,ms=2000){const t=$('toast');t.textContent=msg;t.className='show '+(ok?'ok':'bad');
+  clearTimeout(t._t);t._t=setTimeout(()=>t.className='',ms);}
+function escapeHtml(s){return String(s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
+function show(el,on){el.hidden=!on;}
+
+/* ================== render di un PDF a video ==================
+   Le pagine arrivano gia' renderizzate dal server (/doc/<id>/page/<n>.png): niente
+   viewer PDF del browser (dentro Tauri non e' garantito) e niente librerie esterne
+   (l'app e' offline). `loading=lazy`: 200 pagine non sono 200 download all'apertura. */
+function renderPages(el,doc){
+  el.innerHTML='';
+  el.appendChild(zoomBar(el));
+  for(let i=0;i<doc.n_pages;i++){
+    const pg=document.createElement('div');pg.className='pg';pg.dataset.page=i;
+    const sz=(doc.page_sizes||[])[i];if(sz)pg.style.aspectRatio=sz[0]+' / '+sz[1];
+    const im=document.createElement('img');
+    im.loading='lazy';im.alt=(i+1)+' / '+doc.n_pages;
+    im.src=notarialURL(`/doc/${doc.doc_id}/page/${i}.png`);
+    pg.appendChild(im);
+    const n=document.createElement('span');n.className='pgn';
+    n.textContent=(i+1)+' / '+doc.n_pages;pg.appendChild(n);
+    el.appendChild(pg);
+  }
+  el.scrollTop=0;
+  if(el===$('pdfSrcView'))drawOcrBoxes();
+}
+
+/* barra zoom: +/- e reset sulla %, ctrl/cmd+rotellina sull'intera vista (issue #92).
+   Sulla colonna sinistra c'e' anche il pulsante che mostra le righe lette dall'OCR. */
+function zoomBar(el){
+  const bar=document.createElement('div');bar.className='zoomctl';
+  const pill=document.createElement('div');pill.className='zp';
+  const mk=(txt,title)=>{const b=document.createElement('button');b.type='button';b.innerHTML=txt;b.title=title;return b;};
+  const out=mk('−',tt('t_zoom_out')),inn=mk('+',tt('t_zoom_in'));
+  const pct=document.createElement('span');pct.className='zpct';pct.title=tt('t_zoom_reset');
+  const setZ=z=>{z=Math.max(.5,Math.min(3,z));el.style.setProperty('--z',z);pct.textContent=Math.round(z*100)+'%';};
+  const curZ=()=>parseFloat(el.style.getPropertyValue('--z'))||1;
+  out.onclick=()=>setZ(curZ()-.25);inn.onclick=()=>setZ(curZ()+.25);pct.onclick=()=>setZ(1);
+  el.onwheel=e=>{if(!e.ctrlKey&&!e.metaKey)return;e.preventDefault();setZ(curZ()+(e.deltaY<0?.1:-.1));};
+  pill.append(out,pct,inn);
+  if(el===$('pdfSrcView')){
+    const sep=document.createElement('span');sep.className='zsep';
+    const ob=mk('<svg class="i sm"><use href="#i-scan"/></svg>',tt('t_ocr_boxes'));
+    ob.id='ocrBoxBtn';ob.hidden=!Object.keys(OCR_BOXES).length;
+    ob.classList.toggle('on',el.classList.contains('show-ocr'));
+    ob.onclick=()=>{el.classList.toggle('show-ocr');ob.classList.toggle('on',el.classList.contains('show-ocr'));};
+    sep.hidden=ob.hidden;sep.id='ocrBoxSep';
+    pill.append(sep,ob);
+  }
+  bar.appendChild(pill);setZ(1);
+  return bar;
+}
+function busy(el,msg){el.innerHTML='<div class="pdfbusy"><span class="spin"></span><div>'+msg+'</div></div>';}
+
+/* righe lette dall'OCR sopra le pagine (coordinate in punti -> percentuali della pagina) */
+function drawOcrBoxes(){
+  const view=$('pdfSrcView');
+  view.querySelectorAll('.pg').forEach(pg=>{
+    pg.querySelector('.ocrl')?.remove();pg.querySelector('.pgo')?.remove();
+    const b=OCR_BOXES[pg.dataset.page];if(!b)return;
+    const lay=document.createElement('div');lay.className='ocrl';
+    const [w,h]=b.size;
+    for(const ln of b.lines){
+      const r=document.createElement('i');const [x0,y0,x1,y1]=ln.box;
+      r.style.left=(x0/w*100)+'%';r.style.top=(y0/h*100)+'%';
+      r.style.width=((x1-x0)/w*100)+'%';r.style.height=((y1-y0)/h*100)+'%';
+      r.title=ln.text;lay.appendChild(r);
+    }
+    pg.appendChild(lay);
+    const tag=document.createElement('span');tag.className='pgo';
+    tag.innerHTML='<svg class="i sm" style="width:12px;height:12px"><use href="#i-scan"/></svg>OCR';
+    pg.appendChild(tag);
+  });
+  const has=Object.keys(OCR_BOXES).length>0;
+  if($('ocrBoxBtn')){$('ocrBoxBtn').hidden=!has;$('ocrBoxSep').hidden=!has;}
+}
+
+/* ================================ tabs ================================ */
+function showTab(n){
+  $('tab1').classList.toggle('on',n===1);$('tab2').classList.toggle('on',n===2);
+  $('pane1').classList.toggle('on',n===1);$('pane2').classList.toggle('on',n===2);
+}
+
+/* ================== documento caricato (colonna sinistra) ==================
+   PDF e immagini vanno a /preview: il server li tiene in memoria (le immagini
+   diventano un PDF), ne ritorna il testo nativo e dice quali pagine sono
+   scansioni. Quelle si leggono con /ocr in streaming, mostrando l'avanzamento.
+   Da li' in poi /analyze e /pdf lavorano sul doc_id: niente secondo upload e
+   niente secondo OCR (il risultato e' in cache sul server).
+   I file di testo si leggono qui, direttamente nella casella. */
+const TEXT_EXT=/\.(md|markdown|txt|text)$/i;
+const IMG_EXT=/\.(png|jpe?g|jfif|tiff?|bmp|webp|gif)$/i;
+function fileKind(f){
+  if(f.type==='application/pdf'||/\.pdf$/i.test(f.name))return 'pdf';
+  if(/^image\//.test(f.type)||IMG_EXT.test(f.name))return 'image';
+  if(TEXT_EXT.test(f.name)||/^text\//.test(f.type))return 'text';
+  return null;
+}
+async function readTextFile(f){
+  const b=new Uint8Array(await f.arrayBuffer());
+  const strip=s=>s.replace(/^﻿/,'').replace(/\u0000/g,'');
+  if(b[0]===0xFF&&b[1]===0xFE)return strip(new TextDecoder('utf-16le').decode(b));
+  if(b[0]===0xFE&&b[1]===0xFF)return strip(new TextDecoder('utf-16be').decode(b));
+  try{return strip(new TextDecoder('utf-8',{fatal:true}).decode(b));}
+  catch(e){return strip(new TextDecoder('windows-1252').decode(b));}
+}
+
+function setSrcView(v){
+  const p=(v==='pdf'&&DOC);
+  $('sPdf').classList.toggle('on',!!p);$('sText').classList.toggle('on',!p);
+  show($('pdfSrcView'),!!p);show($('editor'),!p);
+  updateDrop();
+}
+function updateDrop(){show($('drop'),!$('src').value&&!FILE&&document.activeElement!==$('src'));}
+
+function invalidateResult(release=true){
+  GENERATION++;
+  if(ANALYSIS_CONTROLLER)ANALYSIS_CONTROLLER.abort();
+  if(PDF_CONTROLLER)PDF_CONTROLLER.abort();
+  ANALYSIS_CONTROLLER=PDF_CONTROLLER=null;
+  DATA=null;MAP={};OUT_DOC=null;PDF_JOB=null;ACK_REVISION=null;REVIEW_BUSY=false;
+  REVIEW_CATEGORIES=null;REVIEW_OVERRIDES={};REVIEW_CLASSIFICATIONS={};
+  $('prev').textContent='';$('anon').value='';$('maprows').textContent='';
+  $('categoryTree').textContent='';$('occurrenceList').textContent='';$('pdfOutView').textContent='';
+  $('dictInfo').textContent='';$('meta').textContent='';$('legend').textContent='';$('ulock').textContent='';
+  $('rin').value='';$('rout').textContent='';$('rout')._raw='';
+  show($('reviewCard'),false);show($('dictCard'),false);show($('prev'),false);show($('emptyPrev'),true);
+  $('reviewControls').disabled=false;
+  if(VIEW!=='prev')setView('prev');
+  if(release){
+    if(OCR_CONTROLLER)OCR_CONTROLLER.abort();
+    if(PREVIEW_CONTROLLER)PREVIEW_CONTROLLER.abort();
+    OCR_CONTROLLER=PREVIEW_CONTROLLER=null;OCR_JOB=null;DOC=null;OCR_BOXES={};
+    $('pdfSrcView').textContent='';show($('srcTabs'),false);setSrcView('text');setOcr(null);
+    RELEASE_JOB=RELEASE_JOB.catch(()=>{}).then(()=>fetch('/session',{method:'DELETE'})).catch(()=>{});
+  }
+}
+
+function resetDoc(){
+  invalidateResult(true);
+  FILE=null;DOC=null;OCR_BOXES={};OUT_DOC=null;
+  $('src').readOnly=false;
+  $('pdf').value='';$('pdfSrcView').innerHTML='';$('pdfSrcView').classList.remove('show-ocr');
+  show($('srcTabs'),false);show($('ocrWarn'),false);setOcr(null);
+  renderFileBar();setSrcView('text');
+}
+
+async function onFile(f){
+  const k=fileKind(f);
+  if(!k){toast(tt('t_drag_pdf'),false,3500);return;}
+  resetDoc();
+  const generation=GENERATION;
+  $('src').value='';
+  await RELEASE_JOB;
+  if(generation!==GENERATION)return;
+  if(k==='text'){
+    const text=await readTextFile(f);if(generation!==GENERATION)return;
+    $('src').value=text;updateDrop();
+    toast(tt('t_text_loaded'));return;
+  }
+  FILE=f;$('src').readOnly=true;renderFileBar();
+  show($('srcTabs'),true);show($('pdfSrcView'),true);show($('editor'),false);
+  $('sPdf').classList.add('on');$('sText').classList.remove('on');
+  busy($('pdfSrcView'),tt('t_prev_loading'));
+  try{await loadPreview();if(generation!==GENERATION)return;}
+  catch(e){
+    if(generation!==GENERATION||e.name==='AbortError')return;
+    if(e.code==='pdf_locked'){resetDoc();toast(tt('t_pdf_locked'),false,4000);return;}
+    DOC=null;show($('srcTabs'),false);setSrcView('text');
+    toast(e.message||tt('t_prev_err'),false,3500);   // il file resta: /analyze lo ricarica
+    return;
+  }
+  maybeStartOcr();
+}
+
+/* /preview del file scelto. Ripetibile: se il server ha scartato il documento
+   dalla sua cache (LRU) lo si ricarica da qui senza che l'utente faccia nulla. */
+async function loadPreview(){
+  const generation=GENERATION,file=FILE,controller=new AbortController();
+  if(PREVIEW_CONTROLLER)PREVIEW_CONTROLLER.abort();PREVIEW_CONTROLLER=controller;
+  const fd=new FormData();fd.append('file',file);
+  const r=await fetch('/preview',{method:'POST',body:fd,signal:controller.signal});
+  const d=await r.json().catch(()=>({}));
+  if(generation!==GENERATION||file!==FILE)throw new DOMException('Documento cambiato','AbortError');
+  if(!r.ok){const e=new Error(d.error||tt('t_prev_err'));e.code=d.code;throw e;}
+  DOC=d;OCR_BOXES={};
+  $('src').value=d.text||'';
+  renderPages($('pdfSrcView'),d);
+  renderFileBar();
+  return d;
+}
+
+function maybeStartOcr(){
+  if(!DOC)return;
+  const o=DOC.ocr||{};const need=(o.needed||[]).length;
+  show($('ocrWarn'),false);
+  if(!need){setOcr({state:'native'});return;}
+  if(!o.available){setOcr({state:'missing'});warnOcr(tt('ocr_missing'));return;}
+  if((o.done||[]).length>=need){setOcr({state:'done',n:need,secs:0});loadOcrBoxes();return;}
+  startOcr();
+}
+function warnOcr(html){$('ocrWarnTxt').innerHTML=html;show($('ocrWarn'),true);}
+
+/* OCR in streaming (NDJSON): un evento per pagina letta -> barra di avanzamento */
+function startOcr(){
+  if(!DOC)return null;
+  const docId=DOC.doc_id,generation=GENERATION,controller=new AbortController();
+  if(OCR_CONTROLLER)OCR_CONTROLLER.abort();OCR_CONTROLLER=controller;
+  setOcr({state:'running',done:0,total:(DOC.ocr.needed||[]).length});
+  OCR_JOB=(async()=>{
+    try{
+      let r=await postForm('/ocr',{doc_id:docId,stream:'1'},{signal:controller.signal});
+      if(r.status===410&&FILE){await loadPreview();return startOcrAgain();}
+      if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error||('HTTP '+r.status));}
+      const reader=r.body.getReader();const dec=new TextDecoder();let buf='',fin=null;
+      for(;;){
+        const {value,done}=await reader.read();if(done)break;
+        buf+=dec.decode(value,{stream:true});let i;
+        while((i=buf.indexOf('\n'))>=0){
+          const line=buf.slice(0,i).trim();buf=buf.slice(i+1);if(!line)continue;
+          const ev=JSON.parse(line);
+          if(generation!==GENERATION||!DOC||DOC.doc_id!==docId){reader.cancel();return null;}
+          if(ev.event==='start')setOcr({state:'running',done:0,total:ev.ocr_pages.length});
+          else if(ev.event==='page')setOcr({state:'running',done:ev.done,total:ev.total});
+          else if(ev.event==='error')throw new Error(ev.error);
+          else if(ev.event==='done')fin=ev;
+        }
+      }
+      if(!fin)throw new Error(tt('ocr_err'));
+      if(generation!==GENERATION||!DOC||DOC.doc_id!==docId)return null;
+      DOC.ocr.done=fin.ocr_pages;
+      $('src').value=fin.text||$('src').value;
+      setOcr({state:'done',n:fin.ocr_pages.length,secs:fin.elapsed});
+      toast(T[L].t_ocr_done(fin.ocr_pages.length));
+      loadOcrBoxes();
+      return fin;
+    }catch(e){
+      if(e.name!=='AbortError'&&generation===GENERATION&&DOC&&DOC.doc_id===docId){setOcr({state:'error'});toast(tt('ocr_err')+': '+e.message,false,4000);}
+      return null;
+    }finally{if(OCR_CONTROLLER===controller){OCR_JOB=null;OCR_CONTROLLER=null;}}
+  })();
+  return OCR_JOB;
+}
+function startOcrAgain(){OCR_JOB=null;return startOcr();}
+
+async function loadOcrBoxes(){
+  if(!DOC)return;
+  const docId=DOC.doc_id,generation=GENERATION;
+  try{
+    const r=await postForm('/ocr',{doc_id:docId,lines:'boxes'});
+    if(!r.ok)return;
+    const d=await r.json();if(generation!==GENERATION||DOC?.doc_id!==docId)return;OCR_BOXES={};
+    for(const p of d.pages||[])if(p.source==='ocr'&&p.lines)OCR_BOXES[p.page-1]={size:p.size,lines:p.lines};
+    drawOcrBoxes();
+  }catch(e){}
+}
+
+function postForm(url,fields,options={}){
+  const fd=new FormData();
+  for(const [k,v] of Object.entries(fields))if(v!=null)fd.append(k,v);
+  return fetch(url,{...options,method:'POST',body:fd});
+}
+
+/* stato OCR nella barra del file */
+let OCR_UI=null;
+function setOcr(s){OCR_UI=s;renderFileBar();}
+function renderFileBar(){
+  const has=!!FILE;show($('fileBar'),has);
+  if(!has){updateDrop();return;}
+  const k=fileKind(FILE);
+  $('fileIcon').querySelector('use').setAttribute('href',k==='image'?'#i-image':'#i-file');
+  $('fileName').textContent=FILE.name;$('fileName').title=FILE.name;
+  const kb=FILE.size>1048576?(FILE.size/1048576).toFixed(1)+' MB':Math.max(1,Math.round(FILE.size/1024))+' KB';
+  $('fileMeta').textContent=[tt('k_'+k),DOC?T[L].pages(DOC.n_pages):null,kb].filter(Boolean).join(' · ');
+  const s=OCR_UI,b=$('ocrBadge'),pr=$('ocrProg');
+  show(pr,false);b.innerHTML='';
+  if(!s)return;
+  if(s.state==='native')b.innerHTML='<span class="badge">'+tt('ocr_native')+'</span>';
+  else if(s.state==='running'){
+    b.innerHTML='<span class="badge brand"><span class="spin"></span>'+(s.total?T[L].ocr_running(s.done,s.total):tt('ocr_starting'))+'</span>';
+    show(pr,true);pr.classList.toggle('indet',!s.done);
+    pr.firstElementChild.style.width=s.total?Math.round(100*s.done/s.total)+'%':'0';
+  }
+  else if(s.state==='done')b.innerHTML='<span class="badge ok"><svg class="i sm" style="width:12px;height:12px"><use href="#i-check"/></svg>'+T[L].ocr_done(s.n,(s.secs||0).toLocaleString(L,{maximumFractionDigits:1}))+'</span>';
+  else if(s.state==='error')b.innerHTML='<span class="badge warn">'+tt('ocr_err')+'</span>';
+  else if(s.state==='missing')b.innerHTML='<span class="badge warn">'+tt('ocr_missing_b')+'</span>';
+}
+
+/* ================================ analyze ================================ */
+async function run(){
+  if(!TAGS_LOADED&&!(await loadSettings()))return null;
+  const text=$('src').value;
+  if(!FILE&&!text.trim()){toast(tt('t_need_input'),false);return null;}
+  const initialGeneration=GENERATION;
+  const go=$('go');go.disabled=true;const old=go.innerHTML;
+  try{
+    if(OCR_JOB){go.innerHTML='<span class="spin"></span> '+tt('ocr_wait');await OCR_JOB;}
+    await RELEASE_JOB;if(initialGeneration!==GENERATION)return null;
+    invalidateResult(false);
+    const generation=GENERATION,controller=new AbortController();ANALYSIS_CONTROLLER=controller;
+    go.innerHTML='<span class="spin"></span> '+tt('analyzing');
+    // override della UI. Se /settings non ha risposto non mandiamo nulla: comanda il server.
+    const excl=TAGS_LOADED?[...EXCL]:null;
+    const extra={review:'1',include_mapping:MAPPING?'1':'0'};
+    if(excl)extra.exclude_tags=excl.join(',');
+    let resp;
+    if(FILE)resp=await postDoc('/analyze',extra,{signal:controller.signal});
+    else{const body={text,review:true,include_mapping:MAPPING};if(excl)body.exclude_tags=excl;
+      resp=await fetch('/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:controller.signal});}
+    const d=await resp.json();
+    if(generation!==GENERATION)return null;
+    if(!resp.ok){toast(d.error||tt('t_error'),false,4500);return null;}
+    if(!d.analysis_id)throw new Error('La revisione del documento non è disponibile.');
+    if(FILE&&typeof d.review_text==='string')$('src').value=d.review_text;
+    acceptReview(d);off.clear();
+    toast(T[L].pii_found(d.n_entities,d.n_unique));
+    return d;
+  }catch(e){if(e.name!=='AbortError')toast(tt('t_error')+': '+e.message,false);return null;}
+  finally{go.disabled=false;go.innerHTML=old;}
+}
+
+/* POST con il documento caricato: per doc_id se il server lo ha ancora, altrimenti
+   (scaduto dalla cache o anteprima fallita) di nuovo con il file. */
+async function postDoc(url,extra,options={}){
+  if(DOC){
+    const r=await postForm(url,{doc_id:DOC.doc_id,...extra},options);
+    if(r.status!==410)return r;
+    DOC=null;
+  }
+  return postForm(url,{file:FILE,...extra},options);
+}
+
+/* ================================ revisione contestuale ================================ */
+function occurrenceId(e){return e.occurrence_id||e.id;}
+function reviewTypeTitle(label){
+  const titles={FULLNAME:'Nome e cognome',CF:'Codice fiscale',ID_DOC:'Documento d’identità',PIVA:'Partita IVA',
+    ORG:'Organizzazione',EMAIL:'Email',TELEPHONENUM:'Telefono',AMOUNT:'Importo',IBAN:'IBAN',
+    CREDITCARDNUMBER:'Carta di pagamento',CATASTO:'Dati catastali',DOCID:'Riferimento documentale',
+    CITY:'Comune',STREET:'Indirizzo',BUILDINGNUM:'Numero civico',ZIPCODE:'CAP',PROVINCE:'Provincia',
+    DATE:'Data',TIME:'Ora',AGE:'Età',GENDER:'Genere',TARGA:'Targa',URL:'Indirizzo web',IPADDR:'Indirizzo IP'};
+  return titles[label]||label;
+}
+function acceptReview(d){
+  DATA=d;MAP=d.mapping_enabled===true?(d.mapping||{}):{};ACK_REVISION=null;
+  render();renderReview();
+}
+function categoryDescendants(identifier){
+  const taxonomy=DATA.taxonomy||[],ids=new Set([identifier]);let changed=true;
+  while(changed){changed=false;for(const c of taxonomy)if(ids.has(c.parent)&&!ids.has(c.id)){ids.add(c.id);changed=true;}}
+  return taxonomy.filter(c=>ids.has(c.id)&&c.parent!==null).map(c=>c.id);
+}
+function categoryCheckbox(category,entries){
+  const label=document.createElement('label'),box=document.createElement('input');box.type='checkbox';
+  const selected=entries.filter(e=>e.selected).length;
+  const leaves=category.parent===null?categoryDescendants(category.id):[category.id];
+  const policyCount=REVIEW_CATEGORIES===null?leaves.length:leaves.filter(id=>REVIEW_CATEGORIES.includes(id)).length;
+  box.checked=entries.length?selected===entries.length:policyCount===leaves.length;
+  box.indeterminate=entries.length?(selected>0&&selected<entries.length):(policyCount>0&&policyCount<leaves.length);
+  box.onchange=()=>{
+    const leaves=(DATA.taxonomy||[]).filter(c=>c.parent!==null).map(c=>c.id);
+    const categories=new Set(REVIEW_CATEGORIES===null?leaves:REVIEW_CATEGORIES);
+    const affected=category.parent===null?categoryDescendants(category.id):[category.id];
+    for(const id of affected)box.checked?categories.add(id):categories.delete(id);
+    updateReview({categories:[...categories]});
+  };
+  label.append(box,document.createTextNode(' '+category.title+' ('+selected+'/'+entries.length+')'));
+  return label;
+}
+function renderReview(){
+  if(!DATA?.analysis_id){show($('reviewCard'),false);return;}
+  show($('reviewCard'),true);$('reviewControls').disabled=REVIEW_BUSY;
+  const occurrences=DATA.occurrences||[],taxonomy=DATA.taxonomy||[];
+  const pending=occurrences.filter(e=>e.review_status==='pending').length;
+  $('reviewCount').textContent=occurrences.filter(e=>e.selected).length+' selezionate · '+pending+' da revisionare';
+  $('reviewWarnings').textContent=[pending?'Rivedi le '+pending+' classificazioni ambigue prima di esportare.':'',
+    ...(DATA.warnings||[]),'Il risultato riguarda le scelte effettuate: non attesta un’anonimizzazione completa.'].filter(Boolean).join('\n');
+  const typeCounts=new Map();
+  for(const e of occurrences){
+    if(!typeCounts.has(e.label))typeCounts.set(e.label,{total:0,pending:0});
+    const count=typeCounts.get(e.label);count.total++;if(e.review_status==='pending')count.pending++;
+  }
+  const types=[...typeCounts].sort((a,b)=>b[1].pending-a[1].pending||reviewTypeTitle(a[0]).localeCompare(reviewTypeTitle(b[0]),'it'));
+  $('ambiguitySummary').textContent=pending?'Da revisionare per tipo: '+types.filter(([,count])=>count.pending)
+    .map(([label,count])=>reviewTypeTitle(label)+': '+count.pending).join(' · ')+
+    '. Il contesto può essere insufficiente, conflittuale o sovrapposto. Ogni occorrenza richiede una scelta esplicita.':'';
+  const typeFilter=$('reviewType'),currentType=typeFilter.value;typeFilter.textContent='';
+  const allTypes=document.createElement('option');allTypes.value='';allTypes.textContent='Tutti i tipi';typeFilter.appendChild(allTypes);
+  for(const [label,count] of types){
+    const option=document.createElement('option');option.value=label;
+    option.textContent=reviewTypeTitle(label)+' ('+count.pending+' da revisionare / '+count.total+')';typeFilter.appendChild(option);
+  }
+  typeFilter.value=typeCounts.has(currentType)?currentType:'';
+  const tree=$('categoryTree');tree.textContent='';
+  for(const parent of taxonomy.filter(c=>c.parent===null)){
+    const leaves=taxonomy.filter(c=>c.parent===parent.id),ids=new Set(leaves.map(c=>c.id));
+    const entries=occurrences.filter(e=>ids.has(e.category));
+    const group=document.createElement('details'),summary=document.createElement('summary');group.open=entries.length>0;
+    summary.textContent=parent.title;group.appendChild(summary);
+    group.appendChild(categoryCheckbox(parent,entries));
+    for(const leaf of leaves){
+      const label=categoryCheckbox(leaf,occurrences.filter(e=>e.category===leaf.id));
+      label.className='category-leaf';group.appendChild(label);
+    }
+    tree.appendChild(group);
+  }
+  const list=$('occurrenceList');list.textContent='';
+  for(const entity of occurrences){
+    if($('onlyAmbiguous').checked&&entity.review_status!=='pending')continue;
+    if(typeFilter.value&&entity.label!==typeFilter.value)continue;
+    const id=occurrenceId(entity),row=document.createElement('div');row.className='review-occurrence';row.id='occ-'+id;
+    const label=document.createElement('label'),box=document.createElement('input');box.type='checkbox';box.checked=entity.selected;
+    box.setAttribute('aria-label','Oscura questa occorrenza');
+    const linked=occurrences.filter(e=>occurrenceId(e)===id||(entity.alias_group&&e.alias_group===entity.alias_group));
+    const linkedOverrides=value=>Object.assign({},REVIEW_OVERRIDES,...linked.map(e=>({[occurrenceId(e)]:value})));
+    box.onchange=()=>updateReview({overrides:linkedOverrides(box.checked)});
+    label.append(box,document.createTextNode(' Oscura'));row.appendChild(label);
+    const value=document.createElement('div');value.className='occ-value';value.textContent=entity.value||'';
+    const base=document.createElement('div');base.className='hint';base.textContent=entity.label+' · '+id;
+    value.appendChild(base);row.appendChild(value);
+    const choices=document.createElement('div'),select=document.createElement('select');
+    select.setAttribute('aria-label','Classificazione di questa occorrenza');
+    for(const category of taxonomy.filter(c=>c.parent!==null&&(!c.labels.length||c.labels.includes(entity.label)))){
+      const option=document.createElement('option'),parent=taxonomy.find(c=>c.id===category.parent);
+      option.value=category.id;option.textContent=(parent?parent.title+' → ':'')+category.title;
+      option.selected=category.id===entity.category;select.appendChild(option);
+    }
+    select.onchange=()=>updateReview({classifications:Object.assign({},REVIEW_CLASSIFICATIONS,
+      ...linked.map(e=>({[occurrenceId(e)]:select.value})))});
+    choices.appendChild(select);
+    if(entity.review_status==='pending'){
+      const confirm=document.createElement('button');confirm.type='button';confirm.className='btn ghost';
+      confirm.textContent='Conferma classificazione';
+      confirm.onclick=()=>updateReview({overrides:linkedOverrides(!!entity.selected)});
+      choices.appendChild(confirm);
+    }
+    row.appendChild(choices);
+    const reason=document.createElement('div');reason.className='occ-reason'+(entity.review_status==='pending'?' pending':'');
+    reason.textContent=(entity.review_status==='pending'?'Da revisionare. ':entity.review_status==='reviewed'?'Scelta confermata. ':'')+(entity.context_reason||'')+
+      (entity.alias_group?' Campo e apparenza collegati: la scelta si applica a entrambe le rappresentazioni.':'');
+    row.appendChild(reason);list.appendChild(row);
+    if(entity.review_status==='pending'&&entity.context_excerpt){
+      const excerpt=document.createElement('p');excerpt.className='occ-context';
+      excerpt.textContent='Contesto: '+entity.context_excerpt;row.appendChild(excerpt);
+    }
+  }
+  if(!list.children.length)list.textContent=occurrences.length?'Nessuna occorrenza con questi filtri.':'Nessuna occorrenza riconosciuta.';
+}
+async function updateReview(changes){
+  if(REVIEW_BUSY||!DATA?.analysis_id)return;
+  const generation=GENERATION,id=DATA.analysis_id;
+  const state={categories:REVIEW_CATEGORIES,overrides:REVIEW_OVERRIDES,classifications:REVIEW_CLASSIFICATIONS,...changes};
+  if(PDF_CONTROLLER)PDF_CONTROLLER.abort();PDF_CONTROLLER=null;PDF_JOB=null;OUT_DOC=null;ACK_REVISION=null;
+  $('pdfOutView').textContent='';if(VIEW==='pdf')setView('prev');
+  REVIEW_BUSY=true;$('reviewControls').disabled=true;
+  try{
+    const r=await fetch('/review/'+id,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({revision:DATA.revision,...state})});
+    const d=await r.json();if(generation!==GENERATION||DATA?.analysis_id!==id)return;
+    if(!r.ok)throw new Error(d.error||'Revisione non aggiornata.');
+    REVIEW_CATEGORIES=state.categories;REVIEW_OVERRIDES=state.overrides;REVIEW_CLASSIFICATIONS=state.classifications;
+    acceptReview(d);
+  }catch(e){if(generation===GENERATION)toast(e.message||tt('t_error'),false,4500);}
+  finally{if(generation===GENERATION){REVIEW_BUSY=false;renderReview();}}
+}
+$('onlyAmbiguous').onchange=renderReview;
+$('reviewType').onchange=renderReview;
+
+function confirmExport(){
+  if(!DATA?.analysis_id){toast(tt('t_need_anon'),false);return false;}
+  if(REVIEW_BUSY){toast('Attendi l’aggiornamento della revisione.',false);return false;}
+  if((DATA.occurrences||[]).some(e=>e.review_status==='pending')){
+    toast('Rivedi le classificazioni ambigue prima di esportare.',false,4500);return false;
+  }
+  if((DATA.warnings||[]).length&&ACK_REVISION!==DATA.revision){
+    if(!window.confirm(DATA.warnings.join('\n')+'\n\nSono presenti contenuti non verificati. Il risultato non attesta un’anonimizzazione completa. Vuoi proseguire?'))return false;
+    ACK_REVISION=DATA.revision;
+  }
+  return true;
+}
+
+function render(keepPdf){
+  const d=DATA;
+  if(!keepPdf){OUT_DOC=null;$('pdfOutView').innerHTML='';}  // risultato nuovo -> PDF censurato da rifare
+  show($('dictCard'),true);
+  const prev=$('prev');prev.innerHTML='';show(prev,true);show($('emptyPrev'),false);
+  const frag=document.createDocumentFragment();
+  for(const s of d.segments){
+    if(s.label){
+      const c=colors(s.category||s.label);const sp=document.createElement('span');
+      sp.className='ph'+(!s.selected?' dim':'');
+      sp.style.background=c.bg;sp.style.borderColor=c.bd;sp.style.color=c.tx;
+      const title=(d.taxonomy||[]).find(t=>t.id===s.category)?.title||s.label;
+      sp.title=title+' · '+(s.selected?'Da oscurare':'Da mantenere')+(s.review_status==='pending'?' · Da revisionare':'');
+      sp.textContent=s.t??s.ph;sp.tabIndex=0;sp.setAttribute('role','button');
+      sp.setAttribute('aria-label',sp.title);
+      const focus=()=>{const row=$('occ-'+s.occurrence_id);if(row){row.scrollIntoView({block:'nearest'});row.querySelector('input')?.focus();}};
+      sp.onclick=focus;sp.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();focus();}};
+      frag.appendChild(sp);
+    }else frag.appendChild(document.createTextNode(s.t));
+  }
+  prev.appendChild(frag);
+  $('anon').value=d.anonymized_text;
+  const ocrN=d.ocr&&d.ocr.pages?d.ocr.pages.length:0;
+  $('meta').innerHTML=
+    `<span class="stat"><b>${d.n_entities}</b> ${tt('st_ent')}</span>`+
+    `<span class="stat"><b>${d.n_unique}</b> ${tt('st_uniq')}</span>`+
+    `<span class="stat"><b>${(d.by_source.modello||0)}</b> ${tt('st_model')}</span>`+
+    `<span class="stat"><b>${(d.by_source.regex||0)}</b> ${tt('st_regex')}</span>`+
+    `<span class="stat"><b>${T[L].chars(d.n_chars)}</b> ${tt('st_chars')}</span>`+
+    (ocrN?`<span class="stat"><svg class="i sm"><use href="#i-scan"/></svg><b>${ocrN}</b> ${tt('st_ocr')}</span>`:'')+
+    ((d.excluded_tags&&d.excluded_tags.length)
+      ? `<span class="stat" title="${escapeHtml(d.excluded_tags.join(', '))}"><b>${d.excluded_tags.length}</b> ${tt('st_excl')}</span>` : '');
+  const lg=$('legend');lg.innerHTML='';
+  const categoryCounts={};for(const e of d.occurrences||[])categoryCounts[e.category]=(categoryCounts[e.category]||0)+1;
+  for(const [k,v] of Object.entries(categoryCounts)){
+    const c=colors(k),category=(d.taxonomy||[]).find(t=>t.id===k);const el=document.createElement('span');
+    el.className='chip';el.style.cursor='default';
+    el.innerHTML=`<span class="sw" style="background:${c.bd}"></span>${escapeHtml(category?.title||k)}<span class="n">${v}</span>`;
+    lg.appendChild(el);
+  }
+  const hasMap=d.mapping_enabled!==false;
+  const rows=$('maprows');rows.innerHTML='';
+  const keys=hasMap?Object.keys(d.mapping):[];
+  show($('tablewrap'),keys.length>0);show($('dictNone'),!hasMap);
+  $('dictHint').innerHTML=hasMap?tt('dict_hint'):tt('dict_off_hint');
+  show($('dl'),hasMap);
+  for(const ph of keys){const lab=ph.slice(1,ph.lastIndexOf('_'));const c=colors(lab);
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td class="k" style="color:${c.tx}">${escapeHtml(ph)}</td>`+
+      `<td class="v">${escapeHtml(d.mapping[ph])}</td>`+
+      `<td><span class="chip" style="cursor:default"><span class="sw" style="background:${c.bd}"></span>${escapeHtml(lab)}</span></td>`;
+    rows.appendChild(tr);}
+  $('ulock').textContent=keys.length?T[L].dict_n(keys.length):'';
+  if(!keepPdf&&VIEW==='pdf')setView('prev');
+}
+
+/* ================== viste a destra: evidenziato | testo | PDF censurato ================== */
+async function setView(v){
+  if(v==='pdf'&&!DATA&&!FILE&&!$('src').value.trim()){toast(tt('t_need_anon'),false);return;}
+  VIEW=v;
+  $('vPrev').classList.toggle('on',v==='prev');$('vText').classList.toggle('on',v==='text');
+  $('vPdf').classList.toggle('on',v==='pdf');
+  show($('viewPrev'),v==='prev');show($('anon'),v==='text');show($('pdfOutView'),v==='pdf');
+  if(v!=='pdf'){matchScroll(v==='prev'?$('viewPrev'):$('anon'),$('src'));return;}
+  if(OUT_DOC){if(!$('pdfOutView').querySelector('.pg'))renderPages($('pdfOutView'),OUT_DOC);return;}
+  busy($('pdfOutView'),tt('t_pdf_render'));
+  const d=await buildOutPdf();
+  if(VIEW!=='pdf')return;
+  if(!d){setView('prev');return;}
+  renderPages($('pdfOutView'),d);
+}
+
+/* Anteprima e download usano esclusivamente lo snapshot revisionato. */
+let PDF_JOB=null;
+function buildOutPdf(){
+  if(OUT_DOC&&DATA&&OUT_DOC._revision===DATA.revision)return Promise.resolve(OUT_DOC);
+  if(PDF_JOB)return PDF_JOB;
+  if(!DATA&&$('go').disabled){toast('Attendi la conclusione dell’analisi.',false);return Promise.resolve(null);}
+  const job=Promise.resolve().then(async()=>{
+    try{
+      if(!DATA&&!(await run()))return null;
+      if(!confirmExport())return null;
+      const generation=GENERATION,id=DATA.analysis_id,revision=DATA.revision;
+      const controller=new AbortController();PDF_CONTROLLER=controller;
+      const resp=await fetch('/pdf/preview',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({analysis_id:id,revision,ack_unverified:ACK_REVISION===revision}),signal:controller.signal});
+      const d=await resp.json();
+      if(generation!==GENERATION||DATA?.analysis_id!==id||DATA.revision!==revision)return null;
+      if(!resp.ok){toast(d.error||tt('t_pdf_err'),false,5000);return null;}
+      OUT_DOC={...d,_revision:revision};return OUT_DOC;
+    }catch(e){if(e.name!=='AbortError')toast(tt('t_pdf_err')+': '+e.message,false);return null;}
+    finally{if(PDF_JOB===job)PDF_JOB=null;}
+  });
+  PDF_JOB=job;return job;
+}
+
+/* ================================ copia / download ================================ */
+$('copy').onclick=async()=>{
+  if(!confirmExport())return;
+  const generation=GENERATION,id=DATA.analysis_id,revision=DATA.revision;
+  try{
+    const r=await fetch('/review/'+id+'/text',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({revision,ack_unverified:ACK_REVISION===revision})});
+    const d=await r.json();
+    if(generation!==GENERATION||DATA?.analysis_id!==id||DATA.revision!==revision||REVIEW_BUSY)return;
+    if(!r.ok)throw new Error(d.error||'Esportazione del testo non consentita.');
+    await navigator.clipboard.writeText(d.anonymized_text);toast(tt('t_copied'));
+  }catch(e){toast(e.message||tt('t_error'),false,4500);}
+};
+$('dl').onclick=()=>{if(!DATA?.mapping_enabled||!Object.keys(MAP).length){toast(tt('t_nothing_dl'),false);return;}
+  const blob=new Blob([JSON.stringify(MAP,null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download='dizionario_anonimizzazione.json';a.click();URL.revokeObjectURL(a.href);
+  toast(tt('t_dl_ok'));};
+
+/* PDF anonimizzato: redazione vera del PDF caricato (sui pixel per le pagine
+   scansionate), oppure PDF ricostruito dal testo. Se lo si e' gia' guardato nella
+   vista "PDF censurato" il file esiste gia' sul server: si scarica quello. */
+$('dlpdf').onclick=async()=>{
+  const btn=$('dlpdf');btn.disabled=true;const old=btn.innerHTML;
+  btn.innerHTML='<span class="spin"></span> '+tt('t_pdf_making');
+  try{
+    const d=await buildOutPdf();
+    if(!d)return;
+    const a=document.createElement('a');
+    a.href=notarialURL(d.file||'/doc/'+d.doc_id+'/file.pdf');
+    a.download=d.filename||'documento_anonimizzato.pdf';a.click();
+    toast('PDF con le rimozioni selezionate scaricato.');
+  }finally{btn.disabled=false;btn.innerHTML=old;}
+};
+
+/* ---- reverse ---- */
+function reverse(){
+  const txt=$('rin').value;
+  if(!txt.trim()){toast(tt('t_paste_restore'),false);return;}
+  const keys=Object.keys(MAP);
+  if(!keys.length){toast(tt('t_no_dict'),false);return;}
+  // Una sola passata sul testo ORIGINALE, non N replace() sequenziali su un
+  // `out` che si accumula: se il valore sostituito per una chiave contenesse
+  // per caso il nome di una chiave successiva (es. una ragione sociale con
+  // dentro "CF_2"), il replace seguente lo ri-sostituiva -- un falso positivo
+  // di secondo ordine che nessuna delle due chiavi, prese da sole, produce.
+  // Il lookup avviene ricostruendo il nome dal testo appena matchato, quindi
+  // l'ordine delle chiavi nella mappa e' ora irrilevante (non serve piu'
+  // ordinare per lunghezza: parentesi TUTTO-O-NIENTE e confine di parola
+  // bastano a evitare che FULLNAME_1 matchi dentro FULLNAME_10, si veda sotto).
+  const byInner=new Map(keys.map(ph=>[ph.slice(1,-1),MAP[ph]]));
+  const alts=keys.map(ph=>{
+    const inner=ph.slice(1,-1);                 // FULLNAME_1
+    const esc=inner.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    // tollerante: parentesi o forma nuda, spazi, eventuale grassetto markdown.
+    // Gli spazi si consumano SOLO insieme alla parentesi: con '\[?\s*' un placeholder
+    // scritto senza parentesi si portava via anche gli spazi intorno, e "Il FULLNAME_1 ha"
+    // tornava "IlMario Rossiha". Con un tab o un a-capo spariva la colonna o la riga.
+    // E le parentesi sono TUTTO-O-NIENTE, con un confine di parola sulla forma nuda:
+    // se ognuna e' opzionale per conto suo, con CF_1 in mappa un indice inventato dal
+    // modello ([CF_12]) matcha per meta' e il ripristino scrive un codice fiscale
+    // SBAGLIATO - un segnaposto rimasto si vede, un valore sbagliato no.
+    // Il confine e' Unicode-aware (specchia _is_word() lato Python, che tratta le
+    // lettere accentate come interne alla parola): \b di JS e' ASCII-only, quindi
+    // su "CF_1e' gia'" non vedeva un confine e il valore tornava incollato alla
+    // lettera accentata -- lo stesso difetto che questa funzione deve evitare,
+    // riaperto in modo asimmetrico solo per le parole italiane.
+    return '\\[\\s*'+esc+'\\s*\\]|(?<![\\p{L}\\p{N}_])'+esc+'(?![\\p{L}\\p{N}_])';
+  }).join('|');
+  // Gli asterischi di grassetto markdown si assorbono in coppie SIMMETRICHE
+  // (stesso numero prima e dopo, fino a 2, col backreference \1): una sequenza
+  // di asterischi condivisa fra due placeholder adiacenti si divide cosi' in
+  // modo deterministico, invece di dipendere da quale chiave viene elaborata
+  // prima (con N pattern separati, un lato mangiava tutta la sequenza e
+  // lasciava l'altro placeholder non risolto o incollato al primo valore).
+  const rx=new RegExp('(\\*{0,2})(?:'+alts+')\\1','gu');
+  const out=txt.replace(rx,(m)=>{
+    const core=m.replace(/^\*+|\*+$/g,'');
+    const br=core.match(/^\[\s*([\s\S]*?)\s*\]$/);
+    const val=byInner.get(br?br[1]:core);
+    return val===undefined?m:val;               // per costruzione sempre trovato
+  });
+  const o=$('rout');o.textContent=out;o._raw=out;
+  toast(tt('t_restored'));
+}
+$('rev').onclick=reverse;
+$('rcopy').onclick=()=>{const o=$('rout');if(!o._raw){toast(tt('t_nothing_copy'),false);return;}
+  navigator.clipboard.writeText(o._raw).then(()=>toast(tt('t_restored_copied')));};
+$('rclear').onclick=()=>{$('rin').value='';$('rout').innerHTML=routEmpty();$('rout')._raw='';};
+
+/* ---- carica dizionario da file (per sessioni diverse) ---- */
+$('dictFile').onchange=e=>{const f=e.target.files[0];if(!f)return;
+  const generation=typeof GENERATION==='number'?GENERATION:null;
+  const r=new FileReader();r.onload=()=>{if(generation!==null&&generation!==GENERATION)return;try{
+    const parsed=JSON.parse(r.result);
+    const dictKeys=parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?Object.keys(parsed):[];
+    // Un file dizionario corrotto/troncato con una chiave vuota o non testuale
+    // degenera il pattern di reverse() in un match quasi universale e corrompe
+    // l'intero documento al ripristino, non solo un placeholder.
+    const valid=dictKeys.length>0&&dictKeys.every(k=>/^\[.+\]$/.test(k)&&typeof parsed[k]==='string');
+    if(!valid){toast(tt('t_json_invalid'),false);return;}
+    MAP=parsed;
+    $('dictInfo').textContent=T[L].dict_loaded_n(dictKeys.length);
+    toast(tt('t_dict_loaded'));}catch{toast(tt('t_json_invalid'),false);}};
+  r.readAsText(f);};
+
+/* ================================ input ================================ */
+$('go').onclick=run;
+function clearAll(){
+  $('src').value='';resetDoc();
+  updateDrop();
+}
+$('clear').onclick=clearAll;
+$('fileX').onclick=()=>{resetDoc();$('src').value='';updateDrop();};
+$('src').addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter')run();});
+$('src').addEventListener('input',()=>{invalidateResult(true);updateDrop();});
+['focus','blur'].forEach(ev=>$('src').addEventListener(ev,updateDrop));
+$('pdf').onchange=e=>{const f=e.target.files[0];if(f)onFile(f);e.target.value='';};
+
+/* drag & drop su tutta la card di input */
+(()=>{const card=$('inCard');let depth=0;
+  card.addEventListener('dragenter',e=>{e.preventDefault();depth++;card.classList.add('drag');});
+  card.addEventListener('dragover',e=>{e.preventDefault();});
+  card.addEventListener('dragleave',()=>{if(--depth<=0){depth=0;card.classList.remove('drag');}});
+  card.addEventListener('drop',e=>{e.preventDefault();depth=0;card.classList.remove('drag');
+    const f=e.dataTransfer.files[0];if(f)onFile(f);});
+  // un file lasciato fuori dalla card non deve far navigare la finestra verso il file
+  window.addEventListener('dragover',e=>e.preventDefault());
+  window.addEventListener('drop',e=>e.preventDefault());
+})();
+/* incolla un'immagine (screenshot) direttamente nell'app */
+document.addEventListener('paste',e=>{
+  if(!$('pane1').classList.contains('on'))return;
+  const it=[...(e.clipboardData?.items||[])].find(i=>i.kind==='file'&&/^image\//.test(i.type));
+  if(!it)return;
+  e.preventDefault();const f=it.getAsFile();
+  onFile(new File([f],'screenshot.'+(f.type.split('/')[1]||'png'),{type:f.type}));
+});
+
+/* scroll sincronizzato: editor (sx) <-> anteprima e testo (dx), e i due PDF fra loro */
+linkScroll($('src'),$('viewPrev'));linkScroll($('viewPrev'),$('src'));
+linkScroll($('src'),$('anon'));linkScroll($('anon'),$('src'));
+linkScroll($('pdfSrcView'),$('pdfOutView'));linkScroll($('pdfOutView'),$('pdfSrcView'));
+
+/* avviso: popup a click, si chiude cliccando fuori o con Esc */
+$('infoBtn').addEventListener('click',e=>{e.stopPropagation();$('infoTip').classList.toggle('open');});
+document.addEventListener('click',e=>{if(!$('infoTip').contains(e.target)&&e.target!==$('infoBtn'))$('infoTip').classList.remove('open');});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('infoTip').classList.remove('open');closeSettings();}});
+
+/* ================================ switch dizionario ================================ */
+function renderMapping(){
+  const on=MAPPING;
+  $('mapToggle').classList.toggle('off',!on);
+  $('mapToggle').setAttribute('aria-checked',String(on));
+  $('mapSw').classList.toggle('off',!on);
+  $('mapState').textContent=on?tt('map_on'):tt('map_off');
+  $('mapSub').innerHTML=on?tt('map_sub_on'):tt('map_sub_off');
+  show($('rOff'),!on);
+  show($('dl'),on);
+}
+async function toggleMapping(){
+  MAPPING=!MAPPING;renderMapping();
+  toast(MAPPING?tt('t_map_on'):tt('t_map_off'),MAPPING);
+  try{await saveSettings({mapping_enabled:MAPPING});}catch(e){}
+}
+function saveSettings(obj){
+  invalidateResult(true);
+  return fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)})
+    .then(r=>r.json().then(d=>{if(!r.ok)throw new Error(d.error||'');Object.assign(SETTINGS,d);return d;}));
+}
+
+/* ================================ impostazioni ================================ */
+function connectionState(error=''){
+  BACKEND_ERROR=error;
+  const file=window.location.protocol==='file:';
+  $('backendWarning').hidden=!error;
+  $('backendWarningText').textContent=error;
+  $('backendOpen').hidden=!file;
+  $('backendRetry').hidden=file||!error;
+  $('go').disabled=!!error;
+  if(error){$('tgList').textContent=error;$('tgCount').textContent='Tag non caricati';}
+}
+async function loadSettings(){
+  try{
+    const response=await fetch('/settings');
+    if(!response.ok)throw new Error(response.status===403?'Sessione locale scaduta: ricarica la pagina dell’applicazione.':'Impossibile caricare le impostazioni dal servizio locale.');
+    const d=await response.json();
+    if(!Array.isArray(d.tags)||!d.tags.length)throw new Error('Il servizio locale non ha restituito i tag.');
+    SETTINGS=d;TAGS=d.tags||[];EXCL=new Set(d.excluded_tags||[]);TAGS_LOADED=true;
+    MAPPING=d.mapping_enabled===true;renderMapping();renderOcrPill();renderTags();
+    connectionState();return true;
+  }catch(e){
+    TAGS=[];TAGS_LOADED=false;
+    const message=window.location.protocol==='file:'
+      ?'Questa pagina è stata aperta come file. Avvia Rizzo PII, poi apri la modalità notarile dall’applicazione locale.'
+      :(e instanceof TypeError?'Il servizio locale non risponde. Avvia l’applicazione e riprova.':e.message||'Collegamento al servizio locale non disponibile.');
+    connectionState(message);return false;
+  }
+}
+function renderOcrPill(){
+  const o=SETTINGS.ocr;show($('ocrPill').previousElementSibling,!!o);show($('ocrPill'),!!o);
+  if(o)$('ocrPill').textContent=o.available?tt('ocr_pill_ok'):tt('ocr_pill_off');
+}
+async function openSettings(tab){
+  const connected=await loadSettings();
+  settingsTab(tab||'tags');
+  if(connected){renderTags();renderOcrSettings();}
+  $('tgStatus').hidden=connected;
+  $('tgStatus').className='status fail';$('tgStatus').textContent=connected?'':BACKEND_ERROR;
+  $('tgNote').innerHTML=(SETTINGS.env_override?'<b>'+tt('tg_env')+'</b><br>':'')+T[L].tg_note(escapeHtml(SETTINGS.config_path||''));
+  if(connected)try{const c=await (await fetch('/config')).json();$('cfgHost').value=c.host||'127.0.0.1';$('cfgPort').value=c.port||5005;}catch(e){}
+  $('cfgStatus').hidden=true;
+  $('setOverlay').classList.add('open');
+}
+function closeSettings(){
+  if(!$('setOverlay').classList.contains('open'))return;
+  $('setOverlay').classList.remove('open');loadSettings();   // annulla = scarta le spunte non salvate
+}
+$('setOverlay').addEventListener('click',e=>{if(e.target===$('setOverlay'))closeSettings();});
+function settingsTab(t){
+  for(const [k,id,p] of [['tags','mtTags','mpTags'],['ocr','mtOcr','mpOcr'],['server','mtServer','mpServer']]){
+    $(id).classList.toggle('on',k===t);$(p).classList.toggle('on',k===t);}
+}
+/* -- tag -- */
+function renderTags(){
+  const list=$('tgList');list.innerHTML='';
+  for(const t of TAGS){
+    const c=colors(t.tag),on=!EXCL.has(t.tag);
+    const row=document.createElement('label');
+    row.className='tg-row'+(on?'':' off');
+    row.innerHTML=`<input type="checkbox" ${on?'checked':''}>`+
+      `<span class="sw" style="background:${c.bd}"></span>`+
+      `<span><span class="nm" style="color:${c.tx}">${t.tag}</span>`+
+      `<div class="ds">${escapeHtml(L==='en'?t.en:t.it)}</div>`+
+      `<div class="ex">${escapeHtml(t.example||'')}</div></span>`;
+    row.querySelector('input').onchange=e=>{
+      e.target.checked?EXCL.delete(t.tag):EXCL.add(t.tag);
+      row.classList.toggle('off',!e.target.checked);tgCount();};
+    list.appendChild(row);
+  }
+  tgCount();
+}
+function tgCount(){$('tgCount').textContent=T[L].tg_count(TAGS.length-EXCL.size,TAGS.length);}
+function setAllTags(on){EXCL=on?new Set():new Set(TAGS.map(t=>t.tag));renderTags();}
+async function saveTags(){
+  try{
+    const d=await saveSettings({excluded_tags:[...EXCL]});
+    EXCL=new Set(d.excluded_tags||[]);
+    toast(tt('tg_saved'));$('setOverlay').classList.remove('open');
+  }catch(e){$('tgStatus').className='status fail';$('tgStatus').textContent=tt('tg_err');$('tgStatus').hidden=false;}
+}
+/* -- OCR -- */
+function renderOcrSettings(){
+  const o=SETTINGS.ocr||{available:false,presets:[],models_dir:''};
+  $('ocrEngine').innerHTML=o.available?T[L].eng_ok(escapeHtml(o.engine||'OCR'),escapeHtml(o.models_dir))
+                                      :T[L].eng_missing(escapeHtml(o.models_dir||''));
+  const mode=SETTINGS.ocr_mode||'auto',preset=SETTINGS.ocr_preset||'balanced';
+  const opt=(name,val,cur,title,desc,dis)=>
+    `<label class="opt${val===cur?' on':''}${dis?' dis':''}"><input type="radio" name="${name}" value="${val}" ${val===cur?'checked':''} ${dis?'disabled':''}>`+
+    `<span><div class="ot">${title}</div><div class="od">${desc}</div></span></label>`;
+  $('ocrModes').innerHTML=['auto','force','off'].map(m=>opt('ocrMode',m,mode,tt('m_'+m),tt('m_'+m+'_d'),false)).join('');
+  $('ocrPresets').innerHTML=['fast','balanced','accurate'].map(p=>{
+    const na=!(o.presets||[]).includes(p);
+    return opt('ocrPreset',p,preset,tt('p_'+p),na?tt('p_na'):tt('p_'+p+'_d'),na);}).join('');
+  $('ocrModes').querySelectorAll('input').forEach(i=>i.onchange=()=>saveOcr({ocr_mode:i.value}));
+  $('ocrPresets').querySelectorAll('input').forEach(i=>i.onchange=()=>saveOcr({ocr_preset:i.value}));
+  // L'oscuramento dei timbri resta fuori dal profilo selettivo corrente.
+  show($('legacySeals'),false);
+}
+async function saveOcr(obj){
+  const prevMode=SETTINGS.ocr_mode,prevPreset=SETTINGS.ocr_preset;
+  try{await saveSettings(obj);renderOcrSettings();toast(tt('t_saved'));}
+  catch(e){toast(e.message||tt('tg_err'),false);renderOcrSettings();return;}
+  // modalita' o qualita' cambiate con un documento aperto: si rilegge con le nuove regole
+  if(FILE&&(SETTINGS.ocr_mode!==prevMode||SETTINGS.ocr_preset!==prevPreset)){
+    const f=FILE;DATA&&(OUT_DOC=null);onFile(f);
+  }
+}
+function toggleSeals(){saveOcr({ocr_redact_seals:!(SETTINGS.ocr_redact_seals!==false)});OUT_DOC=null;}
+/* -- server -- */
+async function checkPort(){
+  const h=$('cfgHost').value.trim(),p=parseInt($('cfgPort').value);
+  const st=$('cfgStatus');st.hidden=false;
+  if(!p||p<1024||p>65535){st.className='status fail';st.textContent=tt('cfg_in_use');return;}
+  const d=await (await fetch(`/port-check?host=${encodeURIComponent(h)}&port=${p}`)).json();
+  st.className='status '+(d.available?'ok':'fail');
+  st.textContent=d.available?tt('cfg_available'):tt('cfg_in_use');
+}
+async function saveConfig(){
+  const h=$('cfgHost').value.trim(),p=parseInt($('cfgPort').value);
+  if(!p||p<1024||p>65535){toast(tt('cfg_in_use'),false);return;}
+  await fetch('/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:h,port:p})});
+  toast(tt('cfg_saved'));$('setOverlay').classList.remove('open');
+}
+
+/* ================================ avvio ================================ */
+$('lang').onchange=e=>applyLang(e.target.value);
+renderThemeBtn();
+applyLang((()=>{try{return localStorage.getItem('pii_lang');}catch(e){return null;}})()||'it');
+loadSettings();
+updateDrop();
+window.addEventListener('beforeunload',()=>{
+  if(OCR_CONTROLLER)OCR_CONTROLLER.abort();if(ANALYSIS_CONTROLLER)ANALYSIS_CONTROLLER.abort();
+  if(window.location.protocol!=='file:')fetch('/session',{method:'DELETE',keepalive:true}).catch(()=>{});
+});
+</script>
+</body>
+</html>

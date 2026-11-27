@@ -37,6 +37,8 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()   # necessario per gli exe congelati su Windows
     print("Avvio Anonimizzatore PII... (il primo avvio carica il modello, attendi)")
     from app import app                # l'import carica il modello
+    from notarial_app import install_notarial_mode
+    install_notarial_mode(app)
     threading.Thread(target=_open_browser, daemon=True).start()
     print(f"In esecuzione su {URL}  --  chiudi questa finestra per terminare.")
     try:

@@ -4,6 +4,10 @@
 # Build:  build_env\Scripts\pyinstaller.exe build_sidecar.spec --noconfirm \
 #           --distpath tauri/src-tauri/backend
 # Output: tauri/src-tauri/backend/pii-backend/pii-backend.exe (+ _internal, modello, assets)
+import os as _os
+# Disable ORT telemetry before build hooks import native libraries.
+_os.environ["ORT_DISABLE_TELEMETRY"] = "1"
+_os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 from PyInstaller.utils.hooks import collect_all
 
 datas, binaries, hiddenimports = [], [], []
@@ -38,7 +42,9 @@ if BUNDLE_MODEL:
               for f in ("config.json", "tokenizer.json", "tokenizer_config.json",
                         "special_tokens_map.json")]
 datas += [("src/app/assets", "assets")]
-hiddenimports += ["fitz", "flask", "onnx_ner"]
+hiddenimports += ["fitz", "flask", "onnx_ner", "notarial_app", "notarial_server_config",
+                  "notarial_ocr", "contextual", "review", "span_repairs",
+                  "notarial_rules", "notarial_places", "notarial_evidence", "company_context"]
 
 # --- OCR delle scansioni (src/app/ocr.py -> src/app/docmd/): modelli ONNX in "ocr_models" ---
 # Si procurano con: python scripts/fetch_ocr_models.py  (-> models/ocr/). Si impacchettano

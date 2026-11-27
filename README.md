@@ -28,6 +28,11 @@
 
 **📄 [Read the full technical report (PDF)](report/rizzo-pii-report.pdf)** — model, dataset, method and experiments in detail
 
+**Optional notarial mode:** choose **Modalità notarile** in the app for contextual
+categories, individual occurrence review and selective irreversible export.
+It shares the existing NER model and keeps the standard workflow available.
+See [usage, privacy boundaries and release checks](docs/NOTARIAL_MODE.md).
+
 <p>
 <a href="https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/latest"><img src="https://img.shields.io/badge/⬇%20Download%20for-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows" /></a>
 <a href="https://github.com/Rizzo-AI-Academy/rizzo-pii/releases/latest"><img src="https://img.shields.io/badge/⬇%20Download%20for-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" /></a>
