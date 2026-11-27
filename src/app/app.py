@@ -4,8 +4,8 @@ App locale per l'anonimizzazione reversibile di documenti con il modello PII.
 
 Flusso d'uso:
   1) ANONIMIZZA  - incolli testo o carichi un PDF; il modello + una rete regex/checksum
-     trovano le PII. Ogni entita' riceve un ID univoco e reversibile: [FULLNAME_1],
-     [IBAN_1], ... (valori uguali condividono lo stesso ID).
+     trovano le PII. I valori uguali condividono lo stesso segnaposto reversibile.
+     Per persone e organizzazioni la sostituzione avviene parola per parola.
   2) COPIA       - copi il testo anonimizzato e lo incolli in ChatGPT/altro LLM.
   3) RIPRISTINA  - incolli la risposta dell'LLM (che contiene i placeholder) e l'app
      rimette i valori veri usando il dizionario locale.
@@ -438,8 +438,8 @@ def analyze(text, excluded=None, mapping_enabled=True):
     mapping_enabled=False -> anonimizzazione DEFINITIVA: nessun dizionario
     placeholder->valore, e i segmenti-entita' non riportano il testo originale
     (che altrimenti permetterebbe di ricostruire il dizionario dalla risposta).
-    La numerazione dei placeholder resta: dice che due occorrenze sono lo stesso
-    soggetto, ma da sola non fa risalire al valore."""
+    La numerazione resta coerente per valori uguali, anche quando una parola
+    e' condivisa da soggetti diversi."""
     excluded = set(excluded or ())
     model_ents, n_chunks = detect_model(text)
     # il modello taglia i minuti delle ore: la regex dell'ora completa SOLO le sue span TIME
@@ -449,38 +449,42 @@ def analyze(text, excluded=None, mapping_enabled=True):
         cands = [e for e in cands if e["label"] not in excluded]
     kept = _merge(cands, text)
 
-    # ID reversibili: stesso (label, valore-normalizzato) -> stesso placeholder.
+    # ID reversibili: stesso (tipo, valore normalizzato) -> stesso segnaposto.
     counters, seen, mapping = {}, {}, {}
-    for e in kept:
-        val = text[e["start"]:e["end"]]
-        key = (e["label"], _norm(val))
-        if key in seen:
-            e["ph"] = seen[key]
-        else:
-            counters[e["label"]] = counters.get(e["label"], 0) + 1
-            ph = f"[{e['label']}_{counters[e['label']]}]"
-            seen[key] = ph
+
+    def placeholder(label, value):
+        key = (label, _norm(value))
+        if key not in seen:
+            counters[label] = counters.get(label, 0) + 1
+            seen[key] = f"[{label}_{counters[label]}]"
             if mapping_enabled:
-                mapping[ph] = val
-            e["ph"] = ph
+                mapping[seen[key]] = value
+        return seen[key]
 
     # segmenti per la preview + testo anonimizzato + statistiche
     segments, anon, by_label, by_source, pos = [], [], {}, {}, 0
     for e in kept:
+        label = e["label"]
+        value = text[e["start"]:e["end"]]
+        if label in {"FULLNAME", "ORG"}:
+            tag = "PERSONA" if label == "FULLNAME" else label
+            ph = re.sub(r"\S+", lambda word: placeholder(tag, word[0]), value)
+        else:
+            ph = placeholder(label, value)
         if e["start"] > pos:
             segments.append({"t": text[pos:e["start"]]})
             anon.append(text[pos:e["start"]])
         seg = {
-            "label": e["label"],
-            "ph": e["ph"],
+            "label": label,
+            "ph": ph,
             "src": e["source"],
             "validated": e["validated"],
         }
         if mapping_enabled:                       # senza dizionario niente valore originale
-            seg["t"] = text[e["start"]:e["end"]]
+            seg["t"] = value
         segments.append(seg)
-        anon.append(e["ph"])
-        by_label[e["label"]] = by_label.get(e["label"], 0) + 1
+        anon.append(ph)
+        by_label[label] = by_label.get(label, 0) + 1
         by_source[e["source"]] = by_source.get(e["source"], 0) + 1
         pos = e["end"]
     if pos < len(text):
@@ -850,9 +854,13 @@ def _build_anonymized_pdf():
         seals = _param("ocr_redact_seals")
         seals = (server_config.parse_bool(seals, True) if seals is not None
                  else _get_ocr_prefs()[2])
+        # Cerca le menzioni complete nel PDF, mantenendo la redazione dell'intera
+        # area anche quando una parola e' troppo corta per una ricerca separata.
+        redactions = {" ".join(seg["ph"].split()): seg["t"]
+                      for seg in res["segments"] if "ph" in seg}
         try:
             out, report = pdf_export.redact_pdf(
-                src.pdf, res["mapping"], ocr_pages=(ocr_res or {}).get("pages"),
+                src.pdf, redactions, ocr_pages=(ocr_res or {}).get("pages"),
                 redact_seals=seals)
         except pdf_export.PdfError as e:
             raise _ReqError(str(e))

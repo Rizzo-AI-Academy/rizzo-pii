@@ -90,6 +90,22 @@ def _fit_fontsize(text, rect, max_fs=10.0, min_fs=4.0):
     return round(fs, 1) if fs >= min_fs else 0
 
 
+def _entity_label(text):
+    return text.startswith(("[PERSONA_", "[ORG_"))
+
+
+def _write_entity_label(page, rect, text, color):
+    # Comprimi solo in orizzontale: le etichette restano copiabili anche quando
+    # piu' segnaposti devono entrare nello spazio di una sola menzione.
+    fontsize = min(10, rect.height * 0.72)
+    width = fitz.get_text_length(text, fontname="helv", fontsize=fontsize)
+    scale = min(1, rect.width * 0.95 / width)
+    origin = fitz.Point(rect.x0 + (rect.width - width * scale) / 2,
+                        rect.y0 + rect.height / 2 + fontsize * 0.35)
+    page.insert_text(origin, text, fontname="helv", fontsize=fontsize,
+                     color=color, morph=(origin, fitz.Matrix(scale, 1)))
+
+
 def _covered(rect, taken, thr=0.85):
     """True se `rect` e' gia' (quasi) tutto dentro una redazione precedente:
     evita doppioni quando un valore e' contenuto in un altro (es. "Rossi"
@@ -423,7 +439,8 @@ def _redact_scanned_page(page, ocr_page, usable, fill, text_color, redact_seals)
                     if r.is_empty or _covered(r, taken):
                         continue
                     taken.append(r)
-                    labels.append((r, ph))
+                    if not placed or not _entity_label(ph):
+                        labels.append((r, ph))
                     placed = True
                 if placed:
                     hits[ph] = hits.get(ph, 0) + 1
@@ -462,6 +479,9 @@ def _redact_scanned_page(page, ocr_page, usable, fill, text_color, redact_seals)
 
     # placeholder in bianco sopra le caselle (testo vero: si legge e si copia)
     for r, ph in labels:
+        if _entity_label(ph):
+            _write_entity_label(page, r, ph, text_color)
+            continue
         fs = _fit_fontsize(ph, r)
         if not fs:
             continue
@@ -546,15 +566,20 @@ def redact_pdf(pdf_bytes, mapping, fill=REDACT_FILL, text_color=REDACT_TEXT,
             continue
         text, boxes = _page_char_index(page)
         taken = []
+        entity_labels = []
         if text.strip():
             for ph, val, pat in usable:
+                entity_label = _entity_label(ph)
                 for m in pat.finditer(text):
                     rects = _match_rects(boxes, m)
                     placed_any, labeled = False, False
                     for r in rects:
                         if _covered(r, taken):
                             continue
-                        fs = 0 if labeled else _fit_fontsize(ph, r)
+                        fs = 0 if labeled or entity_label else _fit_fontsize(ph, r)
+                        if not labeled and entity_label:
+                            entity_labels.append((r, ph))
+                            labeled = True
                         _add_redact_annot(page, r, ph if fs else None,
                                           fs or 6, fill, text_color)
                         taken.append(fitz.Rect(r))
@@ -565,6 +590,8 @@ def redact_pdf(pdf_bytes, mapping, fill=REDACT_FILL, text_color=REDACT_TEXT,
                         total += 1
         if taken:
             page.apply_redactions()   # rimozione VERA dal content stream
+            for r, ph in entity_labels:
+                _write_entity_label(page, r, ph, text_color)
         # dopo le redazioni: annotazioni e campi modulo non sono content stream
         n_annots += _scrub_annots(page, patterns)
         n_widgets += _scrub_widgets(page, patterns)
