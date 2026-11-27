@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+# Deve precedere l'import nativo: ORT 1DS puo' emettere un evento iniziale
+# prima che disable_telemetry_events() sia invocabile (Privacy.md della wheel).
+os.environ["ORT_DISABLE_TELEMETRY"] = "1"
 
 import numpy as np
 import onnxruntime as ort
@@ -10,6 +15,7 @@ import yaml
 
 
 def create_session(model_path: Path, threads: int | None = None) -> ort.InferenceSession:
+    ort.disable_telemetry_events()
     so = ort.SessionOptions()
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     so.log_severity_level = 3

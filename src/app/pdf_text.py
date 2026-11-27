@@ -15,6 +15,140 @@ Nei PDF fillable (AcroForm) il valore sta nel widget, non nel content stream:
 REDACT_ANNOT = 12
 
 
+def _native_boxes(page, text):
+    """Allinea in ordine i glifi al testo, senza cercare valori ripetuti.
+
+    Sono ammesse solo differenze di whitespace fra le due viste PyMuPDF.
+    Ogni altra differenza rende la localizzazione non verificabile.
+    """
+    raw_chars, raw_boxes = [], []
+    try:
+        for block in page.get_text("rawdict").get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    for char in span.get("chars", []):
+                        for c in char.get("c") or "":
+                            raw_chars.append(c)
+                            raw_boxes.append(list(char["bbox"]))
+                raw_chars.append("\n")
+                raw_boxes.append(None)
+    except Exception:
+        return None
+    boxes, j = [], 0
+    for char in text:
+        if char.isspace():
+            boxes.append(None)
+            if j < len(raw_chars) and raw_chars[j] == char:
+                j += 1
+            continue
+        while j < len(raw_chars) and raw_chars[j].isspace():
+            j += 1
+        if j == len(raw_chars) or raw_chars[j] != char:
+            return None
+        boxes.append(raw_boxes[j])
+        j += 1
+    if any(not c.isspace() for c in raw_chars[j:]):
+        return None
+    return boxes
+
+
+def _ocr_text_boxes(result):
+    text, boxes, valid = [], [], True
+    for line in result.get("lines") or ():
+        value = line.get("text") or ""
+        if not value:
+            continue
+        chars = line.get("chars") or []
+        if len(chars) != len(value):
+            valid = False
+            chars = [None] * len(value)
+        for i, (char, box) in enumerate(zip(value, chars)):
+            rect = list(box) if box is not None else None
+            if rect is not None and line.get("box"):
+                if i == 0:
+                    rect[0] = min(rect[0], line["box"][0])
+                if i == len(value) - 1:
+                    rect[2] = max(rect[2], line["box"][2])
+            text.append(char)
+            boxes.append(rect)
+        text.append("\n")
+        boxes.append(None)
+    return "".join(text), boxes if valid else None
+
+
+def collect_readable_document(doc, page_text=None, ocr_pages=None):
+    """Snapshot canonico con locator per OGNI stream leggibile del documento.
+
+    Offset Unicode Python [start,end); separatori fra stream senza geometria.
+    L'OCR usa le righe originali, non la loro rappresentazione Markdown.
+    Errori di lettura/localizzazione vengono conservati, mai interpretati come
+    assenza di dati. Questa struttura vive soltanto nella sessione in memoria.
+    """
+    parts, sources, errors, unverified = [], [], [], []
+    position = 0
+
+    def add(value, **locator):
+        nonlocal position
+        if parts:
+            position += 1
+        value = str(value or "")
+        sources.append({"start": position, "end": position + len(value), **locator})
+        parts.append(value)
+        position += len(value)
+
+    page_text, ocr_pages = page_text or {}, ocr_pages or {}
+    for i, page in enumerate(doc):
+        if i in ocr_pages:
+            text, boxes = _ocr_text_boxes(ocr_pages[i])
+            origin = "ocr"
+            unverified.append({"code": "raster_content", "page": i})
+        else:
+            text = page_text.get(i, page.get_text() or "")
+            boxes = _native_boxes(page, text)
+            origin = "native"
+            try:
+                if page.get_images(full=True):
+                    unverified.append({"code": "images", "page": i})
+            except Exception:
+                unverified.append({"code": "images_unchecked", "page": i})
+        add(text, kind="page", page=i, id=i, field="text", origin=origin,
+            boxes=boxes, mapping_error=boxes is None)
+        try:
+            for n, annot in enumerate(page.annots() or ()):
+                if annot.type[0] == REDACT_ANNOT:
+                    continue
+                info = annot.info or {}
+                for field in ("content", "subject", "title"):
+                    add(info.get(field), kind="annotation", page=i,
+                        id=getattr(annot, "xref", n), index=n, field=field,
+                        annotation_type=annot.type[0],
+                        rect=list(annot.rect) if getattr(annot, "rect", None) is not None else None)
+        except Exception:
+            errors.append({"code": "annotation_read", "page": i})
+        try:
+            for n, widget in enumerate(page.widgets() or ()):
+                if isinstance(widget.field_value, str) and widget.field_value:
+                    add(widget.field_value, kind="widget", page=i,
+                        id=getattr(widget, "xref", n), index=n, field="field_value",
+                        rect=list(widget.rect) if getattr(widget, "rect", None) is not None else None)
+        except Exception:
+            errors.append({"code": "widget_read", "page": i})
+    try:
+        for n, entry in enumerate(doc.get_toc(simple=True) or ()):
+            add(entry[1], kind="toc", page=None, id=n, field="title")
+    except Exception:
+        errors.append({"code": "toc_read"})
+    try:
+        if doc.embfile_names():
+            unverified.append({"code": "attachments"})
+    except Exception:
+        unverified.append({"code": "attachments_unchecked"})
+    return {"text": "\n".join(parts), "sources": sources,
+            "errors": errors, "unverified": unverified}
+
+
 def collect_readable_text(doc, redact_annot_type=REDACT_ANNOT, page_text=None):
     """TUTTO il testo leggibile: pagine + annotazioni + campi modulo + segnalibri.
 

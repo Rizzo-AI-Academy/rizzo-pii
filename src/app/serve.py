@@ -66,6 +66,8 @@ if not server_config.port_available(HOST, PORT):
 
 # l'import carica il modello (puo' richiedere alcuni secondi)
 from app import app  # noqa: E402
+from notarial_app import install_notarial_mode
+install_notarial_mode(app)
 
 if __name__ == "__main__":
     print(f"[serve] avvio server su {HOST}:{PORT}")

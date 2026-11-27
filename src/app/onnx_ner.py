@@ -29,6 +29,10 @@ piu' config.json (id2label), tokenizer.json, tokenizer_config.json (model_max_le
 import json
 import os
 
+# ORT 1DS puo' inizializzare uploader/ID persistente durante l'import: l'API
+# disable_telemetry_events() da sola arriva troppo tardi. Override obbligatorio.
+os.environ["ORT_DISABLE_TELEMETRY"] = "1"
+
 import numpy as np
 
 ONNX_CANDIDATES = ("onnx/model.onnx", "model.onnx")
@@ -57,6 +61,7 @@ class OnnxTokenClassifier:
         import onnxruntime as ort
         from tokenizers import Tokenizer
 
+        ort.disable_telemetry_events()
         onnx_path = onnx_path or find_onnx(model_dir)
         if not onnx_path:
             raise FileNotFoundError(f"model.onnx non trovato in {model_dir}")
@@ -80,6 +85,7 @@ class OnnxTokenClassifier:
             self.tokenizer.no_truncation()
 
         so = ort.SessionOptions()
+        so.log_severity_level = 3
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         if intra_op_threads:
             so.intra_op_num_threads = int(intra_op_threads)

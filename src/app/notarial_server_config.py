@@ -1,0 +1,293 @@
+# -*- coding: utf-8 -*-
+"""
+Configurazione host/porta del server Flask (condivisa tra tutti gli entry point).
+
+Risoluzione con precedenza:  CLI args  >  env vars  >  config.json  >  default.
+
+Il file config.json e' condiviso con l'app Tauri (che lo legge/scrive dal lato Rust
+e passa host/porta al sidecar via env PII_HOST/PII_PORT):
+
+  Windows:  %LOCALAPPDATA%\\rizzo-pii\\config.json
+  Linux:    ~/.local/share/rizzo-pii/config.json
+  macOS:    ~/Library/Application Support/rizzo-pii/config.json
+
+Formato:  {"host": "127.0.0.1", "port": 5005}
+
+Il codice di uscita 76 (EX_PROTOCOL) segnala "porta occupata" ed e' riconosciuto
+dall'app Tauri per mostrare il form di configurazione nello splash.
+
+Nella stessa directory vivono anche le preferenze di anonimizzazione, prefs.json:
+
+  {"excluded_tags": ["AGE", "GENDER"], "mapping_enabled": false,
+   "ocr_mode": "auto", "ocr_preset": "balanced", "ocr_redact_seals": false}
+
+E' un file separato di proposito: Tauri riscrive config.json per intero quando si
+cambia la porta dallo splash, e sovrascriverebbe qualunque altra chiave.
+"""
+
+import ipaddress
+import json
+import os
+import socket
+import sys
+from pathlib import Path
+
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 5005
+EXIT_PORT_CONFLICT = 76  # riconosciuto da Tauri (lib.rs) come "porta occupata"
+
+
+def config_dir() -> Path:
+    """Keep notarile preferences separate from the standard application's prefs."""
+    import server_config as standard_config
+    return standard_config.config_dir() / "notarial"
+
+
+def config_path() -> Path:
+    return config_dir() / "config.json"
+
+
+def load_config() -> dict:
+    """Legge config.json; ritorna {} se mancante o corrotto."""
+    p = config_path()
+    if p.exists():
+        try:
+            return json.loads(p.read_text("utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def save_config(host: str, port: int):
+    """Scrive config.json (crea la directory se necessario)."""
+    host = loopback_host(host)
+    if not 0 <= int(port) <= 65535:
+        raise ValueError("Porta non valida.")
+    d = config_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "config.json").write_text(
+        json.dumps({"host": host, "port": port}, indent=2), "utf-8"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Preferenze di anonimizzazione (prefs.json, accanto a config.json)
+#
+#   {"excluded_tags": ["AGE"], "mapping_enabled": false}
+#
+#   excluded_tags   -> tag rilevati ma NON sostituiti (restano in chiaro)
+#   mapping_enabled -> false = niente dizionario placeholder->valore, quindi
+#                      l'anonimizzazione e' definitiva e non reversibile
+#   ocr_mode        -> auto (solo le pagine scansionate) | force (tutte) | off
+#   ocr_preset      -> fast | balanced | accurate (modelli OCR, vedi ocr.py)
+#   ocr_redact_seals-> sulle scansioni copre anche i timbri trovati dal layout
+# --------------------------------------------------------------------------- #
+PREFS_FILE = "prefs.json"
+LEGACY_PREFS_FILE = "tags.json"   # nome usato prima che il file contenesse anche il mapping
+DEFAULT_MAPPING_ENABLED = False
+DEFAULT_OCR_MODE = "auto"
+DEFAULT_OCR_PRESET = "balanced"
+DEFAULT_OCR_SEALS = False
+OCR_MODES = ("auto", "force", "off")
+OCR_PRESETS = ("fast", "balanced", "accurate")
+
+
+def parse_ocr_mode(value, default=DEFAULT_OCR_MODE) -> str:
+    s = str(value if value is not None else "").strip().lower()
+    if s in OCR_MODES:
+        return s
+    if s in ("0", "false", "no", "none"):
+        return "off"
+    if s in ("1", "true", "yes", "si", "sì", "all", "always"):
+        return "force"
+    return default
+
+
+def parse_ocr_preset(value, default=DEFAULT_OCR_PRESET) -> str:
+    s = str(value if value is not None else "").strip().lower()
+    return s if s in OCR_PRESETS else default
+
+
+def prefs_path() -> Path:
+    return config_dir() / PREFS_FILE
+
+
+def parse_tag_list(value) -> list:
+    """Normalizza una lista di tag: accetta stringa CSV o iterabile. -> UPPERCASE, senza duplicati."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items = value.replace(";", ",").split(",")
+    else:
+        items = list(value)
+    out = []
+    for it in items:
+        t = str(it).strip().upper()
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
+def parse_bool(value, default=True) -> bool:
+    """Accetta bool, 0/1, "true"/"false"/"on"/"off"/"si"/"no". Altro -> default."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    s = str(value).strip().lower()
+    if s in ("1", "true", "yes", "y", "on", "si", "sì"):
+        return True
+    if s in ("0", "false", "no", "n", "off"):
+        return False
+    return default
+
+
+def _read_prefs_file() -> dict:
+    """Contenuto grezzo di prefs.json ({} se manca o e' corrotto)."""
+    for p in (prefs_path(), config_dir() / LEGACY_PREFS_FILE):
+        if p.exists():
+            try:
+                data = json.loads(p.read_text("utf-8"))
+                if isinstance(data, dict):
+                    return data
+            except (json.JSONDecodeError, OSError):
+                pass
+    return {}
+
+
+def load_prefs() -> dict:
+    """Preferenze effettive. Catena: env > prefs.json > default.
+
+    La reversibilita' riparte sempre disattivata, salvo PII_MAPPING esplicita.
+
+    env: PII_EXCLUDE_TAGS="AGE,GENDER"   PII_MAPPING=0|1
+         PII_OCR=auto|force|off   PII_OCR_PRESET=fast|balanced|accurate
+    """
+    data = _read_prefs_file()
+    tags = data.get("excluded_tags")
+    # La reversibilita' e' una scelta della sessione, mai ereditata da un avvio
+    # precedente. PII_MAPPING resta un override esplicito dell'operatore.
+    mapping = DEFAULT_MAPPING_ENABLED
+    if "PII_NOTARIAL_EXCLUDE_TAGS" in os.environ:
+        tags = os.environ["PII_NOTARIAL_EXCLUDE_TAGS"]
+    if "PII_NOTARIAL_MAPPING" in os.environ:
+        mapping = os.environ["PII_NOTARIAL_MAPPING"]
+    ocr_mode = os.environ.get("PII_NOTARIAL_OCR", data.get("ocr_mode"))
+    ocr_preset = os.environ.get("PII_NOTARIAL_OCR_PRESET", data.get("ocr_preset"))
+    return {
+        "excluded_tags": parse_tag_list(tags),
+        "mapping_enabled": parse_bool(mapping, DEFAULT_MAPPING_ENABLED),
+        "ocr_mode": parse_ocr_mode(ocr_mode),
+        "ocr_preset": parse_ocr_preset(ocr_preset),
+        "ocr_redact_seals": parse_bool(data.get("ocr_redact_seals"), DEFAULT_OCR_SEALS),
+    }
+
+
+def save_prefs(excluded_tags=None, mapping_enabled=None, ocr_mode=None, ocr_preset=None,
+               ocr_redact_seals=None) -> dict:
+    """Salva preferenze senza rendere persistente l'attivazione del mapping.
+
+    Il risultato puo' abilitarlo per la sessione attiva; sul file resta false.
+    """
+    data = _read_prefs_file()
+    if excluded_tags is not None:
+        data["excluded_tags"] = parse_tag_list(excluded_tags)
+    if mapping_enabled is not None:
+        data["mapping_enabled"] = parse_bool(mapping_enabled, DEFAULT_MAPPING_ENABLED)
+    else:
+        data["mapping_enabled"] = DEFAULT_MAPPING_ENABLED
+    if ocr_mode is not None:
+        data["ocr_mode"] = parse_ocr_mode(ocr_mode)
+    if ocr_preset is not None:
+        data["ocr_preset"] = parse_ocr_preset(ocr_preset)
+    if ocr_redact_seals is not None:
+        data["ocr_redact_seals"] = parse_bool(ocr_redact_seals, DEFAULT_OCR_SEALS)
+    data.setdefault("excluded_tags", [])
+    data.setdefault("mapping_enabled", DEFAULT_MAPPING_ENABLED)
+    data.setdefault("ocr_mode", DEFAULT_OCR_MODE)
+    data.setdefault("ocr_preset", DEFAULT_OCR_PRESET)
+    data.setdefault("ocr_redact_seals", DEFAULT_OCR_SEALS)
+    d = config_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    persisted = {**data, "mapping_enabled": False}
+    (d / PREFS_FILE).write_text(json.dumps(persisted, indent=2), "utf-8")
+    return data
+
+
+def _first_set(*values):
+    """Il primo valore IMPOSTATO della catena di precedenza.
+
+    Non `a or b`: lo 0 esplicito (`--port 0`) e' falsy e verrebbe scartato. Ma nemmeno
+    il solo `is not None`: una variabile d'ambiente presente e vuota (`PII_PORT=`) non
+    e' un valore, e `int("")` farebbe cadere l'avvio del backend."""
+    for v in values:
+        if v is not None and str(v).strip() != "":
+            return v
+    return None
+
+
+def loopback_host(host):
+    """Il profilo desktop non espone documenti alla rete, neppure da config/env.
+
+    Non risolve nomi DNS: solo localhost e indirizzi letterali di loopback.
+    """
+    value = str(host).strip().lower()
+    if value == "localhost":
+        return DEFAULT_HOST
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        raise ValueError("Il server deve usare un indirizzo locale di loopback.") from None
+    if not address.is_loopback:
+        raise ValueError("Il server deve usare un indirizzo locale di loopback.")
+    return str(address)
+
+
+def resolve(cli_host=None, cli_port=None):
+    """Risolve host/porta con la catena: CLI > env > config.json > default.
+
+    Ritorna (host: str, port: int).
+    """
+    cfg = load_config()
+    host = _first_set(cli_host, os.environ.get("PII_HOST"), cfg.get("host"))
+    port = _first_set(cli_port, os.environ.get("PII_PORT"), cfg.get("port"))
+    host = loopback_host(host if host is not None else DEFAULT_HOST)
+    port = int(port) if port is not None else DEFAULT_PORT
+    if not 0 <= port <= 65535:
+        raise ValueError("Porta non valida.")
+    return host, port
+
+
+def port_available(host: str, port: int) -> bool:
+    """True se la porta e' libera.
+
+    Il bind del solo host non basta: se un altro programma ascolta su 0.0.0.0:PORT,
+    il bind su 127.0.0.1:PORT riesce comunque e da quel momento non e' definito chi
+    serve le connessioni - l'utente puo' finire sul server dell'altro programma.
+    Quindi si prova a legare anche l'indirizzo jolly; se e' occupato si guarda, con
+    una connessione, se qualcuno risponde davvero su host:port (potrebbe ascoltare
+    su un'altra interfaccia, e allora la nostra e' libera).
+    """
+    host = loopback_host(host)
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+
+    def _bind(addr, riusa):
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as s:
+                if riusa:
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind((addr, port))
+                return True
+        except OSError:
+            return False
+
+    if not _bind(host, True):
+        return False
+    # il jolly si prova SENZA SO_REUSEADDR: quando ce l'ha anche il socket dell'altro
+    # programma (Werkzeug la imposta di default) su Windows il bind riesce lo stesso,
+    # ed e' proprio il caso da rilevare.
+    if _bind("::" if family == socket.AF_INET6 else "", False):
+        return True
+    with socket.socket(family, socket.SOCK_STREAM) as s:
+        s.settimeout(0.3)
+        return s.connect_ex((host, port)) != 0

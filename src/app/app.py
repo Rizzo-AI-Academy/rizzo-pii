@@ -1213,6 +1213,10 @@ PAGE = _load_ui()   # compatibilita': chi importava app.PAGE trova ancora la pag
 
 
 if __name__ == "__main__":
+    # Expose this already-loaded module to the optional mode without loading weights twice.
+    sys.modules["app"] = sys.modules[__name__]
+    from notarial_app import install_notarial_mode
+    install_notarial_mode(app)
     import argparse as _ap
     _p = _ap.ArgumentParser(description="Rizzo PII — server locale di anonimizzazione.")
     _p.add_argument("--host", default=None, help="indirizzo su cui ascoltare (default da config/env/127.0.0.1)")
