@@ -5,6 +5,17 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## Segnaposti coerenti per persone e organizzazioni (`app.py`)
+
+Ogni parola di una menzione `FULLNAME` o `ORG` rilevata riceve un segnaposto
+riutilizzato nello stesso documento. Per esempio, `Paolo Rossi` diventa
+`[PERSONA_1] [PERSONA_2]` e la menzione `Paolo` diventa `[PERSONA_1]`.
+I segnaposti `PERSONA` sono neutri rispetto al ruolo della parola. Uno stesso
+segnaposto può quindi comparire nei nomi di persone diverse. Il dizionario
+continua a consentire il ripristino delle menzioni complete e parziali.
+
+---
+
 ## 2026-10-22 — Il PDF protetto da password si riconosce già al caricamento (`app.py`)
 
 Completa la voce del 2026-09-25: lì il server rispondeva già col messaggio chiaro, ma

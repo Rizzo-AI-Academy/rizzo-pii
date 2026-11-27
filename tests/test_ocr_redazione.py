@@ -103,6 +103,16 @@ class RedazioneScansione(unittest.TestCase):
         pix = fitz.open(stream=out, filetype="pdf")[0].get_pixmap(dpi=72)
         self.assertGreater(min(pix.pixel(304, 153)), 180)
 
+    def test_menzioni_complete_e_parziali_copiabili(self):
+        ocr = {0: {"dpi": 144, "lines": [_line("Paolo Rossi e Paolo", 20, 30, char_w=4)]}}
+        mapping = {"[PERSONA_1] [PERSONA_2]": "Paolo Rossi", "[PERSONA_1]": "Paolo"}
+        out, report = pdf_export.redact_pdf(self.pdf, mapping, ocr_pages=ocr)
+        self.assertEqual(report["occurrences"], 2)
+        with fitz.open(stream=out, filetype="pdf") as doc:
+            text = doc[0].get_text()
+        self.assertEqual(text.count("[PERSONA_1]"), 2)
+        self.assertEqual(text.count("[PERSONA_2]"), 1)
+
     def test_confini_di_parola_anche_sull_ocr(self):
         # "Rossi" non deve essere coperto dentro "Rossini"
         ocr = {0: {"dpi": 144, "lines": [_line("il maestro Rossini", 20, 30)]}}

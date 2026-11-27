@@ -107,10 +107,11 @@ machine.
 ## rizzo-pii in one picture
 
 The workflow has three local steps and one remote step. Locally, rizzo-pii tags every span of
-personal data and replaces each one with a stable, type-aware placeholder
-(`[FULLNAME_1]`, `[IBAN_1]`, `[CF_1]`), recording the mapping `placeholder → real value` in a
-dictionary that **stays on disk**. Identical values share the same placeholder, so the frontier
-model still sees a coherent text and can reason about it. The anonymized text is sent to
+personal data and replaces it with stable, type-aware placeholders, recording the mapping
+`placeholder → real value` in a dictionary that **stays on disk**. Within a document, names
+of people and organizations reuse placeholders for shared words across full and short mentions.
+For example, `Paolo Rossi` becomes `[PERSONA_1] [PERSONA_2]` and `Paolo` becomes `[PERSONA_1]`.
+Other categories use one placeholder per value (`[IBAN_1]`, `[CF_1]`). The anonymized text is sent to
 ChatGPT / Claude / Gemini; when the answer comes back, a local pass swaps the placeholders for the
 true values. **The cloud provider never receives a single real name, code or number.**
 
@@ -162,7 +163,7 @@ that the larger generic models do not provide.
 
 > **Concrete example.** Take *"Il Sig. Mario Rossi, C.F. RSSMRA85H12F205Y, P.IVA 12345678903, è
 > titolare dell'immobile al Foglio 12, particella 345, sub. 6."* rizzo-pii tags `FULLNAME`, `CF`,
-> `PIVA` and `CATASTO` and rewrites it as *"Il Sig. [FULLNAME_1], C.F. [CF_1], P.IVA [PIVA_1], è
+> `PIVA` and `CATASTO` and rewrites it as *"Il Sig. [PERSONA_1] [PERSONA_2], C.F. [CF_1], P.IVA [PIVA_1], è
 > titolare dell'immobile al [CATASTO_1]."* A generic English-first model has no label for the
 > fiscal code, the VAT number or the cadastral reference — the three most sensitive identifiers in
 > the sentence — and would leave them in the clear.
@@ -457,7 +458,7 @@ python src/training/test_pii.py "Mi chiamo Mario Rossi, IBAN IT60X05428111010000
 python src/app/app.py            # http://127.0.0.1:5005  (paste text or upload a PDF)
 ```
 
-The web app assigns every PII a **reversible ID** (`[FULLNAME_1]`, `[IBAN_1]`…) plus a local
+The web app assigns **reversible IDs** (`[PERSONA_1]`, `[IBAN_1]`…) plus a local
 dictionary, pairing the model with the regex/checksum net. You copy the anonymized text into an LLM
 and **restore** the real values from the response. Input: pasted text, a **PDF**, or a
 **`.md` / `.txt`** file.
@@ -568,8 +569,8 @@ values from the LLM's answer. Some users want the opposite: anonymize and have *
 exist at all**. The switch in the input card does that — and it is not cosmetic. With the dictionary
 off the server builds no `placeholder → value` map, returns none, stores none in the browser, offers
 no download, and strips the original text out of the response entirely (the per-entity `t` field
-disappears, so the map cannot be rebuilt from the payload either). The numbering survives —
-`[FULLNAME_1]` twice still means "same person" — but a number alone leads back to nothing.
+disappears, so the map cannot be rebuilt from the payload either). The numbering survives:
+`[PERSONA_1]` twice still marks a shared word, which can occur in the names of different people.
 
 ```bash
 python src/app/app.py --no-mapping                  # CLI
