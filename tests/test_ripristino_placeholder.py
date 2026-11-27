@@ -85,6 +85,11 @@ eq('spazi intorno alla forma nuda preservati', callReverse('Il FULLNAME_1 ha fir
 eq('colonna TAB preservata', callReverse('col1\tFULLNAME_1\tcol3'), 'col1\tMario Rossi\tcol3');
 eq('riga a-capo preservata', callReverse('riga\nFULLNAME_1\nriga'), 'riga\nMario Rossi\nriga');
 
+setDict({ '[PERSONA_1]': 'Paolo', '[PERSONA_2]': 'Rossi', '[ORG_1]': 'Alfa', '[ORG_2]': 'Servizi' });
+eq('forme complete e parziali di persone e organizzazioni',
+  callReverse('[PERSONA_1] [PERSONA_2] lavora per [ORG_1] [ORG_2]. [PERSONA_1] lavora per [ORG_1].'),
+  'Paolo Rossi lavora per Alfa Servizi. Paolo lavora per Alfa.');
+
 setDict({ '[CF_1]': 'RSSMRA78S03L750K' });
 eq('indice inventato [CF_12] resta non risolto', callReverse('vedi [CF_12] qui'), 'vedi [CF_12] qui');
 eq('indice inventato nudo CF_12 resta non risolto', callReverse('vedi CF_12 qui'), 'vedi CF_12 qui');
